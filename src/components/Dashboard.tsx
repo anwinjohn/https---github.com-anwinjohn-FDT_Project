@@ -49,7 +49,8 @@ import {
   Filter,
   Download,
   Sun,
-  Moon
+  Moon,
+  Power
 } from 'lucide-react';
 import { logger } from '../utils/logger';
 
@@ -140,7 +141,7 @@ const Dashboard: React.FC = () => {
 
   const getViewTitle = (view: string) => {
     const titles: Record<string, string> = {
-      dashboard: 'Security Command Center',
+      dashboard: 'Fraud Detection & Analytics Dashboard',
       'risk-analytics': 'Fraud & Risk Analytics',
       rules: 'Alert Rules Management',
       users: 'User Activity Analytics', 
@@ -186,7 +187,7 @@ const Dashboard: React.FC = () => {
                 }`}>Fraud & Risk Analytics</h3>
                 <p className={`text-sm mb-3 ${
                   theme === 'dark' ? 'text-red-200/80' : 'text-red-700'
-                }`}>Executive risk intelligence dashboard</p>
+                }`}>Risk intelligence dashboard</p>
                 <div className="flex items-center gap-2">
                   <span className={`text-2xl font-bold ${
                     theme === 'dark' ? 'text-white' : 'text-gray-900'
@@ -514,10 +515,10 @@ const Dashboard: React.FC = () => {
           >
             <h2 className={`text-2xl font-bold mb-2 ${
               theme === 'dark' ? 'text-white' : 'text-gray-900'
-            }`}>Loading Secure Command Center</h2>
+            }`}>Loading FDT</h2>
             <p className={`${
               theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-            }`}>Initializing fraud detection systems...</p>
+            }`}>Initializing fraud detection & analytical dashboard...</p>
           </motion.div>
         </div>
       </div>
@@ -562,24 +563,9 @@ const Dashboard: React.FC = () => {
                   <Menu className="w-5 h-5" />
                 </button>
                 
-                {/* Home Button */}
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={handleHomeClick}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl border transition-all duration-200 shadow-lg ${
-                    theme === 'dark' 
-                      ? 'bg-gradient-to-r from-blue-500/30 to-indigo-500/30 hover:from-blue-500/40 hover:to-indigo-500/40 text-blue-200 border-blue-500/40 shadow-blue-500/20' 
-                      : 'bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-200 hover:to-indigo-200 text-blue-700 border-blue-300 shadow-blue-200'
-                  }`}
-                >
-                  <Home className="w-4 h-4" />
-                  <span className="hidden sm:inline text-sm font-medium">Home</span>
-                </motion.button>
-                
                 <div className="hidden sm:flex flex-col">
                   <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                    {/* <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div> */}
                     <h1 className={`text-xl font-bold ${
                       theme === 'dark' ? 'text-white' : 'text-gray-900'
                     }`}>
@@ -675,6 +661,21 @@ const Dashboard: React.FC = () => {
                   </button>
                 </motion.div>
 
+                {/* Home Button */}
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleHomeClick}
+                  className={`p-2 rounded-xl border transition-all duration-200 shadow-lg ${
+                    theme === 'dark' 
+                      ? 'bg-gradient-to-r from-blue-500/30 to-indigo-500/30 hover:from-blue-500/40 hover:to-indigo-500/40 text-blue-200 border-blue-500/40 shadow-blue-500/20' 
+                      : 'bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-200 hover:to-indigo-200 text-blue-700 border-blue-300 shadow-blue-200'
+                  }`}
+                >
+                  <Home className="w-4 h-4" />
+                  {/* <span className="hidden sm:inline text-sm font-medium">Home</span> */}
+                </motion.button>
+
                 {/* FIXED: Settings button visibility for admin users */}
                 {isAdmin && (
                   <motion.button
@@ -695,14 +696,14 @@ const Dashboard: React.FC = () => {
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={handleLogout}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl border transition-all duration-200 text-sm shadow-lg ${
+                  className={`p-2 rounded-xl border transition-all duration-200 shadow-lg ${
                     theme === 'dark' 
                       ? 'bg-gradient-to-r from-red-500/20 to-rose-500/20 hover:from-red-500/30 hover:to-rose-500/30 text-red-200 border-red-500/40 shadow-red-500/20' 
                       : 'bg-gradient-to-r from-red-100 to-rose-100 hover:from-red-200 hover:to-rose-200 text-red-700 border-red-300 shadow-red-200'
                   }`}
                 >
-                  <LogOut className="w-4 h-4" />
-                  <span className="hidden sm:inline font-medium">Logout</span>
+                  <Power className="w-4 h-4" />
+                  {/* <span className="hidden sm:inline font-medium">Logout</span> */}
                 </motion.button>
               </div>
             </div>
@@ -826,7 +827,7 @@ const Dashboard: React.FC = () => {
             : 'bg-white/80 border-theme text-gray-500'
         }`}>
           <div className="container mx-auto px-4 text-center text-xs">
-            © {new Date().getFullYear()} Al Rostamani International Exchange LLC - Secure Fraud Detection Technology
+            © {new Date().getFullYear()} Fraud Detection & Analytical Tool
           </div>
         </footer>
       </div>

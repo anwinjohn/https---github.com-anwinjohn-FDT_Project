@@ -289,7 +289,7 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
                   <Shield className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-white">FDT Portal</h2>
+                  <h2 className="text-lg font-bold text-white">FDT</h2>
                   <p className="text-xs text-blue-200/70">Fraud Detection Tool</p>
                 </div>
               </div>
@@ -409,7 +409,7 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
           {/* Footer */}
           <div className="p-4 border-t border-white/10">
             <div className="text-center text-white/40 text-xs">
-              © {new Date().getFullYear()} Al Rostamani Exchange
+              © {new Date().getFullYear()} FDT Portal. All rights reserved.
             </div>
           </div>
         </div>
