@@ -1,0 +1,39 @@
+{
+  "api": {
+    "baseUrl": "http://127.0.0.1:8000",
+    "authBaseUrl": "http://127.0.0.1:8000",
+    "timeout": 30000
+  },
+  "auth": {
+    "enabled": true,
+    "methods": {
+      "password": true,
+      "biometric": true,
+      "sms": true
+    },
+    "autoRefreshInterval": 30000,
+    "sessionTimeout": 3600000
+  },
+  "dashboard": {
+    "autoRefresh": {
+      "enabled": true,
+      "interval": 30000
+    },
+    "defaultDateRange": {
+      "days": 7
+    },
+    "logo":"./src/ARIE_Logo.png"
+  },
+    "app": {
+    "name": "FDT - Fraud Detection Tool",
+    "shortName": "FDT",
+    "version": "2.1.0",
+    "favicon": "/src/favicon.ico"
+  },
+  "environment": "development",
+  "logging": {
+    "enabled": true,
+    "level": "debug",
+    "maxEntries": 1000
+  }
+}

@@ -1,0 +1,283 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme configuration */
+@layer base {
+  :root {
+    /* Light theme colors - Softer, eye-friendly palette */
+    --color-primary: 59 130 246;
+    --color-secondary: 139 92 246;
+    --color-accent: 236 72 153;
+    --color-success: 16 185 129;
+    --color-warning: 245 158 11;
+    --color-error: 239 68 68;
+    --color-background: 248 250 252; /* Softer white */
+    --color-surface: 241 245 249; /* Gentle gray-blue */
+    --color-text: 30 41 59; /* Softer black */
+    --color-text-secondary: 71 85 105; /* Warmer gray */
+    --color-border: 226 232 240; /* Subtle borders */
+    --color-input: 255 255 255; /* Pure white for inputs */
+    --color-card: 255 255 255; /* Card backgrounds */
+  }
+
+  .dark {
+    /* Dark theme colors */
+    --color-background: 15 23 42;
+    --color-surface: 30 41 59;
+    --color-text: 248 250 252;
+    --color-text-secondary: 148 163 184;
+    --color-border: 51 65 85;
+    --color-input: 51 65 85;
+    --color-card: 30 41 59;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: rgb(var(--color-background));
+    color: rgb(var(--color-text));
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+/* Custom scrollbar */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Light theme scrollbar */
+.light .custom-scrollbar {
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.light .custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.light .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+/* Enhanced notification styles */
+@layer utilities {
+  .shadow-3xl {
+    box-shadow: 0 35px 60px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  }
+  
+  .backdrop-blur-xl {
+    backdrop-filter: blur(16px);
+  }
+
+  /* Theme-aware utilities */
+  .bg-surface {
+    background-color: rgb(var(--color-surface));
+  }
+
+  .bg-card {
+    background-color: rgb(var(--color-card));
+  }
+
+  .bg-input {
+    background-color: rgb(var(--color-input));
+  }
+
+  .text-primary {
+    color: rgb(var(--color-primary));
+  }
+
+  .text-secondary {
+    color: rgb(var(--color-text-secondary));
+  }
+
+  .border-theme {
+    border-color: rgb(var(--color-border));
+  }
+}
+
+/* Focus styles for accessibility */
+input:focus,
+button:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid rgb(var(--color-primary));
+  outline-offset: 2px;
+}
+
+/* Custom gradient animations */
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-shift 3s ease infinite;
+}
+
+/* Theme transition animations */
+* {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 200ms;
+}
+
+/* Improved button styles */
+button {
+  cursor: pointer;
+  user-select: none;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Enhanced form elements */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="tel"],
+select,
+textarea {
+  transition: all 0.2s ease;
+}
+
+/* Light theme specific styles - Softer, eye-friendly */
+.light {
+  /* Light theme specific overrides */
+}
+
+.light input,
+.light select,
+.light textarea {
+  background-color: rgb(var(--color-input));
+  border-color: rgb(var(--color-border));
+  color: rgb(var(--color-text));
+}
+
+.light input:focus,
+.light select:focus,
+.light textarea:focus {
+  background-color: rgb(var(--color-input));
+  border-color: rgb(59, 130, 246);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.light input::placeholder,
+.light select::placeholder,
+.light textarea::placeholder {
+  color: rgb(var(--color-text-secondary));
+}
+
+/* Dark theme specific styles */
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: rgb(var(--color-input));
+  border-color: rgb(var(--color-border));
+  color: rgb(248, 250, 252);
+}
+
+.dark input::placeholder,
+.dark select::placeholder,
+.dark textarea::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Notification container improvements */
+.notification-container {
+  pointer-events: none;
+}
+
+.notification-container > * {
+  pointer-events: auto;
+}
+
+/* Enhanced loading states */
+.loading-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Improved accessibility */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .light {
+    --color-text: 0 0 0;
+    --color-background: 255 255 255;
+  }
+  
+  .dark {
+    --color-text: 255 255 255;
+    --color-background: 0 0 0;
+  }
+}
+
+/* Login form specific styles */
+.login-input {
+  background-color: rgba(51, 65, 85, 0.9) !important;
+  color: white !important;
+  border-color: rgba(71, 85, 105, 0.5) !important;
+}
+
+.login-input:focus {
+  background-color: rgba(51, 65, 85, 1) !important;
+  border-color: rgb(59, 130, 246) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2) !important;
+}
+
+.login-input::placeholder {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.login-logo{
+  height: 6rem !important;
+  width: 14rem !important;
+}
