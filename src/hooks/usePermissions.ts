@@ -34,9 +34,9 @@ export const usePermissions = () => {
       setLoading(true);
       setError(null);
 
-      // const response = await apiClient.get(`/api/permissions/role/${user.role_id}`);
+      //  const response = await apiClient.get(`/api/menus/permissions/${user.role_id}`);
       const response = await apiClient.get(`${config.api.baseUrl}/api/menus/permissions/${user.role_id}`);
-      
+
       if (response.success && response.data) {
         const permissionsMap: MenuPermissions = {};
         response.data.forEach((perm: any) => {
@@ -66,10 +66,10 @@ export const usePermissions = () => {
 
   const hasPermission = useCallback((menuId: number, action: keyof Permission): boolean => {
     if (action === 'menuId') return false;
-    
+
     const permission = permissions[menuId];
     if (!permission) return false;
-    
+
     return permission[action] === true;
   }, [permissions]);
 

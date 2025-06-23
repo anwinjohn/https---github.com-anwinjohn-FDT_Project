@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { useNavigate } from 'react-router-dom';
 import config from '../config/app-config.json';
 import CryptoJS from 'crypto-js';
+import { useNotifications } from '../components/notifications';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -44,6 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const { addNotification } = useNotifications();
 
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const warningTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -96,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // Set logout timer (30 minutes)
     sessionTimerRef.current = setTimeout(() => {
-      alert('Your session has expired due to inactivity. You will be logged out for security reasons.');
+      addNotification('Your session has expired due to inactivity. You will be logged out for security reasons.', 'warning', 3000);
       logout();
     }, SESSION_TIMEOUT);
   };
@@ -133,7 +135,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (timeSinceLastActivity > SESSION_TIMEOUT) {
           // Session expired
-          alert('Your session has expired. Please login again.');
+          addNotification('Your session has expired due to inactivity. You will be logged out for security reasons.', 'warning', 3000);
           logout();
           return false;
         }
