@@ -89,14 +89,17 @@ const SecureAdminDashboard: React.FC<SecureAdminDashboardProps> = ({ initialTab 
   });
 
   // Update activeTab when initialTab prop changes
-  useEffect(() => {
+useEffect(() => {
+  if (!menuIdsLoading) { // Ensure menu IDs are loaded before setting initial tab
     const validTabIds = tabs.map(tab => tab.id);
     if (initialTab && validTabIds.includes(initialTab)) {
       setActiveTab(initialTab);
-    } else if (initialTab === 'admin') { // If 'admin' is passed as a general view, default to 'users'
+    } else if (initialTab === 'admin') {
       setActiveTab('users');
     }
-  }, [initialTab, tabs]);
+  }
+}, [initialTab, menuIdsLoading]); // Removed 'tabs' from dependencies
+
 
   // Show loading while menu IDs are being fetched
   if (menuIdsLoading) {

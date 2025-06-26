@@ -185,7 +185,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const timeSinceLastActivity = Date.now() - parseInt(lastActivity);
 
           if (timeSinceLastActivity > SESSION_TIMEOUT) {
-            alert('Your session has expired due to inactivity. Please login again.');
+            // alert('Your session has expired due to inactivity. Please login again.');
+            addNotification('Your session has expired due to inactivity. You may login again.', 'warning', 3000);
             logout();
           } else {
             resetSessionTimer();

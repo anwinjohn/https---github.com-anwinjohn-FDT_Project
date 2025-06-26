@@ -19,7 +19,7 @@ function App() {
               <Route path="/login" element={
                 config.auth.enabled ? <LoginPage /> : <Navigate to="/dashboard" replace />
               } />
-              <Route path="/dashboard" element={
+              <Route path="/dashboard/:viewId?" element={
                 <ProtectedRoute>
                   <Dashboard />
                 </ProtectedRoute>

@@ -19,12 +19,14 @@ import {
   Wifi,
   WifiOff,
   Save,
-  RefreshCw
+  RefreshCw,
+  FileText
 } from 'lucide-react';
 import { logger } from '../utils/logger';
 import { useSystemSettings } from '../hooks/useSystemSettings';
 import { useNotifications } from './notifications';
 import { useTheme } from '../context/ThemeContext';
+import { useNavigate } from 'react-router-dom';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -54,6 +56,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const { getSetting, updateSetting, loading: settingsLoading } = useSystemSettings();
   const { addNotification } = useNotifications();
   const { theme } = useTheme();
+  const navigate = useNavigate();
 
   // Sync with system settings
   useEffect(() => {
@@ -132,7 +135,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         : 'border-orange-300'
     },
     { 
-      icon: Activity, 
+      icon: FileText, 
       label: 'System Logs', 
       description: 'View application logs, audit trails and system activity', 
       category: 'Monitoring', 
@@ -142,7 +145,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         : 'from-cyan-100 to-cyan-50',
       borderColor: theme === 'dark' 
         ? 'border-cyan-500/30' 
-        : 'border-cyan-300'
+        : 'border-cyan-300',
+      navigateTo: 'audit-logs'
     },
   ];
 
@@ -181,6 +185,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     if (section.isLiveToggle) {
       // Handle live toggle directly
       handleMasterLiveToggle();
+      return;
+    }
+
+    if (section.navigateTo) {
+      // Navigate to the specified route
+      navigate(`/dashboard/${section.navigateTo}`);
+      onClose();
       return;
     }
 
@@ -349,7 +360,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: index * 0.1 }}
                           onClick={() => handleSectionClick(section)}
-                          disabled={isLoading && !section.isLiveToggle}
+                          disabled={isLoading && !section.isLiveToggle && !section.navigateTo}
                           whileHover={{ y: -4, scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
                           className={`group relative w-full p-6 rounded-2xl transition-all duration-300 border backdrop-blur-xl shadow-lg hover:shadow-xl ${
@@ -371,14 +382,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                           
                           <div className="relative flex items-start gap-4">
                             <div className={`p-4 rounded-2xl transition-all duration-300 ${
-                              activeSection === section.label || section.isLiveToggle
+                              activeSection === section.label || section.isLiveToggle || section.navigateTo
                                 ? `bg-gradient-to-br ${section.color} shadow-lg`
                                 : theme === 'dark'
                                   ? 'bg-white/10 group-hover:bg-white/20'
                                   : 'bg-gray-200 group-hover:bg-gray-300'
                             }`}>
                               <section.icon className={`w-6 h-6 transition-colors duration-300 ${
-                                activeSection === section.label || section.isLiveToggle
+                                activeSection === section.label || section.isLiveToggle || section.navigateTo
                                   ? 'text-white'
                                   : theme === 'dark'
                                     ? 'text-white/70 group-hover:text-white'
