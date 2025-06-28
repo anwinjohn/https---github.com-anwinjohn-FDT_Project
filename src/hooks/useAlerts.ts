@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { AlertSummary, AlertDetail, AlertFilters, AlertDisposition } from '../types/alerts';
 import apiClient from '../utils/apiClient';
 import { useNotifications } from '../components/notifications';
+import config from '../config/app-config.json';
 
 interface UseAlertsReturn {
   alerts: AlertSummary[];
@@ -45,7 +46,7 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
   const [totalPages, setTotalPages] = useState(0);
   const [filters, setFilters] = useState<AlertFilters>(defaultFilters);
   const [errorNotificationShown, setErrorNotificationShown] = useState(false);
-  
+
   const { addNotification } = useNotifications();
 
   const fetchAlerts = useCallback(async () => {
@@ -55,20 +56,32 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
       setErrorNotificationShown(false);
 
       // For now, using the provided API endpoint
-      const response = await fetch('http://127.0.0.1:8000/open-alerts-summary');
-      
+      // const response = await fetch('http://127.0.0.1:8000/open-alerts-summary');
+      const response = await fetch(`${config.api.baseUrl}/open-alerts-summary`);
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const data: AlertSummary[] = await response.json();
-      
-      // Apply client-side filtering (in production, this should be server-side)
-      let filteredData = data;
-      
+
+      // Deduplicate data based on alert_id
+      const uniqueAlertsMap = new Map<string, AlertSummary>();
+      data.forEach(alert => {
+        // If a duplicate alert_id is found, the first one encountered will be kept.
+        if (!uniqueAlertsMap.has(alert.alert_id)) {
+          uniqueAlertsMap.set(alert.alert_id, alert);
+        }
+      });
+      let processedData = Array.from(uniqueAlertsMap.values());
+
+      // Now, apply client-side filtering and pagination to processedData
+      let filteredData = processedData;
+
+
       if (filters.search) {
         const searchLower = filters.search.toLowerCase();
-        filteredData = filteredData.filter(alert => 
+        filteredData = filteredData.filter(alert =>
           alert.cust_name.toLowerCase().includes(searchLower) ||
           alert.rule_desc.toLowerCase().includes(searchLower) ||
           alert.cust_code.includes(searchLower) ||
@@ -77,13 +90,13 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
       }
 
       if (filters.service_type.length > 0) {
-        filteredData = filteredData.filter(alert => 
+        filteredData = filteredData.filter(alert =>
           filters.service_type.includes(alert.service_type)
         );
       }
 
       if (filters.rule_id.length > 0) {
-        filteredData = filteredData.filter(alert => 
+        filteredData = filteredData.filter(alert =>
           filters.rule_id.includes(alert.rule_id)
         );
       }
@@ -96,17 +109,17 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
       setAlerts(paginatedData);
       setTotalCount(filteredData.length);
       setTotalPages(Math.ceil(filteredData.length / pageSize));
-      
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alerts';
       setError(errorMessage);
-      
+
       // Only show notification once per error state
       if (!errorNotificationShown) {
         addNotification('Failed to load alerts', 'error');
         setErrorNotificationShown(true);
       }
-      
+
       console.error('Error fetching alerts:', err);
     } finally {
       setLoading(false);
@@ -119,7 +132,7 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
       setError(null);
       setErrorNotificationShown(false);
 
-      const response = await fetch('http://127.0.0.1:8000/open-alerts-details', {
+      const response = await fetch(`${config.api.baseUrl}/open-alerts-details`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -133,17 +146,17 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
 
       const data: AlertDetail[] = await response.json();
       setSelectedAlert(data);
-      
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alert details';
       setError(errorMessage);
-      
+
       // Only show notification once per error state
       if (!errorNotificationShown) {
         addNotification('Failed to load alert details', 'error');
         setErrorNotificationShown(true);
       }
-      
+
       console.error('Error fetching alert details:', err);
     } finally {
       setLoading(false);
@@ -154,10 +167,10 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
     try {
       setLoading(true);
       setErrorNotificationShown(false);
-      
+
       // In production, this would call the actual API
       const response = await apiClient.post('/api/alerts/dispose', disposition);
-      
+
       if (response.success) {
         addNotification('Alert disposed successfully', 'success');
         await fetchAlerts(); // Refresh the alerts list
@@ -168,13 +181,13 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to dispose alert';
       setError(errorMessage);
-      
+
       // Only show notification once per error state
       if (!errorNotificationShown) {
         addNotification(errorMessage, 'error');
         setErrorNotificationShown(true);
       }
-      
+
       console.error('Error disposing alert:', err);
       return false;
     } finally {

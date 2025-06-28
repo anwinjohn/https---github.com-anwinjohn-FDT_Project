@@ -7,8 +7,8 @@ export interface AlertSummary {
   rule_id: string;
   rule_desc: string;
   rule_remarks: string;
-  status?: 'OPEN' | 'IN_PROGRESS' | 'CLOSED';
-  priority?: 'HIGH' | 'MEDIUM' | 'LOW';
+  status: string;
+  rule_priority: string;
   assigned_to?: string;
   created_at?: string;
   updated_at?: string;

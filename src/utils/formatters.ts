@@ -4,7 +4,7 @@ export const formatNumber = (num: number): string => {
 };
 
 // Get color based on risk category from API data
-export const getSeverityColor = (riskCategory: string): string => {
+const getSeverityColor = (riskCategory: string): string => {
   switch (riskCategory?.toLowerCase()) {
     case 'high':
       return 'bg-red-500';
@@ -18,7 +18,7 @@ export const getSeverityColor = (riskCategory: string): string => {
 };
 
 // Get text color based on risk category from API data
-export const getSeverityTextColor = (riskCategory: string): string => {
+const getSeverityTextColor = (riskCategory: string): string => {
   switch (riskCategory?.toLowerCase()) {
     case 'high':
       return 'text-red-500';
@@ -32,13 +32,13 @@ export const getSeverityTextColor = (riskCategory: string): string => {
 };
 
 // Calculate percentage change
-export const calculatePercentChange = (current: number, previous: number): number => {
+const calculatePercentChange = (current: number, previous: number): number => {
   if (previous === 0) return current > 0 ? 100 : 0;
   return Math.round(((current - previous) / previous) * 100);
 };
 
 // Get trend indicator (up, down, or neutral)
-export const getTrendIndicator = (percentChange: number): 'up' | 'down' | 'neutral' => {
+const getTrendIndicator = (percentChange: number): 'up' | 'down' | 'neutral' => {
   if (percentChange > 0) return 'up';
   if (percentChange < 0) return 'down';
   return 'neutral';
@@ -52,7 +52,7 @@ export const getSeverityColorByCount = (count: number): string => {
 };
 
 // Legacy function for backward compatibility - now uses count-based fallback
-export const getSeverityTextColorByCount = (count: number): string => {
+const getSeverityTextColorByCount = (count: number): string => {
   if (count >= 100) return 'text-red-500';
   if (count >= 50) return 'text-orange-500';
   return 'text-green-500';

@@ -63,8 +63,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
                 className={`w-full max-w-6xl rounded-3xl border shadow-2xl overflow-hidden ${theme === 'dark'
-                    ? 'bg-gradient-to-br from-slate-900/98 via-blue-900/98 to-indigo-900/98 border-white/20'
-                    : 'bg-gradient-to-br from-white/98 via-gray-50/98 to-blue-50/98 border-gray-200'
+                  ? 'bg-gradient-to-br from-slate-900/98 via-blue-900/98 to-indigo-900/98 border-white/20'
+                  : 'bg-gradient-to-br from-white/98 via-gray-50/98 to-blue-50/98 border-gray-200'
                   } backdrop-blur-2xl max-h-[90vh] flex flex-col`}
               >
                 {/* Header */}
@@ -80,9 +80,9 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                           }`}>Alert Details</h2>
                         <p className={`${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
                           }`}>
-                            <Flag className="inline w-4 h-4 mr-1" />
+                          <Flag className="inline w-4 h-4 mr-1" />
                           Alert ID: {alertId?.slice(0, 60)}
-                          </p>
+                        </p>
                       </div>
                     </div>
                     <motion.button
@@ -90,8 +90,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                       whileTap={{ scale: 0.9 }}
                       onClick={onClose}
                       className={`p-3 rounded-2xl transition-all duration-200 ${theme === 'dark'
-                          ? 'bg-white/10 hover:bg-white/20 text-white'
-                          : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                        ? 'bg-white/10 hover:bg-white/20 text-white'
+                        : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                         }`}
                     >
                       <X className="w-6 h-6" />
@@ -126,8 +126,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
                           className={`p-6 rounded-2xl border ${theme === 'dark'
-                              ? 'bg-gradient-to-br from-blue-500/20 to-indigo-500/20 border-blue-500/30'
-                              : 'bg-gradient-to-br from-blue-100 to-indigo-100 border-blue-300'
+                            ? 'bg-gradient-to-br from-blue-500/20 to-indigo-500/20 border-blue-500/30'
+                            : 'bg-gradient-to-br from-blue-100 to-indigo-100 border-blue-300'
                             }`}
                         >
                           <div className="flex items-center gap-3 mb-4">
@@ -148,8 +148,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: 0.1 }}
                           className={`p-6 rounded-2xl border ${theme === 'dark'
-                              ? 'bg-gradient-to-br from-green-500/20 to-emerald-500/20 border-green-500/30'
-                              : 'bg-gradient-to-br from-green-100 to-emerald-100 border-green-300'
+                            ? 'bg-gradient-to-br from-green-500/20 to-emerald-500/20 border-green-500/30'
+                            : 'bg-gradient-to-br from-green-100 to-emerald-100 border-green-300'
                             }`}
                         >
                           <div className="flex items-center gap-3 mb-4">
@@ -170,8 +170,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: 0.2 }}
                           className={`p-6 rounded-2xl border ${theme === 'dark'
-                              ? 'bg-gradient-to-br from-orange-500/20 to-red-500/20 border-orange-500/30'
-                              : 'bg-gradient-to-br from-orange-100 to-red-100 border-orange-300'
+                            ? 'bg-gradient-to-br from-orange-500/20 to-red-500/20 border-orange-500/30'
+                            : 'bg-gradient-to-br from-orange-100 to-red-100 border-orange-300'
                             }`}
                         >
                           <div className="flex items-center gap-3 mb-4">
@@ -195,8 +195,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: 0.3 }}
                           className={`p-6 rounded-2xl border ${theme === 'dark'
-                              ? 'bg-white/5 border-white/20'
-                              : 'bg-gray-50 border-gray-200'
+                            ? 'bg-white/5 border-white/20'
+                            : 'bg-gray-50 border-gray-200'
                             }`}
                         >
                           <h3 className={`text-lg font-bold mb-6 flex items-center gap-3 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
@@ -270,8 +270,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: 0.4 }}
                           className={`p-6 rounded-2xl border ${theme === 'dark'
-                              ? 'bg-gradient-to-br from-red-500/10 to-orange-500/10 border-red-500/20'
-                              : 'bg-gradient-to-br from-red-50 to-orange-50 border-red-200'
+                            ? 'bg-gradient-to-br from-red-500/10 to-orange-500/10 border-red-500/20'
+                            : 'bg-gradient-to-br from-red-50 to-orange-50 border-red-200'
                             }`}
                         >
                           <h3 className={`text-lg font-bold mb-6 flex items-center gap-3 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
@@ -281,21 +281,22 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                           </h3>
 
                           <div className="space-y-4">
-                            <div>
-                              <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                                }`}>Rule ID</label>
-                              <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                                }`}>
-                                {firstDetail.rule_id}
+                            <div className="grid grid-cols-12 gap-4">
+                              <div className="col-span-2">
+                                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'}`}>
+                                  Rule ID
+                                </label>
+                                <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+                                  {firstDetail.rule_id}
+                                </div>
                               </div>
-                            </div>
-
-                            <div>
-                              <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                                }`}>Rule Description</label>
-                              <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                                }`}>
-                                {firstDetail.rule_desc}
+                              <div className="col-span-10">
+                                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'}`}>
+                                  Rule Description
+                                </label>
+                                <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+                                  {firstDetail.rule_desc}
+                                </div>
                               </div>
                             </div>
 
@@ -317,8 +318,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.5 }}
                         className={`rounded-2xl border overflow-hidden ${theme === 'dark'
-                            ? 'bg-white/5 border-white/20'
-                            : 'bg-white border-gray-200'
+                          ? 'bg-white/5 border-white/20'
+                          : 'bg-white border-gray-200'
                           }`}
                       >
                         <div className={`p-6 border-b ${theme === 'dark' ? 'border-white/20' : 'border-gray-200'
@@ -354,8 +355,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 <tr
                                   key={detail.row_id}
                                   className={`border-b ${theme === 'dark'
-                                      ? 'border-white/10 hover:bg-white/5'
-                                      : 'border-gray-100 hover:bg-gray-50'
+                                    ? 'border-white/10 hover:bg-white/5'
+                                    : 'border-gray-100 hover:bg-gray-50'
                                     }`}
                                 >
                                   <td className="px-4 py-3">

@@ -64,7 +64,7 @@ const TopAlertRulesPanel: React.FC<TopAlertRulesPanelProps> = ({ data, isLoading
 
       <div className="p-6">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center h-[400px] space-y-4">
+          <div className="flex flex-col items-center justify-center h-[350px] space-y-4">
             <Loader2 className="w-12 h-12 text-blue-400 animate-spin" />
             <div className="text-center">
               <div className={`font-medium ${
@@ -129,7 +129,7 @@ const TopAlertRulesPanel: React.FC<TopAlertRulesPanelProps> = ({ data, isLoading
             </div>
 
             {/* Chart */}
-            <div className={`h-[400px] rounded-xl p-4 border ${
+            <div className={`h-[350px] rounded-xl p-4 border ${
               theme === 'dark' 
                 ? 'bg-white/5 border-white/10' 
                 : 'bg-gray-50 border-gray-200'

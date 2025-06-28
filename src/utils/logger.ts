@@ -12,10 +12,13 @@ interface LogEntry {
   userAgent?: string;
   data?: any;
   stackTrace?: string;
+  component?: string;
+  action?: string;
+  category?: string;
 }
 
 interface SecurityEvent {
-  type: 'auth_failure' | 'invalid_signature' | 'replay_attack' | 'rate_limit' | 'suspicious_activity';
+  type: 'auth_failure' | 'invalid_signature' | 'replay_attack' | 'rate_limit' | 'suspicious_activity' | 'permission_violation' | 'data_access_violation';
   severity: 'low' | 'medium' | 'high' | 'critical';
   details: any;
 }
@@ -26,8 +29,16 @@ class Logger {
   private securityEvents: (LogEntry & { securityEvent: SecurityEvent })[] = [];
   private maxLogs: number = 1000;
   private maxSecurityEvents: number = 500;
+  private logBuffer: LogEntry[] = [];
+  private bufferSize: number = 20;
+  private bufferFlushInterval: number = 10000; // 10 seconds
+  private flushIntervalId: number | null = null;
+  private isFlushingBuffer: boolean = false;
 
-  private constructor() {}
+  private constructor() {
+    // Start buffer flush interval
+    this.flushIntervalId = window.setInterval(() => this.flushBuffer(), this.bufferFlushInterval);
+  }
 
   static getInstance(): Logger {
     if (!Logger.instance) {
@@ -44,12 +55,12 @@ class Logger {
     return {
       userAgent: navigator.userAgent,
       timestamp: this.formatDate(new Date()),
-      sessionId: sessionStorage.getItem('sessionId') || 'unknown',
+      sessionId: sessionStorage.getItem('sessionId') || localStorage.getItem('authToken')?.substring(0, 8) || 'unknown',
       // Note: IP address would need to be obtained from server
     };
   }
 
-  private addLog(level: LogLevel, message: string, userId?: string, data?: any, stackTrace?: string) {
+  private addLog(level: LogLevel, message: string, userId?: string, data?: any, stackTrace?: string, component?: string, action?: string, category?: string) {
     const clientInfo = this.getClientInfo();
     
     const logEntry: LogEntry = {
@@ -60,19 +71,23 @@ class Logger {
       sessionId: clientInfo.sessionId,
       userAgent: clientInfo.userAgent,
       data,
-      stackTrace
+      stackTrace,
+      component,
+      action,
+      category
     };
 
-    this.logs.unshift(logEntry);
+    // Add to buffer for batch processing
+    this.logBuffer.push(logEntry);
     
-    // Keep logs under limit
-    if (this.logs.length > this.maxLogs) {
-      this.logs = this.logs.slice(0, this.maxLogs);
+    // If buffer reaches threshold, flush it
+    if (this.logBuffer.length >= this.bufferSize) {
+      this.flushBuffer();
     }
 
     // Log to console in development
     if (config.environment === 'development') {
-      const consoleMsg = `[${logEntry.timestamp}] ${level.toUpperCase()}: ${message}`;
+      const consoleMsg = `[${logEntry.timestamp}] ${level.toUpperCase()}${component ? ` [${component}]` : ''}${action ? ` [${action}]` : ''}: ${message}`;
       switch (level) {
         case 'error':
           console.error(consoleMsg, data, stackTrace);
@@ -91,9 +106,40 @@ class Logger {
       }
     }
 
-    // Send critical logs to server in production
-    if (config.environment === 'production' && (level === 'error' || level === 'security')) {
+    // Send critical logs to server immediately
+    if ((level === 'error' || level === 'security') && (category === 'critical' || data?.critical)) {
       this.sendLogToServer(logEntry);
+    }
+  }
+
+  private async flushBuffer() {
+    if (this.isFlushingBuffer || this.logBuffer.length === 0) return;
+    
+    this.isFlushingBuffer = true;
+    
+    try {
+      // Process buffer
+      const bufferToProcess = [...this.logBuffer];
+      this.logBuffer = [];
+      
+      // Add to main logs
+      bufferToProcess.forEach(logEntry => {
+        this.logs.unshift(logEntry);
+      });
+      
+      // Keep logs under limit
+      if (this.logs.length > this.maxLogs) {
+        this.logs = this.logs.slice(0, this.maxLogs);
+      }
+      
+      // Send to server in production
+      if (config.environment === 'production') {
+        await this.sendBatchLogsToServer(bufferToProcess);
+      }
+    } catch (error) {
+      console.error('Error flushing log buffer:', error);
+    } finally {
+      this.isFlushingBuffer = false;
     }
   }
 
@@ -116,30 +162,66 @@ class Logger {
     }
   }
 
-  info(message: string, userId?: string, data?: any) {
-    this.addLog('info', message, userId, data);
+  private async sendBatchLogsToServer(logs: LogEntry[]) {
+    try {
+      // Only send in production
+      if (config.environment !== 'production') return;
+
+      // Filter logs to only send important ones to server
+      const criticalLogs = logs.filter(log => 
+        log.level === 'error' || 
+        log.level === 'security' || 
+        log.category === 'critical' || 
+        log.data?.critical
+      );
+      
+      if (criticalLogs.length === 0) return;
+
+      await fetch(`${config.api.baseUrl}/api/logs/client/batch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+        },
+        body: JSON.stringify({ logs: criticalLogs })
+      });
+    } catch (error) {
+      console.error('Failed to send batch logs to server:', error);
+    }
   }
 
-  warn(message: string, userId?: string, data?: any) {
-    this.addLog('warn', message, userId, data);
+  info(message: string, userId?: string, data?: any, component?: string, action?: string) {
+    this.addLog('info', message, userId, data, undefined, component, action, 'general');
   }
 
-  error(message: string, userId?: string, data?: any, error?: Error) {
+  warn(message: string, userId?: string, data?: any, component?: string, action?: string) {
+    this.addLog('warn', message, userId, data, undefined, component, action, 'warning');
+  }
+
+  error(message: string, userId?: string, data?: any, error?: Error, component?: string, action?: string) {
     const stackTrace = error?.stack;
-    this.addLog('error', message, userId, data, stackTrace);
+    this.addLog('error', message, userId, data, stackTrace, component, action, 'error');
   }
 
-  debug(message: string, userId?: string, data?: any) {
-    this.addLog('debug', message, userId, data);
+  debug(message: string, userId?: string, data?: any, component?: string, action?: string) {
+    this.addLog('debug', message, userId, data, undefined, component, action, 'debug');
   }
 
-  security(message: string, securityEvent: SecurityEvent, userId?: string, data?: any) {
+  critical(message: string, userId?: string, data?: any, error?: Error, component?: string, action?: string) {
+    const stackTrace = error?.stack;
+    this.addLog('error', message, userId, { ...data, critical: true }, stackTrace, component, action, 'critical');
+  }
+
+  security(message: string, securityEvent: SecurityEvent, userId?: string, data?: any, component?: string, action?: string) {
     const logEntry: LogEntry = {
       timestamp: this.formatDate(new Date()),
       level: 'security',
       message,
       userId,
-      data: { ...data, securityEvent }
+      data: { ...data, securityEvent },
+      component,
+      action,
+      category: 'security'
     };
 
     // Add to security events
@@ -151,7 +233,7 @@ class Logger {
     }
 
     // Also add to regular logs
-    this.addLog('security', message, userId, { ...data, securityEvent });
+    this.addLog('security', message, userId, { ...data, securityEvent }, undefined, component, action, 'security');
 
     // Immediate server notification for critical security events
     if (securityEvent.severity === 'critical' || securityEvent.severity === 'high') {
@@ -185,47 +267,93 @@ class Logger {
   }
 
   // API Security specific logging methods
-  logAuthFailure(reason: string, userId?: string, details?: any) {
+  logAuthFailure(reason: string, userId?: string, details?: any, component?: string) {
     this.security(`Authentication failure: ${reason}`, {
       type: 'auth_failure',
       severity: 'high',
       details: { reason, ...details }
-    }, userId);
+    }, userId, undefined, component, 'authentication');
   }
 
-  logInvalidSignature(endpoint: string, userId?: string, details?: any) {
+  logInvalidSignature(endpoint: string, userId?: string, details?: any, component?: string) {
     this.security(`Invalid signature for endpoint: ${endpoint}`, {
       type: 'invalid_signature',
       severity: 'critical',
       details: { endpoint, ...details }
-    }, userId);
+    }, userId, undefined, component, 'api_security');
   }
 
-  logReplayAttack(nonce: string, userId?: string, details?: any) {
+  logReplayAttack(nonce: string, userId?: string, details?: any, component?: string) {
     this.security(`Potential replay attack detected with nonce: ${nonce}`, {
       type: 'replay_attack',
       severity: 'critical',
       details: { nonce, ...details }
-    }, userId);
+    }, userId, undefined, component, 'api_security');
   }
 
-  logRateLimit(endpoint: string, userId?: string, details?: any) {
+  logRateLimit(endpoint: string, userId?: string, details?: any, component?: string) {
     this.security(`Rate limit exceeded for endpoint: ${endpoint}`, {
       type: 'rate_limit',
       severity: 'medium',
       details: { endpoint, ...details }
-    }, userId);
+    }, userId, undefined, component, 'api_security');
   }
 
-  logSuspiciousActivity(activity: string, userId?: string, details?: any) {
+  logSuspiciousActivity(activity: string, userId?: string, details?: any, component?: string) {
     this.security(`Suspicious activity detected: ${activity}`, {
       type: 'suspicious_activity',
       severity: 'high',
       details: { activity, ...details }
-    }, userId);
+    }, userId, undefined, component, 'security_monitoring');
+  }
+
+  logPermissionViolation(action: string, resource: string, userId?: string, details?: any, component?: string) {
+    this.security(`Permission violation: Attempted ${action} on ${resource}`, {
+      type: 'permission_violation',
+      severity: 'high',
+      details: { action, resource, ...details }
+    }, userId, undefined, component, 'access_control');
+  }
+
+  logDataAccessViolation(dataType: string, accessType: string, userId?: string, details?: any, component?: string) {
+    this.security(`Data access violation: Attempted ${accessType} on ${dataType}`, {
+      type: 'data_access_violation',
+      severity: 'critical',
+      details: { dataType, accessType, ...details }
+    }, userId, undefined, component, 'data_security');
+  }
+
+  // User activity logging
+  logUserActivity(action: string, userId?: string, details?: any, component?: string) {
+    this.info(`User activity: ${action}`, userId, details, component, 'user_activity');
+  }
+
+  // System activity logging
+  logSystemActivity(action: string, details?: any, component?: string) {
+    this.info(`System activity: ${action}`, undefined, details, component, 'system');
+  }
+
+  // Performance logging
+  logPerformance(operation: string, durationMs: number, userId?: string, details?: any, component?: string) {
+    const severity = durationMs > 1000 ? 'warn' : 'info';
+    this[severity](`Performance: ${operation} took ${durationMs}ms`, userId, { ...details, durationMs }, component, 'performance');
+  }
+
+  // API request logging
+  logApiRequest(method: string, url: string, statusCode: number, durationMs: number, userId?: string, details?: any) {
+    const level = statusCode >= 400 ? 'error' : statusCode >= 300 ? 'warn' : 'info';
+    this[level](
+      `API ${method} ${url} - ${statusCode} (${durationMs}ms)`, 
+      userId, 
+      { ...details, statusCode, durationMs }, 
+      'API', 
+      'request'
+    );
   }
 
   getLogs(): LogEntry[] {
+    // Flush buffer before returning logs to ensure all logs are included
+    this.flushBuffer();
     return [...this.logs];
   }
 
@@ -235,6 +363,7 @@ class Logger {
 
   clearLogs() {
     this.logs = [];
+    this.logBuffer = [];
   }
 
   clearSecurityEvents() {
@@ -243,13 +372,62 @@ class Logger {
 
   // Export logs for debugging
   exportLogs(): string {
+    // Flush buffer before exporting
+    this.flushBuffer();
     return JSON.stringify({
       logs: this.logs,
       securityEvents: this.securityEvents,
       exportedAt: this.formatDate(new Date())
     }, null, 2);
   }
+
+  // Filter logs by criteria
+  filterLogs(criteria: {
+    level?: LogLevel | LogLevel[],
+    component?: string,
+    action?: string,
+    category?: string,
+    userId?: string,
+    startDate?: Date,
+    endDate?: Date
+  }): LogEntry[] {
+    // Flush buffer before filtering
+    this.flushBuffer();
+    
+    return this.logs.filter(log => {
+      if (criteria.level) {
+        if (Array.isArray(criteria.level)) {
+          if (!criteria.level.includes(log.level)) return false;
+        } else if (log.level !== criteria.level) {
+          return false;
+        }
+      }
+      
+      if (criteria.component && log.component !== criteria.component) return false;
+      if (criteria.action && log.action !== criteria.action) return false;
+      if (criteria.category && log.category !== criteria.category) return false;
+      if (criteria.userId && log.userId !== criteria.userId) return false;
+      
+      if (criteria.startDate || criteria.endDate) {
+        const logDate = new Date(log.timestamp);
+        if (criteria.startDate && logDate < criteria.startDate) return false;
+        if (criteria.endDate && logDate > criteria.endDate) return false;
+      }
+      
+      return true;
+    });
+  }
+
+  // Clean up resources
+  destroy() {
+    if (this.flushIntervalId !== null) {
+      clearInterval(this.flushIntervalId);
+      this.flushIntervalId = null;
+    }
+    
+    // Flush any remaining logs
+    this.flushBuffer();
+  }
 }
 
 export const logger = Logger.getInstance();
-export type { LogEntry, SecurityEvent };

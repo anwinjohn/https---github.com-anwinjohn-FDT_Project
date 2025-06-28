@@ -82,7 +82,7 @@ const RiskDistributionPanel: React.FC<RiskDistributionPanelProps> = ({ data, isL
 
       <div className="p-6">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center h-[400px] space-y-4">
+          <div className="flex flex-col items-center justify-center h-[350px] space-y-4">
             <Loader2 className="w-12 h-12 text-red-400 animate-spin" />
             <div className="text-center">
               <div className={`font-medium ${
@@ -176,7 +176,7 @@ const RiskDistributionPanel: React.FC<RiskDistributionPanelProps> = ({ data, isL
             </div>
 
             {/* Chart */}
-            <div className="h-[400px] relative">
+            <div className="h-[350px] relative">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie

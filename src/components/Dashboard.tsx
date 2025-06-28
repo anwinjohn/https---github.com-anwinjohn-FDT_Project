@@ -153,9 +153,9 @@ const Dashboard: React.FC = () => {
   const totalBranches = branchAlertsSummary.length;
 
   // Updated risk categorization based on API data
-  const highRiskAlerts = alertsSummary.filter(item => item.riskCategory === 'High');
-  const mediumRiskAlerts = alertsSummary.filter(item => item.riskCategory === 'Medium');
-  const lowRiskAlerts = alertsSummary.filter(item => item.riskCategory === 'Low');
+  const highRiskAlerts = alertsSummary.filter(item => item.rule_priority === 'High');
+  const mediumRiskAlerts = alertsSummary.filter(item => item.rule_priority === 'Medium');
+  const lowRiskAlerts = alertsSummary.filter(item => item.rule_priority === 'Low');
 
   const riskDistributionData = [
     { name: 'High Risk', value: highRiskAlerts.length, color: '#ef4444' },
@@ -240,7 +240,7 @@ const Dashboard: React.FC = () => {
                   <span className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                     }`}>{alertsSummary.slice(0, 5).reduce((sum, item) => sum + item.count, 0)}</span>
                   <span className={`text-sm ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'
-                    }`}>top 5 alerts</span>
+                    }`}> in {highRiskAlerts.length} are high risk category</span>
                 </div>
               </motion.div>
 
@@ -728,7 +728,7 @@ const Dashboard: React.FC = () => {
 
         <main className="flex-1 p-6 overflow-y-auto">
           {/* Statistics Cards - Only show for non-admin views */}
-          {(activeView === 'dashboard' || activeView === 'overview') && (
+          {/* {(activeView === 'dashboard' || activeView === 'overview') && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -779,7 +779,7 @@ const Dashboard: React.FC = () => {
                 isLoading={isLoading}
               />
             </motion.div>
-          )}
+          )} */}
 
           {/* Content Area */}
           <motion.div
