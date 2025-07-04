@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect } from 'react';
 
 export interface Notification {
   id: string;
@@ -31,8 +31,16 @@ interface NotificationProviderProps {
 
 export const NotificationProvider: React.FC<NotificationProviderProps> = ({ children }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [timeouts, setTimeouts] = useState<Record<string, NodeJS.Timeout>>({});
 
-  const addNotification = (
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(timeouts).forEach(timeout => clearTimeout(timeout));
+    };
+  }, [timeouts]);
+
+  const addNotification = useCallback((
     message: string, 
     type: Notification['type'] = 'info', 
     duration: number = 5000,
@@ -53,19 +61,38 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
     setNotifications(prev => [...prev, notification]);
 
     if (duration > 0) {
-      setTimeout(() => {
+      const timeout = setTimeout(() => {
         removeNotification(id);
       }, duration);
+      
+      setTimeouts(prev => ({
+        ...prev,
+        [id]: timeout
+      }));
     }
-  };
+  }, []);
 
-  const removeNotification = (id: string) => {
+  const removeNotification = useCallback((id: string) => {
     setNotifications(prev => prev.filter(notif => notif.id !== id));
-  };
+    
+    // Clear the timeout if it exists
+    if (timeouts[id]) {
+      clearTimeout(timeouts[id]);
+      setTimeouts(prev => {
+        const newTimeouts = { ...prev };
+        delete newTimeouts[id];
+        return newTimeouts;
+      });
+    }
+  }, [timeouts]);
 
-  const clearAllNotifications = () => {
+  const clearAllNotifications = useCallback(() => {
     setNotifications([]);
-  };
+    
+    // Clear all timeouts
+    Object.values(timeouts).forEach(timeout => clearTimeout(timeout));
+    setTimeouts({});
+  }, [timeouts]);
 
   return (
     <NotificationContext.Provider value={{ 

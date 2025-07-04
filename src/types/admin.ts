@@ -48,7 +48,7 @@ export interface RoleMenuPermission {
   level: number;
 }
 
-export interface AuditLog {
+interface AuditLog {
   id: number;
   user_id: string;
   admin_user_id: string;

@@ -76,7 +76,7 @@ const RiskDistributionPanel: React.FC<RiskDistributionPanelProps> = ({ data, isL
           }`}>{total}</div>
           <div className={`text-xs font-medium ${
             theme === 'dark' ? 'text-red-300' : 'text-red-600'
-          }`}>Total Rules</div>
+          }`}>Total Alerts</div>
         </div>
       </div>
 
@@ -156,19 +156,19 @@ const RiskDistributionPanel: React.FC<RiskDistributionPanelProps> = ({ data, isL
                   <div className="flex justify-between">
                     <span className={theme === 'dark' ? 'text-white/70' : 'text-gray-600'}>Most Critical:</span>
                     <span className="text-red-400 font-medium">
-                      {data.find(item => item.name === 'High Risk')?.value || 0} rules
+                      {data.find(item => item.name === 'High Risk')?.value || 0} alerts
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className={theme === 'dark' ? 'text-white/70' : 'text-gray-600'}>Moderate Risk:</span>
                     <span className="text-orange-400 font-medium">
-                      {data.find(item => item.name === 'Medium Risk')?.value || 0} rules
+                      {data.find(item => item.name === 'Medium Risk')?.value || 0} alerts
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className={theme === 'dark' ? 'text-white/70' : 'text-gray-600'}>Low Priority:</span>
                     <span className="text-green-400 font-medium">
-                      {data.find(item => item.name === 'Low Risk')?.value || 0} rules
+                      {data.find(item => item.name === 'Low Risk')?.value || 0} alerts
                     </span>
                   </div>
                 </div>
@@ -206,7 +206,7 @@ const RiskDistributionPanel: React.FC<RiskDistributionPanelProps> = ({ data, isL
                       boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
                     }}
                     formatter={(value: number) => [
-                      `${value} rules`,
+                      `${value} alerts`,
                       `${((value / total) * 100).toFixed(1)}%`
                     ]}
                   />
@@ -217,7 +217,7 @@ const RiskDistributionPanel: React.FC<RiskDistributionPanelProps> = ({ data, isL
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <span className={`text-sm font-medium ${
                   theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                }`}>Total Rules</span>
+                }`}>Total Alerts</span>
                 <span className={`text-3xl font-bold ${
                   theme === 'dark' ? 'text-white' : 'text-gray-900'
                 }`}>{total}</span>

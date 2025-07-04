@@ -10,18 +10,27 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/d3": "^7.4.3",
+    "@types/three": "^0.177.0",
     "axios": "^1.6.2",
     "chart.js": "^4.4.0",
     "crypto-js": "^4.2.0",
+    "d3": "^7.9.0",
     "date-fns": "^2.30.0",
+    "echarts": "^5.6.0",
+    "echarts-for-react": "^3.0.2",
     "framer-motion": "^10.16.4",
     "lucide-react": "^0.344.0",
+    "plotly.js": "^3.0.1",
     "react": "^18.3.1",
     "react-chartjs-2": "^5.2.0",
     "react-datepicker": "^4.21.0",
     "react-dom": "^18.3.1",
+    "react-force-graph": "^1.47.7",
+    "react-plotly.js": "^2.6.0",
     "react-router-dom": "^6.22.3",
-    "recharts": "^2.12.2"
+    "recharts": "^2.12.2",
+    "three": "^0.177.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",

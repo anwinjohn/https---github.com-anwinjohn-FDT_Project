@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
@@ -147,21 +147,58 @@ const Dashboard: React.FC = () => {
     logger.info('Navigated to dashboard via home button', user?.full_name || 'Unknown User');
   };
 
-
   const totalAlerts = alertsSummary.reduce((sum, item) => sum + item.count, 0);
   const totalUsers = userAlertsSummary.length;
   const totalBranches = branchAlertsSummary.length;
 
-  // Updated risk categorization based on API data
-  const highRiskAlerts = alertsSummary.filter(item => item.rule_priority === 'High');
-  const mediumRiskAlerts = alertsSummary.filter(item => item.rule_priority === 'Medium');
-  const lowRiskAlerts = alertsSummary.filter(item => item.rule_priority === 'Low');
+  // Calculate alert counts by risk category
+  const getAlertCountsByRiskCategory = () => {
+    // Group alerts by risk category and sum their counts
+    const riskCounts = {
+      'High Risk': 0,
+      'Medium Risk': 0,
+      'Low Risk': 0
+    };
 
-  const riskDistributionData = [
-    { name: 'High Risk', value: highRiskAlerts.length, color: '#ef4444' },
-    { name: 'Medium Risk', value: mediumRiskAlerts.length, color: '#f97316' },
-    { name: 'Low Risk', value: lowRiskAlerts.length, color: '#22c55e' }
-  ];
+    alertsSummary.forEach(alert => {
+      if (alert.rule_priority === 'High') {
+        riskCounts['High Risk'] += alert.count;
+      } else if (alert.rule_priority === 'Medium') {
+        riskCounts['Medium Risk'] += alert.count;
+      } else {
+        riskCounts['Low Risk'] += alert.count;
+      }
+    });
+
+    return [
+      { name: 'High Risk', value: riskCounts['High Risk'], color: '#ef4444' },
+      { name: 'Medium Risk', value: riskCounts['Medium Risk'], color: '#f97316' },
+      { name: 'Low Risk', value: riskCounts['Low Risk'], color: '#22c55e' }
+    ];
+  };
+  const riskDistributionData = getAlertCountsByRiskCategory();
+
+  // Get top 5 alert rules by count
+  const topAlertRules = useMemo(() => {
+    return [...alertsSummary]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }, [alertsSummary]);
+
+  // Calculate high risk alerts count
+  const highRiskAlertsCount = useMemo(() => {
+    return alertsSummary
+      .filter(alert => alert.rule_priority === 'High' || alert.rule_priority === 'High')
+      .reduce((sum, alert) => sum + alert.count, 0);
+  }, [alertsSummary]);
+
+  // Get the top rule ID and count
+  const topRuleInfo = useMemo(() => {
+    if (alertsSummary.length === 0) return { id: 'N/A', count: 0 };
+
+    const topRule = [...alertsSummary].sort((a, b) => b.count - a.count)[0];
+    return { id: topRule.rule_id, count: topRule.count };
+  }, [alertsSummary]);
 
   const getViewTitle = (view: string) => {
     const titles: Record<string, string> = {
@@ -201,7 +238,7 @@ const Dashboard: React.FC = () => {
               >
                 <div className="flex items-center justify-between mb-4">
                   <div className="p-3 bg-gradient-to-br from-red-500 to-red-600 rounded-xl shadow-lg group-hover:shadow-red-500/25 transition-all duration-300">
-                    <Shield className="w-6 h-6 text-white" />
+                    <AlertTriangle className="w-6 h-6 text-white" />
                   </div>
                   <ArrowUpRight className="w-5 h-5 text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
@@ -211,9 +248,9 @@ const Dashboard: React.FC = () => {
                   }`}>Risk intelligence dashboard</p>
                 <div className="flex items-center gap-2">
                   {/* <span className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>{riskDistributionData.reduce((sum, item) => sum + item.value, 0)}</span> */}
+                    }`}>24</span> */}
                   <span className={`text-sm ${theme === 'dark' ? 'text-red-300' : 'text-red-700'
-                    }`}>Detailed analysis</span>
+                    }`}>View more details</span>
                 </div>
               </motion.div>
 
@@ -234,13 +271,19 @@ const Dashboard: React.FC = () => {
                 </div>
                 <h3 className={`text-lg font-bold mb-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                   }`}>Top Alert Rules</h3>
-                <p className={`text-sm mb-3 ${theme === 'dark' ? 'text-blue-200/80' : 'text-blue-700'
-                  }`}>Most triggered security rules</p>
-                <div className="flex items-center gap-2">
-                  <span className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>{alertsSummary.slice(0, 5).reduce((sum, item) => sum + item.count, 0)}</span>
-                  <span className={`text-sm ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'
-                    }`}> in {highRiskAlerts.length} are high risk category</span>
+                {/* <p className={`text-sm mb-3 ${theme === 'dark' ? 'text-blue-200/80' : 'text-blue-700'
+                  }`}>Most triggered security rules</p> */}
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
+                      }`}>{topRuleInfo.count}</span>
+                    <span className={`text-sm ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'
+                      }`}>{topRuleInfo.id} top rule hits</span>
+                  </div>
+                  <div className={`text-xs mt-1 ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                    }`}>
+                   {highRiskAlertsCount} high risk alerts
+                  </div>
                 </div>
               </motion.div>
 

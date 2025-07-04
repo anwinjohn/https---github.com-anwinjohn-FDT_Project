@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { 
   CheckCircle, 
@@ -19,6 +19,7 @@ interface NotificationItemProps {
 const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRemove }) => {
   const [progress, setProgress] = useState(100);
   const { theme } = useTheme();
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const getNotificationConfig = (type: Notification['type']) => {
     const configs = {
@@ -70,6 +71,10 @@ const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRem
   const Icon = config.icon;
 
   const handleRemove = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
     onRemove(notification.id);
   };
 
@@ -82,21 +87,37 @@ const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRem
 
   useEffect(() => {
     if (notification.duration && notification.duration > 0) {
-      const interval = setInterval(() => {
-        setProgress((prev) => {
-          const newProgress = prev - (100 / (notification.duration! / 100));
+      // Calculate interval time based on duration
+      const intervalTime = 100; // Update every 100ms
+      const steps = notification.duration / intervalTime;
+      const decrementPerStep = 100 / steps;
+      
+      intervalRef.current = setInterval(() => {
+        setProgress(prev => {
+          const newProgress = prev - decrementPerStep;
           if (newProgress <= 0) {
-            clearInterval(interval);
-            handleRemove();
+            if (intervalRef.current) {
+              clearInterval(intervalRef.current);
+              intervalRef.current = null;
+            }
+            // Use a timeout to avoid state updates during render
+            setTimeout(() => {
+              onRemove(notification.id);
+            }, 0);
             return 0;
           }
           return newProgress;
         });
-      }, 100);
-
-      return () => clearInterval(interval);
+      }, intervalTime);
     }
-  }, [notification.duration]);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [notification.id, notification.duration, onRemove]);
 
   return (
     <motion.div
