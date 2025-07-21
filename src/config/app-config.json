@@ -8,7 +8,7 @@
     "enabled": true,
     "methods": {
       "password": true,
-      "biometric": true,
+      "faceid": true,
       "sms": true
     },
     "autoRefreshInterval": 30000,

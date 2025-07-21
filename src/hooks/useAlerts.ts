@@ -3,6 +3,21 @@ import { AlertSummary, AlertDetail, AlertFilters, AlertDisposition } from '../ty
 import apiClient from '../utils/apiClient';
 import { useNotifications } from '../components/notifications';
 import config from '../config/app-config.json';
+import FilterOptionsAPI from './FilterOptionsAPI';
+
+interface AlertsResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  rule_priority: string | null;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+  current_page: number;
+  total_open_alerts: number;
+  total_high_priority_alerts: number;
+  data: AlertSummary[];
+}
 
 interface UseAlertsReturn {
   alerts: AlertSummary[];
@@ -10,15 +25,31 @@ interface UseAlertsReturn {
   loading: boolean;
   error: string | null;
   totalCount: number;
+  totalOpenAlerts: number;
+  totalHighPriorityAlerts: number;
   currentPage: number;
   totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+  pageSize: number;
   filters: AlertFilters;
+  filterOptions: {
+    serviceTypes: string[];
+    ruleIds: string[];
+    statuses: string[];
+    priorities: string[];
+    assignees: string[];
+    branches: string[];
+    nationalities: string[];
+  };
   fetchAlerts: () => Promise<void>;
   fetchAlertDetails: (alertId: string) => Promise<void>;
   disposeAlert: (disposition: AlertDisposition) => Promise<boolean>;
   updateFilters: (newFilters: Partial<AlertFilters>) => void;
   setPage: (page: number) => void;
+  setPageSize: (size: number) => void;
   refreshAlerts: () => Promise<void>;
+  fetchFilterOptions: () => Promise<void>;
 }
 
 const defaultFilters: AlertFilters = {
@@ -36,18 +67,105 @@ const defaultFilters: AlertFilters = {
   cust_nationality: []
 };
 
-export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
+export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
   const [alerts, setAlerts] = useState<AlertSummary[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<AlertDetail[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
+  const [totalOpenAlerts, setTotalOpenAlerts] = useState(0);
+  const [totalHighPriorityAlerts, setTotalHighPriorityAlerts] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
+  const [hasNext, setHasNext] = useState(false);
+  const [hasPrev, setHasPrev] = useState(false);
+  const [pageSize, setPageSize] = useState(initialPageSize);
   const [filters, setFilters] = useState<AlertFilters>(defaultFilters);
   const [errorNotificationShown, setErrorNotificationShown] = useState(false);
+  const [filterOptions, setFilterOptions] = useState({
+    serviceTypes: [],
+    ruleIds: [],
+    statuses: [],
+    priorities: [],
+    assignees: [],
+    branches: [],
+    nationalities: []
+  });
 
   const { addNotification } = useNotifications();
+
+  const buildQueryParams = useCallback(() => {
+    const queryParams = new URLSearchParams();
+
+    // Pagination parameters (always required)
+    queryParams.append('page', currentPage.toString());
+    queryParams.append('page_size', pageSize.toString());
+
+    // Search filter
+    if (filters.search && filters.search.trim()) {
+      queryParams.append('search', filters.search.trim());
+    }
+
+    // Service type filter (multiple values)
+    if (filters.service_type && filters.service_type.length > 0) {
+      filters.service_type.forEach(type => {
+        queryParams.append('service_type', type);
+      });
+    }
+
+    // Rule ID filter (multiple values)
+    if (filters.rule_id && filters.rule_id.length > 0) {
+      filters.rule_id.forEach(id => {
+        queryParams.append('rule_id', id);
+      });
+    }
+
+    // Status filter (multiple values)
+    if (filters.status && filters.status.length > 0) {
+      filters.status.forEach(status => {
+        queryParams.append('status', status);
+      });
+    }
+
+    // Priority filter (multiple values)
+    if (filters.priority && filters.priority.length > 0) {
+      filters.priority.forEach(priority => {
+        queryParams.append('rule_priority', priority);
+      });
+    }
+
+    // Date range filters
+    if (filters.date_range?.from && filters.date_range.from.trim()) {
+      queryParams.append('from_date', filters.date_range.from.trim());
+    }
+
+    if (filters.date_range?.to && filters.date_range.to.trim()) {
+      queryParams.append('to_date', filters.date_range.to.trim());
+    }
+
+    // Assigned to filter (multiple values)
+    if (filters.assigned_to && filters.assigned_to.length > 0) {
+      filters.assigned_to.forEach(assignee => {
+        queryParams.append('assigned_to', assignee);
+      });
+    }
+
+    // Branch name filter (multiple values)
+    if (filters.branch_name && filters.branch_name.length > 0) {
+      filters.branch_name.forEach(branch => {
+        queryParams.append('branch_name', branch);
+      });
+    }
+
+    // Customer nationality filter (multiple values)
+    if (filters.cust_nationality && filters.cust_nationality.length > 0) {
+      filters.cust_nationality.forEach(nationality => {
+        queryParams.append('cust_nationality', nationality);
+      });
+    }
+
+    return queryParams.toString();
+  }, [currentPage, pageSize, filters]);
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -55,60 +173,56 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
       setError(null);
       setErrorNotificationShown(false);
 
-      // For now, using the provided API endpoint
-      // const response = await fetch('http://127.0.0.1:8000/open-alerts-summary');
-      const response = await fetch(`${config.api.baseUrl}/open-alerts-summary`);
+      const queryString = buildQueryParams();
+      const apiUrl = `${config.api.baseUrl}/open-alerts-summary${queryString ? `?${queryString}` : ''}`;
+
+      console.log('Fetching alerts from:', apiUrl); // Debug log
+
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
+      const data: AlertsResponse = await response.json();
 
-      const data: AlertSummary[] = await response.json();
 
-      // Deduplicate data based on alert_id
+      // Handle empty data array
+      if (!data.data || data.data.length === 0) {
+        setAlerts([]);
+        setTotalCount(data.total || 0);
+        setTotalPages(data.total_pages || 0);
+        setTotalOpenAlerts(data.total_open_alerts || 0);
+        setTotalHighPriorityAlerts(data.total_high_priority_alerts || 0);
+        setHasNext(data.has_next || false);
+        setHasPrev(data.has_prev || false);
+        setCurrentPage(data.current_page || 1);
+        return;
+      }
+
+      // Deduplicate data based on alert_id (in case API returns duplicates)
       const uniqueAlertsMap = new Map<string, AlertSummary>();
-      data.forEach(alert => {
-        // If a duplicate alert_id is found, the first one encountered will be kept.
+      data.data.forEach(alert => {
         if (!uniqueAlertsMap.has(alert.alert_id)) {
           uniqueAlertsMap.set(alert.alert_id, alert);
         }
       });
-      let processedData = Array.from(uniqueAlertsMap.values());
 
-      // Now, apply client-side filtering and pagination to processedData
-      let filteredData = processedData;
+      const uniqueAlerts = Array.from(uniqueAlertsMap.values());
 
-
-      if (filters.search) {
-        const searchLower = filters.search.toLowerCase();
-        filteredData = filteredData.filter(alert =>
-          alert.cust_name.toLowerCase().includes(searchLower) ||
-          alert.rule_desc.toLowerCase().includes(searchLower) ||
-          alert.cust_code.includes(searchLower) ||
-          alert.rule_id.toLowerCase().includes(searchLower)
-        );
-      }
-
-      if (filters.service_type.length > 0) {
-        filteredData = filteredData.filter(alert =>
-          filters.service_type.includes(alert.service_type)
-        );
-      }
-
-      if (filters.rule_id.length > 0) {
-        filteredData = filteredData.filter(alert =>
-          filters.rule_id.includes(alert.rule_id)
-        );
-      }
-
-      // Pagination
-      const startIndex = (currentPage - 1) * pageSize;
-      const endIndex = startIndex + pageSize;
-      const paginatedData = filteredData.slice(startIndex, endIndex);
-
-      setAlerts(paginatedData);
-      setTotalCount(filteredData.length);
-      setTotalPages(Math.ceil(filteredData.length / pageSize));
+      // Update state with paginated response data
+      setAlerts(uniqueAlerts);
+      setTotalCount(data.total);
+      setTotalPages(data.total_pages);
+      setTotalOpenAlerts(data.total_open_alerts);
+      setTotalHighPriorityAlerts(data.total_high_priority_alerts);
+      setHasNext(data.has_next);
+      setHasPrev(data.has_prev);
+      setCurrentPage(data.current_page);
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alerts';
@@ -121,10 +235,19 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
       }
 
       console.error('Error fetching alerts:', err);
+
+      // Reset state on error
+      setAlerts([]);
+      setTotalCount(0);
+      setTotalPages(0);
+      setTotalOpenAlerts(0);
+      setTotalHighPriorityAlerts(0);
+      setHasNext(false);
+      setHasPrev(false);
     } finally {
       setLoading(false);
     }
-  }, [currentPage, pageSize, filters, addNotification, errorNotificationShown]);
+  }, [buildQueryParams, addNotification, errorNotificationShown]);
 
   const fetchAlertDetails = useCallback(async (alertId: string) => {
     try {
@@ -143,8 +266,14 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-
       const data: AlertDetail[] = await response.json();
+  
+      // Handle empty response
+      if (!data || data.length === 0) {
+        setSelectedAlert([]);
+        return;
+      }
+
       setSelectedAlert(data);
 
     } catch (err) {
@@ -156,8 +285,8 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
         addNotification('Failed to load alert details', 'error');
         setErrorNotificationShown(true);
       }
-
       console.error('Error fetching alert details:', err);
+      setSelectedAlert(null);
     } finally {
       setLoading(false);
     }
@@ -166,6 +295,7 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
   const disposeAlert = useCallback(async (disposition: AlertDisposition): Promise<boolean> => {
     try {
       setLoading(true);
+      setError(null);
       setErrorNotificationShown(false);
 
       // In production, this would call the actual API
@@ -201,16 +331,34 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
   }, []);
 
   const setPage = useCallback((page: number) => {
-    setCurrentPage(page);
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+    }
+  }, [totalPages]);
+
+  const handleSetPageSize = useCallback((size: number) => {
+    setPageSize(size);
+    setCurrentPage(1); // Reset to first page when page size changes
   }, []);
 
   const refreshAlerts = useCallback(async () => {
     await fetchAlerts();
   }, [fetchAlerts]);
 
+  const fetchFilterOptions = useCallback(async () => {
+    try {
+      // Use the new FilterOptionsAPI for efficient filter option fetching
+      const filterOptions = await FilterOptionsAPI.getAllFilterOptions();
+      setFilterOptions(filterOptions);
+    } catch (err) {
+      console.error('Error fetching filter options:', err);
+    }
+  }, []);
+  // Fetch alerts when dependencies change
   useEffect(() => {
     fetchAlerts();
-  }, [fetchAlerts]);
+    fetchFilterOptions();
+  }, [fetchAlerts, fetchFilterOptions]);
 
   return {
     alerts,
@@ -218,14 +366,22 @@ export const useAlerts = (pageSize: number = 20): UseAlertsReturn => {
     loading,
     error,
     totalCount,
+    totalOpenAlerts,
+    totalHighPriorityAlerts,
     currentPage,
     totalPages,
+    hasNext,
+    hasPrev,
+    pageSize,
     filters,
+    filterOptions,
     fetchAlerts,
     fetchAlertDetails,
     disposeAlert,
     updateFilters,
     setPage,
-    refreshAlerts
+    setPageSize: handleSetPageSize,
+    refreshAlerts,
+    fetchFilterOptions
   };
 };

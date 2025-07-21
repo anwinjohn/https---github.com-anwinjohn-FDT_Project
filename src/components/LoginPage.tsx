@@ -18,7 +18,8 @@ import {
   Activity,
   Zap,
   Brain,
-  TrendingUp
+  TrendingUp,
+  ScanFace
 } from 'lucide-react';
 
 const LoginPage = () => {
@@ -91,7 +92,7 @@ const LoginPage = () => {
   // Filter auth methods based on config
   const authMethods = [
     { id: 'password', label: 'Password', icon: Lock, description: 'Standard login' },
-    { id: 'biometric', label: 'Biometric', icon: Fingerprint, description: 'Fingerprint/Face ID' },
+    { id: 'faceid', label: 'Face ID', icon: ScanFace, description: 'Face ID' },
     { id: 'sms', label: 'SMS', icon: Smartphone, description: 'SMS verification' }
   ].filter(method => config.auth.methods[method.id]);
 

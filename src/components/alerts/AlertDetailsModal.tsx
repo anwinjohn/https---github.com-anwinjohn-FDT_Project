@@ -16,8 +16,11 @@ import {
   Globe,
   Briefcase,
   Coins,
-  Flag
+  Flag,
+  CheckCircle,
+  Triangle
 } from 'lucide-react';
+
 import { AlertDetail } from '../../types/alerts';
 import { useTheme } from '../../context/ThemeContext';
 import { formatNumber } from '../../utils/formatters';
@@ -42,7 +45,15 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
   if (!isOpen) return null;
 
   const firstDetail = alertDetails?.[0];
-  const totalAmount = alertDetails?.reduce((sum, detail) => sum + parseFloat(detail.lcy_amt), 0) || 0;
+  const totalAmount = alertDetails?.reduce((sum, detail) => sum + parseFloat(detail.amt_aed), 0) || 0;
+
+  const getEmpTxnTypeIcon = (isEmpTxn: boolean) => {
+    return isEmpTxn ? (
+      <AlertTriangle className="w-4 h-4 text-red-500" />
+    ) : (
+      <CheckCircle className="w-4 h-4 text-green-500" />
+    );
+  };
 
   return (
     <AnimatePresence>
@@ -211,7 +222,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 }`}>Customer Name</label>
                               <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                 }`}>
-                                {firstDetail.cust_name}
+                                {firstDetail.customer_name}
                               </div>
                             </div>
 
@@ -220,7 +231,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 }`}>Customer Code</label>
                               <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                 }`}>
-                                {firstDetail.cust_code}
+                                {firstDetail.customer_code}
                               </div>
                             </div>
 
@@ -229,7 +240,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 }`}>Customer Type</label>
                               <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                 }`}>
-                                {firstDetail.cust_type}
+                                {firstDetail.customer_type}
                               </div>
                             </div>
 
@@ -238,7 +249,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 }`}>Profession</label>
                               <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                 }`}>
-                                {firstDetail.cust_profession}
+                                {firstDetail.profession}
                               </div>
                             </div>
 
@@ -247,7 +258,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 }`}>Nationality</label>
                               <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                 }`}>
-                                {firstDetail.cust_nationality}
+                                {firstDetail.customer_natioanlity}
                               </div>
                             </div>
 
@@ -256,7 +267,19 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 }`}>Residence Status</label>
                               <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                 }`}>
-                                {firstDetail.cust_resi_status}
+                                {firstDetail.residential_status}
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                                }`}>Is Employee TXN</label>
+                              <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
+                                }`}>
+                                <div className="flex items-center gap-2">
+                                  {getEmpTxnTypeIcon(firstDetail.is_employee_txn)} {firstDetail.is_employee_txn ? 'Yes' : 'No'}
+                                </div>
+                                {/* {firstDetail.is_employee_txn ? 'Yes' : 'No'} */}
                               </div>
                             </div>
                           </div>
@@ -295,7 +318,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                   Rule Description
                                 </label>
                                 <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
-                                  {firstDetail.rule_desc}
+                                  {firstDetail.rule_description}
                                 </div>
                               </div>
                             </div>
@@ -305,7 +328,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 }`}>Rule Remarks</label>
                               <div className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                 }`}>
-                                {firstDetail.rule_remarks}
+                                {firstDetail.comments}
                               </div>
                             </div>
                           </div>
@@ -372,13 +395,13 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                   <td className="px-4 py-3">
                                     <div className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                       }`}>
-                                      {detail.ref_no}
+                                      {detail.refno_send_receive}
                                     </div>
                                   </td>
                                   <td className="px-4 py-3">
                                     <div className={`text-sm font-bold ${theme === 'dark' ? 'text-green-300' : 'text-green-600'
                                       }`}>
-                                      AED {formatNumber(parseFloat(detail.lcy_amt))}
+                                      AED {formatNumber(parseFloat(detail.amt_aed))}
                                     </div>
                                   </td>
                                   <td className="px-4 py-3">
@@ -388,7 +411,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                     </div>
                                     <div className={`text-xs ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
                                       }`}>
-                                      {detail.pymnt_to_country}
+                                      {detail.payment_to_country}
                                     </div>
                                   </td>
                                   <td className="px-4 py-3">
@@ -398,17 +421,17 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                     </div>
                                     <div className={`text-xs ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
                                       }`}>
-                                      By: {detail.cashier_id}
+                                      By: {detail.cashier}
                                     </div>
                                   </td>
                                   <td className="px-4 py-3">
                                     <div className={`text-sm ${theme === 'dark' ? 'text-white' : 'text-gray-900'
                                       }`}>
-                                      {detail.txn_purpose}
+                                      {detail.purpose}
                                     </div>
                                     <div className={`text-xs ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
                                       }`}>
-                                      Source: {detail.source_fund}
+                                      Source: {detail.source}
                                     </div>
                                   </td>
                                 </tr>

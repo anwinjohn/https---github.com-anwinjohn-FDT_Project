@@ -104,96 +104,96 @@ const AlertManagementTable: React.FC = () => {
   const ALERTS_MANAGEMENT_MENU_ID = getMenuId('alerts_management');
   const ALERTS_EXPORT_MENU_ID = getMenuId('alerts_export');
 
-  const fetchAlerts = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
+  // const fetchAlerts = useCallback(async () => {
+  //   try {
+  //     setLoading(true);
+  //     setError(null);
 
-      const response = await fetch('http://127.0.0.1:8000/open-alerts-summary');
+  //     const response = await fetch('http://127.0.0.1:8000/open-alerts-summary');
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+  //     if (!response.ok) {
+  //       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  //     }
 
-      const data: AlertSummary[] = await response.json();
-      setAlerts(data);
+  //     const data: AlertSummary[] = await response.json();
+  //     setAlerts(data);
       
-      // Log the successful fetch
-      logger.info(
-        'Alerts data fetched successfully',
-        user?.full_name,
-        { count: data.length }
-      );
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alerts';
-      setError(errorMessage);
-      console.error('Error fetching alerts:', err);
+  //     // Log the successful fetch
+  //     logger.info(
+  //       'Alerts data fetched successfully',
+  //       user?.full_name,
+  //       { count: data.length }
+  //     );
+  //   } catch (err) {
+  //     const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alerts';
+  //     setError(errorMessage);
+  //     console.error('Error fetching alerts:', err);
       
-      // Log the error
-      logger.error(
-        'Failed to fetch alerts data',
-        user?.full_name,
-        { error: errorMessage },
-        err instanceof Error ? err : new Error(errorMessage)
-      );
+  //     // Log the error
+  //     logger.error(
+  //       'Failed to fetch alerts data',
+  //       user?.full_name,
+  //       { error: errorMessage },
+  //       err instanceof Error ? err : new Error(errorMessage)
+  //     );
       
-      // Show notification
-      addNotification('Failed to load alerts data', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [addNotification, user?.full_name]);
+  //     // Show notification
+  //     addNotification('Failed to load alerts data', 'error');
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // }, [addNotification, user?.full_name]);
 
-  const fetchAlertDetails = useCallback(async (alertId: string) => {
-    try {
-      setLoading(true);
-      setError(null);
+  // const fetchAlertDetails = useCallback(async (alertId: string) => {
+  //   try {
+  //     setLoading(true);
+  //     setError(null);
 
-      const response = await fetch('http://127.0.0.1:8000/open-alerts-details', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ alert_id: alertId })
-      });
+  //     const response = await fetch('http://127.0.0.1:8000/open-alerts-details', {
+  //       method: 'POST',
+  //       headers: {
+  //         'Content-Type': 'application/json',
+  //       },
+  //       body: JSON.stringify({ alert_id: alertId })
+  //     });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+  //     if (!response.ok) {
+  //       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  //     }
 
-      const data = await response.json();
-      setSelectedAlertDetails(data);
+  //     const data = await response.json();
+  //     setSelectedAlertDetails(data);
       
-      // Log the successful fetch
-      logger.info(
-        `Alert details fetched for ID: ${alertId}`,
-        user?.full_name,
-        { alertId }
-      );
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alert details';
-      setError(errorMessage);
-      console.error('Error fetching alert details:', err);
+  //     // Log the successful fetch
+  //     logger.info(
+  //       `Alert details fetched for ID: ${alertId}`,
+  //       user?.full_name,
+  //       { alertId }
+  //     );
+  //   } catch (err) {
+  //     const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alert details';
+  //     setError(errorMessage);
+  //     console.error('Error fetching alert details:', err);
       
-      // Log the error
-      logger.error(
-        'Failed to fetch alert details',
-        user?.full_name,
-        { alertId, error: errorMessage },
-        err instanceof Error ? err : new Error(errorMessage)
-      );
+  //     // Log the error
+  //     logger.error(
+  //       'Failed to fetch alert details',
+  //       user?.full_name,
+  //       { alertId, error: errorMessage },
+  //       err instanceof Error ? err : new Error(errorMessage)
+  //     );
       
-      // Show notification
-      addNotification('Failed to load alert details', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [addNotification, user?.full_name]);
+  //     // Show notification
+  //     addNotification('Failed to load alert details', 'error');
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // }, [addNotification, user?.full_name]);
 
   const handleViewDetails = async (alert: AlertSummary) => {
     setSelectedAlertId(alert.alert_id);
-    await fetchAlertDetails(alert.alert_id);
-    setShowDetailsModal(true);
+    //await fetchAlertDetails(alert.alert_id);
+    //setShowDetailsModal(true);
   };
 
   const handleDisposeAlert = (alert: AlertSummary) => {

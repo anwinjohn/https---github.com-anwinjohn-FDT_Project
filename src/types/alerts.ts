@@ -12,6 +12,8 @@ export interface AlertSummary {
   assigned_to?: string;
   created_at?: string;
   updated_at?: string;
+  branch_name: string;
+  cust_nationality: string;
 }
 
 export interface AlertDetail {
@@ -19,29 +21,31 @@ export interface AlertDetail {
   transaction_date: string;
   service_type: string;
   row_id: string;
-  ref_no: string;
-  cust_code: string;
-  cust_type: string;
-  cust_name: string;
-  lcy_amt: string;
+  refno_send_receive: string;
+  customer_code: string;
+  customer_type: string;
+  customer_name: string;
+  amt_aed: string;
   rule_id: string;
-  rule_desc: string;
-  cashier_id: string;
+  rule_description: string;
+  cashier: string;
   branch_name: string;
   alert_id: string;
-  rule_remarks: string;
-  cust_profession: string;
-  cust_nationality: string;
-  cust_resi_status: string;
+  comments: string;
+  profession: string;
+  customer_natioanlity: string;
+  residential_status: string;
   beneficiary_name: string;
-  txn_purpose: string;
-  source_fund: string;
+  purpose: string;
+  source: string;
   relationship: string;
-  txn_auth_by: string;
-  is_emp_txn: boolean;
-  txn_service: string;
-  pymnt_to_country: string;
-  benf_nationality: string;
+  authorized_by: string;
+  is_employee_txn: boolean;
+  service: string;
+  payment_to_country: string;
+  beneficiary_nationality: string;
+  transaction_details?: any;
+  additional_info?: any;
 }
 
 export interface AlertDisposition {
@@ -85,4 +89,10 @@ export interface AlertAuditLog {
   details: Record<string, any>;
   ip_address?: string;
   user_agent?: string;
+}
+export interface AlertDisposition {
+  alert_id: string;
+  disposition: 'APPROVED' | 'REJECTED' | 'ESCALATED';
+  comments: string;
+  assigned_to?: string;
 }
