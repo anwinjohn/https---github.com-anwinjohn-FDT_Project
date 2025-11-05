@@ -1,4 +1,5 @@
 import config from '../config/app-config.json';
+import apiClient from './apiClient';
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug' | 'security';
 
@@ -15,6 +16,7 @@ interface LogEntry {
   component?: string;
   action?: string;
   category?: string;
+  application: string;
 }
 
 interface SecurityEvent {
@@ -60,9 +62,9 @@ class Logger {
     };
   }
 
-  private addLog(level: LogLevel, message: string, userId?: string, data?: any, stackTrace?: string, component?: string, action?: string, category?: string) {
+  private addLog(level: LogLevel, message: string, userId?: string, data?: any, stackTrace?: string, component?: string, action?: string, category?: string, application = config.app.shortName) {
     const clientInfo = this.getClientInfo();
-    
+
     const logEntry: LogEntry = {
       timestamp: clientInfo.timestamp,
       level,
@@ -74,19 +76,20 @@ class Logger {
       stackTrace,
       component,
       action,
-      category
+      category,
+      application
+
     };
 
     // Add to buffer for batch processing
     this.logBuffer.push(logEntry);
-    
+
     // If buffer reaches threshold, flush it
     if (this.logBuffer.length >= this.bufferSize) {
       this.flushBuffer();
     }
 
-    // Log to console in development
-    if (config.environment === 'development') {
+    if (config.logging.console_enabled) {
       const consoleMsg = `[${logEntry.timestamp}] ${level.toUpperCase()}${component ? ` [${component}]` : ''}${action ? ` [${action}]` : ''}: ${message}`;
       switch (level) {
         case 'error':
@@ -106,32 +109,32 @@ class Logger {
       }
     }
 
-    // Send critical logs to server immediately
-    if ((level === 'error' || level === 'security') && (category === 'critical' || data?.critical)) {
+    if (config.logging.api_enabled && (level === 'error' || level === 'security' || category === 'critical')) {
       this.sendLogToServer(logEntry);
     }
+
   }
 
   private async flushBuffer() {
     if (this.isFlushingBuffer || this.logBuffer.length === 0) return;
-    
+
     this.isFlushingBuffer = true;
-    
+
     try {
       // Process buffer
       const bufferToProcess = [...this.logBuffer];
       this.logBuffer = [];
-      
+
       // Add to main logs
       bufferToProcess.forEach(logEntry => {
         this.logs.unshift(logEntry);
       });
-      
+
       // Keep logs under limit
       if (this.logs.length > this.maxLogs) {
         this.logs = this.logs.slice(0, this.maxLogs);
       }
-      
+
       // Send to server in production
       if (config.environment === 'production') {
         await this.sendBatchLogsToServer(bufferToProcess);
@@ -146,16 +149,19 @@ class Logger {
   private async sendLogToServer(logEntry: LogEntry) {
     try {
       // Only send in production and for critical events
-      if (config.environment !== 'production') return;
+      //if (config.environment !== 'production') return;
 
-      await fetch(`${config.api.baseUrl}/api/logs/client`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-        },
-        body: JSON.stringify(logEntry)
-      });
+      apiClient.post('/api/logs', logEntry);
+
+      // await fetch(`${config.api.baseUrl}/api/logs`, {
+      //   method: 'POST',
+      //   headers: {
+      //     'Content-Type': 'application/json',
+      //     'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+      //   },
+      //   body: JSON.stringify(logEntry)
+      // });
+      
     } catch (error) {
       // Silently fail to avoid infinite loops
       console.error('Failed to send log to server:', error);
@@ -168,13 +174,13 @@ class Logger {
       if (config.environment !== 'production') return;
 
       // Filter logs to only send important ones to server
-      const criticalLogs = logs.filter(log => 
-        log.level === 'error' || 
-        log.level === 'security' || 
-        log.category === 'critical' || 
+      const criticalLogs = logs.filter(log =>
+        log.level === 'error' ||
+        log.level === 'security' ||
+        log.category === 'critical' ||
         log.data?.critical
       );
-      
+
       if (criticalLogs.length === 0) return;
 
       await fetch(`${config.api.baseUrl}/api/logs/client/batch`, {
@@ -226,7 +232,7 @@ class Logger {
 
     // Add to security events
     this.securityEvents.unshift({ ...logEntry, securityEvent });
-    
+
     // Keep security events under limit
     if (this.securityEvents.length > this.maxSecurityEvents) {
       this.securityEvents = this.securityEvents.slice(0, this.maxSecurityEvents);
@@ -343,10 +349,10 @@ class Logger {
   logApiRequest(method: string, url: string, statusCode: number, durationMs: number, userId?: string, details?: any) {
     const level = statusCode >= 400 ? 'error' : statusCode >= 300 ? 'warn' : 'info';
     this[level](
-      `API ${method} ${url} - ${statusCode} (${durationMs}ms)`, 
-      userId, 
-      { ...details, statusCode, durationMs }, 
-      'API', 
+      `API ${method} ${url} - ${statusCode} (${durationMs}ms)`,
+      userId,
+      { ...details, statusCode, durationMs },
+      'API',
       'request'
     );
   }
@@ -393,7 +399,7 @@ class Logger {
   }): LogEntry[] {
     // Flush buffer before filtering
     this.flushBuffer();
-    
+
     return this.logs.filter(log => {
       if (criteria.level) {
         if (Array.isArray(criteria.level)) {
@@ -402,18 +408,18 @@ class Logger {
           return false;
         }
       }
-      
+
       if (criteria.component && log.component !== criteria.component) return false;
       if (criteria.action && log.action !== criteria.action) return false;
       if (criteria.category && log.category !== criteria.category) return false;
       if (criteria.userId && log.userId !== criteria.userId) return false;
-      
+
       if (criteria.startDate || criteria.endDate) {
         const logDate = new Date(log.timestamp);
         if (criteria.startDate && logDate < criteria.startDate) return false;
         if (criteria.endDate && logDate > criteria.endDate) return false;
       }
-      
+
       return true;
     });
   }
@@ -424,7 +430,7 @@ class Logger {
       clearInterval(this.flushIntervalId);
       this.flushIntervalId = null;
     }
-    
+
     // Flush any remaining logs
     this.flushBuffer();
   }

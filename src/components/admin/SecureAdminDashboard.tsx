@@ -30,7 +30,6 @@ const SecureAdminDashboard: React.FC<SecureAdminDashboardProps> = ({ initialTab 
 
   // Get menu IDs dynamically
   const USER_MANAGEMENT_MENU_ID = getMenuId('user_management');
-  console.log("USER_MANAGEMENT_MENU_ID : " + USER_MANAGEMENT_MENU_ID);
   const USER_ONBOARDING_MENU_ID = getMenuId('user_onboarding');
   const ROLE_PERMISSIONS_MENU_ID = getMenuId('role_permissions');
   const AUDIT_LOGS_MENU_ID = getMenuId('audit_logs');

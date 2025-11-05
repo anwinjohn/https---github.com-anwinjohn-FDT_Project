@@ -47,6 +47,7 @@ const LoginPage = () => {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target;
+    //  console.log( name === 'rememberMe' ? checked : value);
     setFormData(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value
@@ -55,6 +56,8 @@ const LoginPage = () => {
   };
 
   const logoPath = config.dashboard.logo;
+  const appName = config.app.name;
+  const appShortName = config.app.shortName;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,17 +68,9 @@ const LoginPage = () => {
 
       if (success) {
         setStep('success');
-        // Navigate after animation completes
         setTimeout(() => {
           navigate('/dashboard');
         }, 2000);
-      } else {
-        addNotification(
-          'Please check your credentials and try again.',
-          'error',
-          6000,
-          'Authentication Failed'
-        );
       }
     } catch (err) {
       addNotification(
@@ -165,7 +160,7 @@ const LoginPage = () => {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.2 }}
                 >
-                  FDT
+                  {appShortName}
                 </motion.h1>
                 <motion.p
                   className="text-blue-200/80 text-lg mt-1 font-medium"
@@ -173,7 +168,7 @@ const LoginPage = () => {
                   animate={{ opacity: 1 }}
                   transition={{ delay: 0.4 }}
                 >
-                  Fraud Monitoring Tool
+                  {appName}
                 </motion.p>
               </div>
             </div>
@@ -260,7 +255,7 @@ const LoginPage = () => {
           initial={{ opacity: 0, x: 50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8, delay: 0.2 }}
-          className="w-full max-w-md mx-auto"
+          className="w-full max-w-md mx-auto float-right"
         >
           <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-8 shadow-2xl hover:shadow-3xl transition-all duration-300">
             {/* Mobile Header */}
@@ -270,7 +265,7 @@ const LoginPage = () => {
                   <Shield className="w-8 h-8 text-white" />
                 </div>
               </div>
-              <h1 className="text-3xl font-bold text-white mb-2">FDT</h1>
+              <h1 className="text-3xl font-bold text-white mb-2">{appShortName}</h1>
               <p className="text-white/70">Secure Access Portal</p>
             </div>
 
@@ -289,7 +284,7 @@ const LoginPage = () => {
                     <img src={logoPath} alt="Logo" className="login-logo mb-4" />
                   </div>
                   <div className="text-center mb-8">
-                    <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2>
+                    {/* <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2> */}
                     <p className="text-white/70">Sign in to access your dashboard</p>
                   </div>
 
@@ -314,7 +309,7 @@ const LoginPage = () => {
                     </div>
                   )}
 
-                    <form onSubmit={handleSubmit} className="space-y-6">
+                  <form onSubmit={handleSubmit} className="space-y-6">
                     {/* Username Field - FIXED with dark background */}
                     <div className="space-y-2">
                       <label className="text-white/80 text-sm font-medium">Username</label>
@@ -333,8 +328,6 @@ const LoginPage = () => {
                         />
                       </div>
                     </div>
-
-                    {/* Password Field - FIXED with dark background */}
                     {authMethod === 'password' && (
                       <div className="space-y-2">
                         <label className="text-white/80 text-sm font-medium">Password</label>
@@ -392,7 +385,7 @@ const LoginPage = () => {
                     >
                       {/* Button shine effect */}
                       <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -skew-x-12 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
-                      
+
                       {isLoading ? (
                         <div className="animate-spin rounded-full h-5 w-5 border-2 border-white/30 border-t-white"></div>
                       ) : (
@@ -468,7 +461,7 @@ const LoginPage = () => {
           </div>
           <div className="mt-6 text-center">
             <p className="text-white/40 text-xs">
-              © {new Date().getFullYear()} Al Rostamani International Exchange LLC. All rights reserved.
+              © {new Date().getFullYear()} {appShortName} - {appName}. All rights reserved.
             </p>
           </div>
         </motion.div>

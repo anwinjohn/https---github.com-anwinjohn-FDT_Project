@@ -175,9 +175,6 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
 
       const queryString = buildQueryParams();
       const apiUrl = `${config.api.baseUrl}/open-alerts-summary${queryString ? `?${queryString}` : ''}`;
-
-      console.log('Fetching alerts from:', apiUrl); // Debug log
-
       const response = await fetch(apiUrl, {
         method: 'GET',
         headers: {
@@ -347,7 +344,6 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
 
   const fetchFilterOptions = useCallback(async () => {
     try {
-      // Use the new FilterOptionsAPI for efficient filter option fetching
       const filterOptions = await FilterOptionsAPI.getAllFilterOptions();
       setFilterOptions(filterOptions);
     } catch (err) {

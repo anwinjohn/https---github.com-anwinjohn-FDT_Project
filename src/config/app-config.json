@@ -25,15 +25,16 @@
     "logo":"./src/ARIE_Logo.png"
   },
     "app": {
-    "name": "FDT - Fraud Detection Tool",
+    "name": "Fraud Detection & Monitoring Tool",
     "shortName": "FDT",
     "version": "2.1.0",
     "favicon": "/src/favicon.ico"
   },
   "environment": "development",
   "logging": {
-    "enabled": true,
-    "level": "debug",
+    "console_enabled": false,
+    "api_enabled": false,
+    "level": "error",
     "maxEntries": 1000
   }
 }

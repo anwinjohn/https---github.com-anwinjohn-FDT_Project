@@ -19,7 +19,6 @@ export const useMenuIds = () => {
       const response = await apiClient.get(`${config.api.baseUrl}/api/menu_key_list`);
       if (response.success && response.data) {
         setMenuIds(response.data.data);  
-        console.table('Menu IDs loaded:', response.data.data);
       } else {
         throw new Error(response.error || 'Failed to load menu IDs');
       }

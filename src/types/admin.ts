@@ -5,14 +5,24 @@ export interface User {
   full_name: string;
   role_id: number;
   role_name: string;
-  is_active: boolean;
-  failed_login_count: number;
+  is_active: boolean | null;
+  active_flag: boolean | null;
+  failed_login_count?: number;
   last_login: string | null;
   created_at: string;
   updated_at: string;
   mfa_enabled: boolean;
   account_locked: boolean;
   password_expires_at: string | null;
+  user_roles: string | null;
+  user_status: string | null;
+  salt_value: string | null;
+  login_attempts: number;
+  account_locked_until: string | null;
+  last_password_change: string | null;
+  avtar_url: string | null;
+  email_verified: boolean;
+  account_status: string;
 }
 
 export interface Role {
@@ -65,16 +75,26 @@ interface AuditLog {
 }
 
 export interface UserSearchFilters {
-  search: string;
+  search: string | null;
   role_id: number | null;
-  is_active: boolean | null;
   account_locked: boolean | null;
   mfa_enabled: boolean | null;
+  is_active: boolean | null;
 }
+
+export interface UserFilterOptions{
+search: string;
+account_status: string | null;
+user_status: string | null;
+user_roles: string | null;
+} 
 
 export interface PaginationInfo {
   page: number;
   limit: number;
   total: number;
   totalPages: number;
+  hasNext?: boolean;
+  hasPrev?: boolean;
+  currentPage?: number;
 }

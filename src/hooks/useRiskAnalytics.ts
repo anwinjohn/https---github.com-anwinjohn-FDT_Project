@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { RiskAnalyticsData } from '../types/riskAnalytics';
 import { DateRange } from '../types/types';
 import config from '../config/app-config.json';
+import { logger } from '../utils/logger';
 
 interface UseRiskAnalyticsReturn {
   data: RiskAnalyticsData | null;
@@ -34,6 +35,9 @@ export const useRiskAnalytics = (dateRange: DateRange): UseRiskAnalyticsReturn =
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      else{
+        logger.error('useRiskAnalytics', 'fetchRiskAnalytics', `API responded with status ${response.status}`);
       }
 
       const analyticsData: RiskAnalyticsData = await response.json();

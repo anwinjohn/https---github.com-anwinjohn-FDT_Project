@@ -204,8 +204,6 @@ const AlertManagementTable: React.FC = () => {
   const handleDisposition = async (disposition: any) => {
     try {
       // In a real implementation, this would call an API
-      console.log('Disposition data:', disposition);
-      
       // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 1000));
       

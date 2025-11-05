@@ -1,6 +1,8 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import CryptoJS from 'crypto-js';
 import config from '../config/app-config.json';
+import { logger } from './logger';
+import { log } from 'console';
 
 // Simplified Security Configuration
 const SECURITY_CONFIG = {
@@ -168,12 +170,14 @@ class SecureApiClient {
 
   async post<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
     try {
+      console.log('apiClient', 'post', `Posting to ${url} with data: ${JSON.stringify(data)}`);
       const response: AxiosResponse<T> = await this.axiosInstance.post(url, data, config);
       return {
         success: true,
         data: response.data
       };
     } catch (error) {
+      logger.error('apiClient', 'post', `Error posting to ${url}: ${error}`);
       return this.handleApiError(error);
     }
   }

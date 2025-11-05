@@ -5,6 +5,8 @@ import config from '../config/app-config.json';
 import CryptoJS from 'crypto-js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Clock, RefreshCw } from 'lucide-react';
+import { add } from 'date-fns';
+
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -67,74 +69,64 @@ const SessionTimeoutModal: React.FC<{
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className={`w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden ${
-                theme === 'dark' 
-                  ? 'bg-gradient-to-br from-slate-800/95 via-slate-900/95 to-slate-800/95 border-white/20' 
-                  : 'bg-gradient-to-br from-white/95 via-gray-50/95 to-white/95 border-gray-200'
-              } backdrop-blur-2xl`}
+              className={`w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden ${theme === 'dark'
+                ? 'bg-gradient-to-br from-slate-800/95 via-slate-900/95 to-slate-800/95 border-white/20'
+                : 'bg-gradient-to-br from-white/95 via-gray-50/95 to-white/95 border-gray-200'
+                } backdrop-blur-2xl`}
             >
-              <div className={`p-6 border-b ${
-                theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-              }`}>
+              <div className={`p-6 border-b ${theme === 'dark' ? 'border-white/20' : 'border-gray-200'
+                }`}>
                 <div className="flex items-center gap-4">
                   <div className="p-3 bg-gradient-to-br from-yellow-500 to-orange-600 rounded-xl shadow-lg">
                     <Clock className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h2 className={`text-xl font-bold ${
-                      theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Session Timeout Warning</h2>
-                    <p className={`text-sm ${
-                      theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                    }`}>Your session is about to expire</p>
+                    <h2 className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
+                      }`}>Session Timeout Warning</h2>
+                    <p className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                      }`}>Your session is about to expire</p>
                   </div>
                 </div>
               </div>
-              
+
               <div className="p-6">
-                <div className={`mb-6 p-4 rounded-xl border ${
-                  theme === 'dark' 
-                    ? 'bg-yellow-500/10 border-yellow-500/30 text-white/80' 
-                    : 'bg-yellow-50 border-yellow-200 text-gray-700'
-                }`}>
-                  <p className="mb-2">Due to inactivity, your session will expire in:</p>
-                  <div className={`text-2xl font-bold text-center ${
-                    theme === 'dark' ? 'text-yellow-300' : 'text-yellow-600'
+                <div className={`mb-6 p-4 rounded-xl border ${theme === 'dark'
+                  ? 'bg-yellow-500/10 border-yellow-500/30 text-white/80'
+                  : 'bg-yellow-50 border-yellow-200 text-gray-700'
                   }`}>
+                  <p className="mb-2">Due to inactivity, your session will expire in:</p>
+                  <div className={`text-2xl font-bold text-center ${theme === 'dark' ? 'text-yellow-300' : 'text-yellow-600'
+                    }`}>
                     {minutes.toString().padStart(2, '0')}:{seconds.toString().padStart(2, '0')}
                   </div>
                 </div>
-                
-                <p className={`mb-6 text-sm ${
-                  theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                }`}>
-                  For security reasons, your session will automatically end if no action is taken. 
+
+                <p className={`mb-6 text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                  }`}>
+                  For security reasons, your session will automatically end if no action is taken.
                   Click the button below to extend your session.
                 </p>
-                
+
                 <div className="flex justify-center">
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={onExtend}
-                    className={`flex items-center gap-2 px-6 py-3 rounded-xl transition-colors ${
-                      theme === 'dark' 
-                        ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 hover:from-blue-500/30 hover:to-indigo-500/30 text-blue-300 border border-blue-500/30' 
-                        : 'bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-200 hover:to-indigo-200 text-blue-700 border border-blue-300'
-                    }`}
+                    className={`flex items-center gap-2 px-6 py-3 rounded-xl transition-colors ${theme === 'dark'
+                      ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 hover:from-blue-500/30 hover:to-indigo-500/30 text-blue-300 border border-blue-500/30'
+                      : 'bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-200 hover:to-indigo-200 text-blue-700 border border-blue-300'
+                      }`}
                   >
                     <RefreshCw className="w-5 h-5" />
                     Extend Session
                   </motion.button>
                 </div>
               </div>
-              
-              <div className={`px-6 py-4 border-t ${
-                theme === 'dark' ? 'border-white/20 bg-white/5' : 'border-gray-200 bg-gray-50'
-              }`}>
-                <p className={`text-xs text-center ${
-                  theme === 'dark' ? 'text-white/40' : 'text-gray-500'
+
+              <div className={`px-6 py-4 border-t ${theme === 'dark' ? 'border-white/20 bg-white/5' : 'border-gray-200 bg-gray-50'
                 }`}>
+                <p className={`text-xs text-center ${theme === 'dark' ? 'text-white/40' : 'text-gray-500'
+                  }`}>
                   This timeout is for your security. Confidential information requires protection.
                 </p>
               </div>
@@ -153,27 +145,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const navigate = useNavigate();
   const location = useLocation();
   const { addNotification } = useNotifications();
-  
+
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const warningTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastActivityRef = useRef<number>(Date.now());
   const warningShownRef = useRef<boolean>(false);
   const isLoggingOutRef = useRef<boolean>(false);
-  
+
   // Session timeout modal state
   const [showTimeoutModal, setShowTimeoutModal] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(WARNING_TIME);
   const timeoutIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  
+
   // Update theme based on document class
   useEffect(() => {
     const updateTheme = () => {
       setTheme(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
     };
-    
+
     updateTheme();
-    
+
     // Create a mutation observer to watch for class changes on the html element
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
@@ -182,9 +174,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       });
     });
-    
+
     observer.observe(document.documentElement, { attributes: true });
-    
+
     return () => observer.disconnect();
   }, []);
 
@@ -212,23 +204,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('userData');
     localStorage.removeItem('lastActivity');
     localStorage.removeItem('sessionWarningShown');
-    
+
     setUser(null);
     setIsAuthenticated(false);
     warningShownRef.current = false;
     setShowTimeoutModal(false);
-    
+
     // Clear any existing notifications
     if (reason) {
       addNotification(reason, 'warning', 5000, 'Session Expired');
     }
-    
+
     // Navigate to login and replace history to prevent back navigation
     navigate('/login', { replace: true });
-    
+
     // Clear browser history to prevent back navigation to protected routes
     window.history.replaceState(null, '', '/login');
-    
+
     setTimeout(() => {
       isLoggingOutRef.current = false;
     }, 1000);
@@ -236,19 +228,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const showSessionWarning = () => {
     if (warningShownRef.current || isLoggingOutRef.current) return;
-    
+
     warningShownRef.current = true;
     localStorage.setItem('sessionWarningShown', Date.now().toString());
-    
+
     // Show the modal instead of notification
     setShowTimeoutModal(true);
     setTimeRemaining(WARNING_TIME);
-    
+
     // Start countdown timer
     if (timeoutIntervalRef.current) {
       clearInterval(timeoutIntervalRef.current);
     }
-    
+
     timeoutIntervalRef.current = setInterval(() => {
       setTimeRemaining(prev => {
         const newTime = prev - 1000;
@@ -260,7 +252,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return newTime;
       });
     }, 1000);
-    
+
     // Auto-logout after warning period if no action taken
     sessionTimerRef.current = setTimeout(() => {
       if (warningShownRef.current && !isLoggingOutRef.current) {
@@ -271,21 +263,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const resetSessionTimer = () => {
     if (!isAuthenticated || isLoggingOutRef.current) return;
-    
+
     clearTimers();
     lastActivityRef.current = Date.now();
     localStorage.setItem('lastActivity', lastActivityRef.current.toString());
     localStorage.removeItem('sessionWarningShown');
     warningShownRef.current = false;
     setShowTimeoutModal(false);
-    
+
     // Set warning timer (25 minutes)
     warningTimerRef.current = setTimeout(() => {
       if (!isLoggingOutRef.current) {
         showSessionWarning();
       }
     }, SESSION_TIMEOUT - WARNING_TIME);
-    
+
     // Set logout timer (30 minutes)
     sessionTimerRef.current = setTimeout(() => {
       if (!isLoggingOutRef.current) {
@@ -303,7 +295,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
-    
+
     events.forEach(event => {
       document.addEventListener(event, handleActivity, true);
     });
@@ -334,11 +326,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const lastActivity = localStorage.getItem('lastActivity');
       const token = localStorage.getItem('authToken');
       const warningShown = localStorage.getItem('sessionWarningShown');
-      
+
       if (token && lastActivity) {
         const timeSinceLastActivity = Date.now() - parseInt(lastActivity);
         const timeSinceWarning = warningShown ? Date.now() - parseInt(warningShown) : 0;
-        
+
         if (timeSinceLastActivity > SESSION_TIMEOUT) {
           // Session expired
           logout('Your session has expired. Please login again.');
@@ -362,10 +354,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const checkAuth = async () => {
       const token = localStorage.getItem('authToken');
       const userData = localStorage.getItem('userData');
-      
+
       if (token && userData && checkSessionValidity()) {
         try {
-          // For development: Use mock data if it's the admin token
           if (token === 'admin-token') {
             setUser(MOCK_ADMIN);
             setIsAuthenticated(true);
@@ -398,11 +389,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Page is visible, check session and restart timers
         const lastActivity = localStorage.getItem('lastActivity');
         const warningShown = localStorage.getItem('sessionWarningShown');
-        
+
         if (lastActivity && isAuthenticated && !isLoggingOutRef.current) {
           const timeSinceLastActivity = Date.now() - parseInt(lastActivity);
           const timeSinceWarning = warningShown ? Date.now() - parseInt(warningShown) : 0;
-          
+
           if (timeSinceLastActivity > SESSION_TIMEOUT) {
             logout('Your session has expired due to inactivity. Please login again.');
           } else if (timeSinceLastActivity > (SESSION_TIMEOUT - WARNING_TIME)) {
@@ -424,7 +415,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
@@ -469,20 +460,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoggingOutRef.current = false;
 
       // Mock admin login
-      if (username === 'admin' && password === 'admin123') {
-        localStorage.setItem('authToken', 'admin-token');
-        localStorage.setItem('userData', JSON.stringify(MOCK_ADMIN));
-        localStorage.setItem('lastActivity', Date.now().toString());
-        setUser(MOCK_ADMIN);
-        setIsAuthenticated(true);
-        resetSessionTimer();
-        return true;
-      }
-
+      // if (username === 'admin' && password === 'admin123') {
+      //   localStorage.setItem('authToken', 'admin-token');
+      //   localStorage.setItem('userData', JSON.stringify(MOCK_ADMIN));
+      //   localStorage.setItem('lastActivity', Date.now().toString());
+      //   setUser(MOCK_ADMIN);
+      //   setIsAuthenticated(true);
+      //   resetSessionTimer();
+      //   return true;
+      // }
+      
       // Encrypt the credentials
       const iv = CryptoJS.lib.WordArray.random(16);
+      const sessionId = iv.toString();
+
       const encrypted = CryptoJS.AES.encrypt(
-        JSON.stringify({ username, password }),
+        JSON.stringify({ username, password, sessionId }),
         CryptoJS.enc.Utf8.parse(ENCRYPTION_KEY),
         {
           iv: iv,
@@ -493,38 +486,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Combine IV and ciphertext
       const encryptedData = iv.concat(encrypted.ciphertext).toString(CryptoJS.enc.Base64);
 
-      // Real API call for other users
       const response = await fetch(`${config.api.authBaseUrl}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Encrypted': 'true' // Header to indicate encrypted payload
+          'X-Encrypted': 'true'
         },
         body: JSON.stringify({ data: encryptedData })
       });
 
-      if (response.ok) {
-        const responseData = await response.json();
-        const decryptedResponse = decryptResponse(responseData.data);
-        
-        // Validate response matches request
-        if (decryptedResponse.user.request_username !== username) {
-          console.error('Response validation failed: username mismatch');
+      const responseData = await response.json();
+      const decryptedResponse = decryptResponse(responseData.data);
+
+      if (response.ok && decryptedResponse.status_code === 200) {
+        if (decryptedResponse.user.sessionId !== sessionId) {
+          console.error('Login Response validation failed, session does not match.');
           return false;
         }
-
         // Store token and user data
         localStorage.setItem('authToken', decryptedResponse.access_token);
         localStorage.setItem('userData', JSON.stringify(decryptedResponse.user));
         localStorage.setItem('lastActivity', Date.now().toString());
-        
+
         setUser(decryptedResponse.user);
         setIsAuthenticated(true);
         resetSessionTimer();
         return true;
       }
-      return false;
+      else {
+        console.error('Login failed:', decryptedResponse.detail || 'Unknown error');
+        addNotification(decryptedResponse.detail || 'Login failed. Please try again.', 'error', 5000, 'Login Error');
+        return false;
+      }
     } catch (error) {
+      addNotification('An error occurred during login. Please try again.', 'error', 5000, 'Login Error');
       console.error('Login error:', error);
       return false;
     }

@@ -75,7 +75,6 @@ const DetailedRulesPanel: React.FC<DetailedRulesPanelProps> = ({ data, isLoading
               {data
                 // .sort((a, b) => b.count - a.count)
                 .map((rule) => {
-                  console.table(rule);
                   const risk = getRiskLevel(rule.rule_priority);
                   const isActive = getActiveStatus(rule.active_status);
                   return (

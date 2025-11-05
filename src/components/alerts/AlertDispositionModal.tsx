@@ -206,19 +206,23 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
     
     setIsGeneratingAI(true);
     setAiSuggestion(null);
-    
     try {
       // Prepare the payload with the required fields
       const payload = {
         rule_id: alert.rule_id,
+        ruleDesc: alert.rule_desc,
         employee: "VARUNPAU",
         cashier_id: "VARUNPAU",
-        reversal_count: 5, // Example value
-        reversal_amount: "2500 AED", // Example value
-        daily_volume: "12000 AED", // Example value
+        reversal_count: 5, 
+        reversal_amount: "2500 AED", 
+        daily_volume: "12000 AED",
         registration_date: new Date().toISOString().split('T')[0],
         cust_code: alert.cust_code,
-        branch_name: "DEIRA-CFE"
+        customerName: alert.cust_name,
+        branch_name: "DEIRA-CFE",
+        serviceType: alert.service_type,
+        ruleRemarks: alert.rule_remarks
+        
       };
       
       // Call the AI suggestions API

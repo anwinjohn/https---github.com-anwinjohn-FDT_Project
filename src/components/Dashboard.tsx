@@ -56,6 +56,7 @@ import {
   Power
 } from 'lucide-react';
 import { logger } from '../utils/logger';
+import config from '../config/app-config.json';
 
 const Dashboard: React.FC = () => {
   const { viewId } = useParams<{ viewId: string }>();
@@ -92,6 +93,9 @@ const Dashboard: React.FC = () => {
       setActiveView('dashboard');
     }
   }, [viewId, location.pathname]);
+
+  const appName = config.app.name;
+  const appShortName = config.app.shortName;
 
   // Sync master live setting
   useEffect(() => {
@@ -546,9 +550,9 @@ const Dashboard: React.FC = () => {
             transition={{ delay: 0.5 }}
           >
             <h2 className={`text-2xl font-bold mb-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-              }`}>Loading FDT</h2>
+              }`}>Loading {appShortName}</h2>
             <p className={`${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-              }`}>Initializing fraud detection & analytical dashboard...</p>
+              }`}>Initializing {appName} \dashboard...</p>
           </motion.div>
         </div>
       </div>
@@ -840,7 +844,7 @@ const Dashboard: React.FC = () => {
           : 'bg-white/80 border-theme text-gray-500'
           }`}>
           <div className="container mx-auto px-4 text-center text-xs">
-            © {new Date().getFullYear()} Fraud Detection & Analytical Tool
+            © {new Date().getFullYear()} {appShortName} - {appName}. All rights reserved.
           </div>
         </footer>
       </div>

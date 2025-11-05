@@ -24,7 +24,6 @@ class FilterOptionsAPI {
 
   static async getServiceTypes(): Promise<FilterOptionResponse> {
     try {
-      // In production, this would be a real API call
       // const response = await fetch(`${this.baseUrl}/filter-options/service-types`);
       // return await response.json();
       
