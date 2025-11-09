@@ -56,7 +56,7 @@ const AdminDashboard: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case 'users':
-        return <UserManagement />;
+        return <UserManagement/>;
       case 'onboarding':
         return <UserOnboarding />;
       case 'permissions':

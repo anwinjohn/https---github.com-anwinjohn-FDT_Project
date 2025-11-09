@@ -326,3 +326,13 @@ textarea {
   background-color: #6b7280;
 }
 
+/* ===== Custom Invisible Scrollbar ===== */
+.invisible-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.invisible-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}

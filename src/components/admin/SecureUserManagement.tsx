@@ -36,6 +36,7 @@ import PermissionGuard from '../PermissionGuard';
 import apiClient from '../../utils/apiClient';
 import { logger } from '../../utils/logger';
 import { cos } from 'three/tsl';
+import adminDashboard from './AdminDashboard';
 
 const SecureUserManagement: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -97,7 +98,7 @@ const SecureUserManagement: React.FC = () => {
         page_size: pagination.limit.toString(),
         ...(filters.search && { search: filters.search }),
         ...(filters.user_status !== null && { user_status: filters.user_status.toString() }),
-        ...(filters.user_roles.length ? { user_roles: filters.user_roles.toString() } : {})
+        ...(filters.user_roles !== null && filters.user_status.length ? { user_roles: filters.user_roles.toString() } : {})
       });
 
       const response = await apiClient.get(`/admin/users?${params}`);
@@ -341,12 +342,15 @@ const SecureUserManagement: React.FC = () => {
 
   const getStatusBadge = (user: User) => {
     if (user.account_locked) {
-      return <span className="px-2 py-1 text-xs font-medium bg-red-500/20 text-red-300 rounded-full">Locked</span>;
+      //   <div className={`animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 ${theme === 'dark' ? 'border-white' : 'border-gray-900'
+
+      return <span className={`px-2 py-1 text-xs font-medium rounded-full ${theme === 'dark' ? ' bg-red-500/20 text-red-300' : ' bg-red-500/20 text-red-300'} `}>Locked</span>;
     }
     if (!user.account_locked) {
-      return <span className="px-2 py-1 text-xs font-medium bg-green-500/20 text-green-800 rounded-full">Active</span>;
+      return <span className={`px-2 py-1 text-xs font-medium rounded-full ${theme === 'dark' ? 'bg-green-500/20 text-green-600' : 'bg-green-500/20 text-green-800'} `}>Active</span>;
+  
     }
-    return <span className="px-2 py-1 text-xs font-medium bg-gray-500/20 text-gray-300 rounded-full">Inactive</span>;
+     return <span className={`px-2 py-1 text-xs font-medium rounded-full ${theme === 'dark' ? ' bg-gray-500/20 text-gray-300 ' : ' bg-gray-500/20 text-gray-300 '} `}>Inactive</span>;
   };
 
   const getRoleName = (roleId: number) => {
@@ -455,7 +459,7 @@ const SecureUserManagement: React.FC = () => {
               Refresh
             </button>
 
-            <PermissionGuard menuId={USER_MANAGEMENT_MENU_ID} action="create">
+            {/* <PermissionGuard menuId={USER_MANAGEMENT_MENU_ID} action="create">
               <button className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
                 ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'
                 : 'bg-green-100 hover:bg-green-200 text-green-700 border border-green-300'
@@ -463,7 +467,7 @@ const SecureUserManagement: React.FC = () => {
                 <Plus className="w-4 h-4" />
                 Add User
               </button>
-            </PermissionGuard>
+            </PermissionGuard> */}
           </div>
         </div>
 
@@ -503,16 +507,11 @@ const SecureUserManagement: React.FC = () => {
                     }`}>Role</label>
                   <select
                     value={filters.user_roles ?? ''}
-                    onChange={(e) => {
-                      const selectedRoleId = e.target.value ? parseInt(e.target.value) : null;
-                      const selectedRole = selectedRoleId ? roles.find(role => role.id === selectedRoleId) : null;
-                      const roleDescription = selectedRole ? selectedRole.role_name : null;
-
+                    onChange={(e) => 
                       setFilters({ ...filters, 
-                       user_roles: roleDescription
-                      });
-                      console.log('Selected Role Description:', roleDescription);
-                    }}
+                       user_roles: e.target.value?? null
+                      })
+                    }
                     className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
                       ? 'bg-white/10 border border-white/20 text-white'
                       : 'bg-white border border-gray-300 text-gray-900'
@@ -520,7 +519,7 @@ const SecureUserManagement: React.FC = () => {
                   >
                     <option value="">All Roles</option>
                     {roles.map(role => (
-                      <option key={role.id} value={role.id} className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>
+                      <option key={role.id} value={role.role_name} className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>
                         {role.role_name}
                       </option>
                     ))}
@@ -564,7 +563,10 @@ const SecureUserManagement: React.FC = () => {
 
               <div className="flex justify-end gap-3 mt-4">
                 <button
-                  onClick={() => setFilters({ search: '', account_status: null, user_status: null, user_roles: null })}
+                  onClick={() => {
+                   setFilters({ search: '', account_status: '', user_status: '', user_roles: '' });
+                   setPagination({ ...pagination, page: 1 });
+                  }}
                   className={`px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
                     ? 'bg-white/10 hover:bg-white/20 text-white'
                     : 'bg-gray-100 hover:bg-gray-200 text-gray-700'

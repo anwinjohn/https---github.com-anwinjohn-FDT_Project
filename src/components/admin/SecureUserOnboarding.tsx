@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   UserPlus,
@@ -21,7 +21,7 @@ import {
   Star,
   Users,
   Briefcase,
-  Lock
+  Lock,
 } from 'lucide-react';
 import { useNotifications } from '../notifications';
 import { useTheme } from '../../context/ThemeContext';
@@ -43,6 +43,8 @@ interface Role {
   role_name: string;
   description: string;
   is_active: boolean;
+  category: string;
+  users_count?: number;
 }
 
 const SecureUserOnboarding: React.FC = () => {
@@ -51,7 +53,7 @@ const SecureUserOnboarding: React.FC = () => {
     username: '',
     full_name: '',
     email_id: '',
-    phone_number: ''
+    phone_number: '',
   });
   const [selectedRole, setSelectedRole] = useState<number | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -61,12 +63,62 @@ const SecureUserOnboarding: React.FC = () => {
   const [fetchSuccess, setFetchSuccess] = useState(false);
   const [manualEntry, setManualEntry] = useState(false);
 
+  const [roleSearchQuery, setRoleSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
+
   const { addNotification } = useNotifications();
   const { theme } = useTheme();
 
   useEffect(() => {
     loadRoles();
   }, []);
+
+  const categories = useMemo(() => {
+    const unique = Array.from(
+      new Set(roles.map((r) => r.category || 'Uncategorized'))
+    );
+    return ['all', ...unique];
+  }, [roles]);
+
+  const selectedRoleData = useMemo(() => {
+    return roles.find((r) => r.id === selectedRole) || null;
+  }, [roles, selectedRole]);
+
+  const getCategoryColor = (category: string) => {
+    switch (category.trim()) {
+      case 'Administrative':
+        return 'from-purple-600 to-pink-500 border-purple-400/50 text-white';
+      case 'Analytics':
+        return 'from-blue-600 to-cyan-500 border-blue-400/50 text-white';
+      case 'Management':
+        return 'from-green-600 to-emerald-500 border-green-400/50 text-white';
+      default:
+        return 'from-gray-700 to-gray-600 border-gray-400/30 text-gray-100';
+    }
+  };
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case 'administrative':
+        return <Shield className="w-4 h-4" />;
+      case 'Management':
+        return <Briefcase className="w-4 h-4" />;
+      case 'Engineering':
+        return <Users className="w-4 h-4" />;
+      default:
+        return <Star className="w-4 h-4" />;
+    }
+  };
+  const filteredRoles = useMemo(() => {
+    return roles.filter((role) => {
+      const matchesCategory =
+        selectedCategory === 'all' || role.category === selectedCategory;
+      const matchesSearch = role.role_name
+        .toLowerCase()
+        .includes(roleSearchQuery.toLowerCase());
+      return matchesCategory && matchesSearch;
+    });
+  }, [roles, selectedCategory, roleSearchQuery]);
 
   const loadRoles = async () => {
     try {
@@ -78,12 +130,15 @@ const SecureUserOnboarding: React.FC = () => {
         addNotification('Failed to load roles', 'error');
       }
     } catch (error) {
-      console.error('Error loading roles:', error);
       addNotification('Error loading roles', 'error');
     } finally {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadRoles();
+  }, []);
 
   const fetchUserData = async () => {
     if (!userId.trim()) {
@@ -102,7 +157,7 @@ const SecureUserOnboarding: React.FC = () => {
           username: response.data.username || '',
           full_name: response.data.full_name || '',
           email_id: response.data.email_id || '',
-          phone_number: response.data.phone_number || ''
+          phone_number: response.data.phone_number || '',
         });
         setFetchSuccess(true);
         addNotification('User data fetched successfully', 'success');
@@ -120,9 +175,9 @@ const SecureUserOnboarding: React.FC = () => {
   };
 
   const handleInputChange = (field: keyof UserData, value: string) => {
-    setUserData(prev => ({
+    setUserData((prev) => ({
       ...prev,
-      [field]: value
+      [field]: value,
     }));
     setFetchSuccess(false); // Reset fetch success when manually editing
   };
@@ -165,10 +220,13 @@ const SecureUserOnboarding: React.FC = () => {
         ...userData,
         role_id: selectedRole,
         source_user_id: userId || null,
-        manual_entry: manualEntry
+        manual_entry: manualEntry,
       };
 
-      const response = await apiClient.post('/api/admin/onboard-user', onboardingData);
+      const response = await apiClient.post(
+        '/api/admin/onboard-user',
+        onboardingData
+      );
 
       if (response.success) {
         addNotification('User onboarded successfully!', 'success');
@@ -178,7 +236,7 @@ const SecureUserOnboarding: React.FC = () => {
           username: '',
           full_name: '',
           email_id: '',
-          phone_number: ''
+          phone_number: '',
         });
         setSelectedRole(null);
         setFetchSuccess(false);
@@ -200,7 +258,7 @@ const SecureUserOnboarding: React.FC = () => {
       username: '',
       full_name: '',
       email_id: '',
-      phone_number: ''
+      phone_number: '',
     });
     setSelectedRole(null);
     setFetchSuccess(false);
@@ -224,11 +282,16 @@ const SecureUserOnboarding: React.FC = () => {
       menuId={USER_ONBOARDING_MENU_ID}
       action="view"
       fallback={
-        <div className={`text-center py-20 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-          }`}>
+        <div
+          className={`text-center py-20 ${
+            theme === 'dark' ? 'text-white' : 'text-gray-900'
+          }`}
+        >
           <Shield className="w-16 h-16 mx-auto mb-4 text-red-400" />
           <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
-          <p className="text-gray-500">You don't have permission to access user onboarding.</p>
+          <p className="text-gray-500">
+            You don't have permission to access user onboarding.
+          </p>
         </div>
       }
     >
@@ -245,10 +308,20 @@ const SecureUserOnboarding: React.FC = () => {
               <UserPlus className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}>Secure User Onboarding</h1>
-              <p className={`${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                }`}>Add new users to the system with proper authorization</p>
+              <h1
+                className={`text-2xl font-bold ${
+                  theme === 'dark' ? 'text-white' : 'text-gray-900'
+                }`}
+              >
+                Secure User Onboarding
+              </h1>
+              <p
+                className={`${
+                  theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                }`}
+              >
+                Add new users to the system with proper authorization
+              </p>
             </div>
           </div>
 
@@ -257,16 +330,21 @@ const SecureUserOnboarding: React.FC = () => {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={toggleManualEntry}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border ${manualEntry
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border ${
+                manualEntry
                   ? theme === 'dark'
                     ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 text-blue-300 border-blue-500/30'
                     : 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700 border-blue-300'
                   : theme === 'dark'
-                    ? 'bg-white/10 hover:bg-white/20 text-white border-white/20'
-                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
-                }`}
+                  ? 'bg-white/10 hover:bg-white/20 text-white border-white/20'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+              }`}
             >
-              {manualEntry ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              {manualEntry ? (
+                <Eye className="w-4 h-4" />
+              ) : (
+                <EyeOff className="w-4 h-4" />
+              )}
               {manualEntry ? 'Fetch Mode' : 'Manual Entry'}
             </motion.button>
 
@@ -274,10 +352,11 @@ const SecureUserOnboarding: React.FC = () => {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={clearForm}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${theme === 'dark'
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
+                theme === 'dark'
                   ? 'bg-white/10 hover:bg-white/20 text-white'
                   : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                }`}
+              }`}
             >
               <RefreshCw className="w-4 h-4" />
               Clear
@@ -286,39 +365,55 @@ const SecureUserOnboarding: React.FC = () => {
         </div>
 
         {/* Main Form */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* User Data Fetch/Entry Section */}
-          <div className={`rounded-xl border p-6 ${theme === 'dark'
-              ? 'bg-white/5 border-white/20'
-              : 'bg-gray-50 border-gray-200'
-            } backdrop-blur-xl`}>
-            <h2 className={`text-lg font-semibold mb-6 flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-              }`}>
+          <div
+            className={`rounded-xl lg:col-span-2 items-center border p-6 ${
+              theme === 'dark'
+                ? 'bg-white/5 border-white/20'
+                : 'bg-gray-50 border-gray-200'
+            } backdrop-blur-xl`}
+          >
+            <h2
+              className={`text-lg font-semibold mb-6 flex items-center gap-2 ${
+                theme === 'dark' ? 'text-white' : 'text-gray-900'
+              }`}
+            >
               <Search className="w-5 h-5 text-blue-400" />
               {manualEntry ? 'Manual User Entry' : 'Fetch User Data'}
             </h2>
 
             {!manualEntry && (
               <div className="mb-6">
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}>User ID</label>
+                <label
+                  className={`block text-sm font-medium mb-2 ${
+                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                  }`}
+                >
+                  User ID
+                </label>
                 <div className="flex gap-3">
                   <input
                     type="text"
                     value={userId}
                     onChange={(e) => setUserId(e.target.value)}
                     placeholder="Enter User ID to fetch data"
-                    className={`flex-1 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
+                    className={`flex-1 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                      theme === 'dark'
                         ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                         : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                      }`}
+                    }`}
                   />
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={fetchUserData}
                     disabled={isFetching || !userId.trim()}
-                    className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-all duration-200 shadow-lg"
+                    className={`px-6 py-3 ${
+                      theme === 'dark'
+                        ? 'bg-gradient-to-r from-red-800 to-red-600'
+                        : 'bg-gradient-to-r from-red-800 to-red-600'
+                    }  hover:from-red-600 hover:to-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-all duration-200 shadow-lg`}
                   >
                     {isFetching ? (
                       <RefreshCw className="w-5 h-5 animate-spin" />
@@ -344,70 +439,102 @@ const SecureUserOnboarding: React.FC = () => {
             {/* User Data Form */}
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}>Username *</label>
+                <label
+                  className={`block text-sm font-medium mb-2 ${
+                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                  }`}
+                >
+                  Username *
+                </label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="text"
                     value={userData.username}
-                    onChange={(e) => handleInputChange('username', e.target.value)}
+                    onChange={(e) =>
+                      handleInputChange('username', e.target.value)
+                    }
                     placeholder="Enter username"
-                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
+                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                      theme === 'dark'
                         ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                         : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                      }`}
+                    }`}
                   />
                 </div>
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}>Full Name *</label>
+                <label
+                  className={`block text-sm font-medium mb-2 ${
+                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                  }`}
+                >
+                  Full Name *
+                </label>
                 <input
                   type="text"
                   value={userData.full_name}
-                  onChange={(e) => handleInputChange('full_name', e.target.value)}
+                  onChange={(e) =>
+                    handleInputChange('full_name', e.target.value)
+                  }
                   placeholder="Enter full name"
-                  className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
+                  className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                    theme === 'dark'
                       ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                       : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                    }`}
+                  }`}
                 />
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}>Email Address *</label>
+                <label
+                  className={`block text-sm font-medium mb-2 ${
+                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                  }`}
+                >
+                  Email Address *
+                </label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="email"
                     value={userData.email_id}
-                    onChange={(e) => handleInputChange('email_id', e.target.value)}
+                    onChange={(e) =>
+                      handleInputChange('email_id', e.target.value)
+                    }
                     placeholder="Enter email address"
-                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
+                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                      theme === 'dark'
                         ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                         : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                      }`}
+                    }`}
                   />
                 </div>
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}>Phone Number</label>
+                <label
+                  className={`block text-sm font-medium mb-2 ${
+                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                  }`}
+                >
+                  Phone Number
+                </label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="tel"
                     value={userData.phone_number}
-                    onChange={(e) => handleInputChange('phone_number', e.target.value)}
+                    onChange={(e) =>
+                      handleInputChange('phone_number', e.target.value)
+                    }
                     placeholder="Enter phone number"
-                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
+                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                      theme === 'dark'
                         ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                         : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                      }`}
+                    }`}
                   />
                 </div>
               </div>
@@ -415,102 +542,333 @@ const SecureUserOnboarding: React.FC = () => {
           </div>
 
           {/* Role Selection & Submit Section */}
-          <div className="space-y-6">
-            {/* Role Selection */}
-            <div className={`rounded-xl border p-6 ${theme === 'dark'
-                ? 'bg-white/5 border-white/20'
+          <div
+            className={` ${
+              theme === 'dark'
+                ? 'bg-white/5 backdrop-blur-xl border border-white/10 '
                 : 'bg-gray-50 border-gray-200'
-              } backdrop-blur-xl`}>
-              <h2 className={`text-lg font-semibold mb-6 flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}>
-                <Shield className="w-5 h-5 text-purple-400" />
+            } rounded-2xl p-6 shadow-xl`}
+          >
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2 bg-purple-500/20 rounded-lg">
+                <Shield className="w-5 h-5 text-purple-600" />
+              </div>
+              <h2
+                className={` ${
+                  theme === 'dark' ? 'text-white' : 'text-gray-900'
+                } text-xl font-semibold`}
+              >
                 Role Assignment
               </h2>
+            </div>
 
-              {isLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <RefreshCw className="w-6 h-6 animate-spin" />
-                  <span className={`ml-2 ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                    }`}>Loading roles...</span>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {roles.map((role) => (
-                    <motion.label
-                      key={role.id}
-                      whileHover={{ scale: 1.02 }}
-                      className={`flex items-center p-4 rounded-xl cursor-pointer transition-all duration-200 border ${selectedRole === role.id
-                          ? theme === 'dark'
-                            ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border-purple-500/40'
-                            : 'bg-gradient-to-r from-purple-100 to-pink-100 border-purple-300'
-                          : theme === 'dark'
-                            ? 'bg-white/5 border-white/10 hover:bg-white/10'
-                            : 'bg-white border-gray-200 hover:bg-gray-50'
-                        }`}
-                    >
-                      <input
-                        type="radio"
-                        name="role"
-                        value={role.id}
-                        checked={selectedRole === role.id}
-                        onChange={() => setSelectedRole(role.id)}
-                        className="w-4 h-4 text-purple-600 bg-white/10 border-white/20 focus:ring-purple-500"
-                      />
-                      <div className="ml-3 flex-1">
-                        <div className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                          }`}>{role.role_name}</div>
-                        <div className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                          }`}>{role.description}</div>
+            {/* Role Selector Dropdown */}
+            <div className="relative mb-4">
+              <button
+                onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)}
+                className={`w-full flex items-center justify-between px-4 py-4 border rounded-xl
+                  ounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200
+                  ${
+                    theme === 'dark'
+                      ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                      : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                  } ${
+                  selectedRole
+                    ? 'border-purple-500/50 ring-2 ring-purple-500/20'
+                    : 'border-gray-50 hover:border-white/30'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Shield className="w-5 h-5 text-purple-400" />
+                  {selectedRoleData ? (
+                    <div className="text-left">
+                      <div className="text-white font-medium">{}</div>
+                      <div
+                        className={`${
+                          theme === 'dark' ? 'text-white/50' : 'text-gray-900'
+                        } text-sm`}
+                      >
+                        {selectedRoleData.role_name}
                       </div>
-                    </motion.label>
-                  ))}
+                    </div>
+                  ) : (
+                    <span
+                      className={`${
+                        theme === 'dark' ? 'text-white/50' : 'text-gray-900'
+                      }`}
+                    >
+                      Select a role...
+                    </span>
+                  )}
+                </div>
+                <ChevronDown
+                  className={`w-5 h-5 text-white/50 transition-transform ${
+                    isRoleDropdownOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              {/* Dropdown Panel */}
+              {isRoleDropdownOpen && (
+                <div className="absolute z-[100] w-full mt-2 bg-slate-800 border border-white/20 rounded-xl shadow-2xl overflow-hidden">
+                  {/* Search and Filter Header */}
+                  <div className="p-4 border-b border-white/10 space-y-3">
+                    {/* Search */}
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={roleSearchQuery}
+                        onChange={(e) => setRoleSearchQuery(e.target.value)}
+                        placeholder="Search roles..."
+                        className="w-full pl-9 pr-4 py-2 bg-white/10 border border-white/20 text-white placeholder-white/40 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+
+                    {/* Category Filter */}
+                    <div className="flex gap-2 flex-wrap">
+                      {categories.map((cat) => (
+                        <button
+                          key={cat}
+                          onClick={() => setSelectedCategory(cat)}
+                          className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                            selectedCategory === cat
+                              ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+                              : 'bg-white/5 text-white/60 border border-white/10 hover:bg-white/10'
+                          }`}
+                        >
+                          {cat === 'all' ? 'All Roles' : cat}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Roles List */}
+                  <div className=" max-h-60 overflow-y-auto invisible-scrollbar">
+                    {filteredRoles.length === 0 ? (
+                      <div className="p-8 text-center text-white/50">
+                        <Filter className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                        <p>No roles found</p>
+                      </div>
+                    ) : (
+                      <div className="p-2">
+                        {filteredRoles.map((role) => (
+                          <button
+                            key={role.id}
+                            onClick={() => {
+                              setSelectedRole(role.id);
+                              setIsRoleDropdownOpen(false);
+                            }}
+                            className={`w-full text-left p-3 rounded-lg mb-1 transition-all ${
+                              selectedRole === role.id
+                                ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/40'
+                                : 'hover:bg-white/5 border border-transparent'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="font-medium text-white">
+                                    {role.role_name}
+                                  </span>
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-xs border bg-gradient-to-r ${getCategoryColor(
+                                      role.category
+                                    )}`}
+                                  >
+                                    {role.category}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-white/60 line-clamp-1">
+                                  {role.description}
+                                </p>
+                                <div className="flex items-center gap-4 mt-2 text-xs text-white/40">
+                                  <span className="flex items-center gap-1">
+                                    <Users className="w-3 h-3" />
+                                    {role.users_count} users
+                                  </span>
+                                </div>
+                              </div>
+                              {selectedRole === role.id && (
+                                <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
+                              )}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
 
+            {/* Selected Role Detail Card */}
+            {selectedRoleData && (
+              <div
+                className={` ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/20'
+                    : 'bg-gradient-to-r from-slate-700 to-slate-700/20 border-purple-500/20'
+                }  rounded-xl p-4`}
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    {getCategoryIcon(selectedRoleData.category)}
+                    <h3 className="font-semibold text-white">
+                      {selectedRoleData.role_name}
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setSelectedRole(null)}
+                    className={` ${
+                      theme === 'dark'
+                        ? 'hover:bg-white/10'
+                        : 'hover:bg-white/20'
+                    } p-1  rounded-lg transition-colors`}
+                  >
+                    <X
+                      className={` ${
+                        theme === 'dark' ? 'text-white/60' : 'text-gray-800'
+                      }w-4 h-4 `}
+                    />
+                  </button>
+                </div>
+                <p className="text-sm text-white/70 mb-3">
+                  {selectedRoleData.description}
+                </p>
+                <div className="flex items-center gap-4 text-xs text-white/50">
+                  <span className="flex items-center gap-1">
+                    <Users className="w-3 h-3" />
+                    {selectedRoleData.users_count} active users
+                  </span>
+                  <span
+                    className={`px-2 py-1 rounded border bg-gradient-to-r ${getCategoryColor(
+                      selectedRoleData.category
+                    )}`}
+                  >
+                    {selectedRoleData.category}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Submit Section */}
-            <div className={`rounded-xl border p-6 ${theme === 'dark'
-                ? 'bg-white/5 border-white/20'
-                : 'bg-gray-50 border-gray-200'
-              } backdrop-blur-xl`}>
-              <h2 className={`text-lg font-semibold mb-6 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}>Submit Onboarding</h2>
+            <div
+              className={`rounded-xl border p-6 ${
+                theme === 'dark'
+                  ? 'bg-white/5 border-white/20'
+                  : 'bg-gray-50 border-gray-200'
+              } backdrop-blur-xl mt-6`}
+            >
+              <h2
+                className={`text-lg font-semibold mb-6 ${
+                  theme === 'dark' ? 'text-white' : 'text-gray-900'
+                }`}
+              >
+                Submit Onboarding
+              </h2>
 
               <div className="space-y-4">
-                <div className={`p-4 rounded-xl border ${theme === 'dark'
-                    ? 'bg-blue-500/10 border-blue-500/20'
-                    : 'bg-blue-100 border-blue-300'
-                  }`}>
-                  <h3 className={`font-medium mb-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Review Information</h3>
+                <div
+                  className={`p-4 rounded-xl border ${
+                    theme === 'dark'
+                      ? 'bg-blue-500/10 border-blue-500/20'
+                      : 'bg-blue-100 border-blue-300'
+                  }`}
+                >
+                  <h3
+                    className={`font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white' : 'text-gray-900'
+                    }`}
+                  >
+                    Review Information
+                  </h3>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-white/60' : 'text-gray-600'}>Username:</span>
-                      <span className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>{userData.username || 'Not set'}</span>
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                        }
+                      >
+                        Username:
+                      </span>
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white' : 'text-gray-900'
+                        }
+                      >
+                        {userData.username || 'Not set'}
+                      </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-white/60' : 'text-gray-600'}>Full Name:</span>
-                      <span className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>{userData.full_name || 'Not set'}</span>
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                        }
+                      >
+                        Full Name:
+                      </span>
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white' : 'text-gray-900'
+                        }
+                      >
+                        {userData.full_name || 'Not set'}
+                      </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-white/60' : 'text-gray-600'}>Email:</span>
-                      <span className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>{userData.email_id || 'Not set'}</span>
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                        }
+                      >
+                        Email:
+                      </span>
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white' : 'text-gray-900'
+                        }
+                      >
+                        {userData.email_id || 'Not set'}
+                      </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className={theme === 'dark' ? 'text-white/60' : 'text-gray-600'}>Role:</span>
-                      <span className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>
-                        {selectedRole ? roles.find(r => r.id === selectedRole)?.role_name : 'Not selected'}
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                        }
+                      >
+                        Role:
+                      </span>
+                      <span
+                        className={
+                          theme === 'dark' ? 'text-white' : 'text-gray-900'
+                        }
+                      >
+                        {selectedRole
+                          ? roles.find((r) => r.id === selectedRole)?.role_name
+                          : 'Not selected'}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <PermissionGuard menuId={USER_ONBOARDING_MENU_ID} action="create">
+                <PermissionGuard
+                  menuId={USER_ONBOARDING_MENU_ID}
+                  action="create"
+                >
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={submitUserOnboarding}
-                    disabled={isSubmitting || !userData.username || !userData.full_name || !userData.email_id || !selectedRole}
+                    disabled={
+                      isSubmitting ||
+                      !userData.username ||
+                      !userData.full_name ||
+                      !userData.email_id ||
+                      !selectedRole
+                    }
                     className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all duration-200 shadow-lg"
                   >
                     {isSubmitting ? (
