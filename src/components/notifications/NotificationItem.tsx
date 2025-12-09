@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  CheckCircle, 
-  AlertCircle, 
-  AlertTriangle, 
-  Info, 
+import {
+  CheckCircle,
+  AlertCircle,
+  AlertTriangle,
+  Info,
   X,
-  Clock
+  Clock,
 } from 'lucide-react';
 import { Notification } from './NotificationContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -16,7 +16,10 @@ interface NotificationItemProps {
   onRemove: (id: string) => void;
 }
 
-const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRemove }) => {
+const NotificationItem: React.FC<NotificationItemProps> = ({
+  notification,
+  onRemove,
+}) => {
   const [progress, setProgress] = useState(100);
   const { theme } = useTheme();
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -25,44 +28,48 @@ const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRem
     const configs = {
       success: {
         icon: CheckCircle,
-        bgColor: theme === 'dark' 
-          ? 'bg-gradient-to-r from-green-500/90 to-emerald-500/90' 
-          : 'bg-gradient-to-r from-green-500 to-emerald-500',
+        bgColor:
+          theme === 'dark'
+            ? 'bg-gradient-to-r from-green-500/90 to-emerald-500/90'
+            : 'bg-gradient-to-r from-green-500 to-emerald-500',
         borderColor: 'border-green-400',
         textColor: 'text-white',
         iconColor: 'text-green-100',
-        shadowColor: 'shadow-green-500/25'
+        shadowColor: 'shadow-green-500/25',
       },
       error: {
         icon: AlertCircle,
-        bgColor: theme === 'dark' 
-          ? 'bg-gradient-to-r from-red-500/90 to-rose-500/90' 
-          : 'bg-gradient-to-r from-red-500 to-rose-500',
+        bgColor:
+          theme === 'dark'
+            ? 'bg-gradient-to-r from-red-500/90 to-rose-500/90'
+            : 'bg-gradient-to-r from-red-500 to-rose-500',
         borderColor: 'border-red-400',
         textColor: 'text-white',
         iconColor: 'text-red-100',
-        shadowColor: 'shadow-red-500/25'
+        shadowColor: 'shadow-red-500/25',
       },
       warning: {
         icon: notification.title?.includes('Session') ? Clock : AlertTriangle,
-        bgColor: theme === 'dark' 
-          ? 'bg-gradient-to-r from-yellow-500/90 to-orange-500/90' 
-          : 'bg-gradient-to-r from-yellow-500 to-orange-500',
+        bgColor:
+          theme === 'dark'
+            ? 'bg-gradient-to-r from-yellow-500/90 to-orange-500/90'
+            : 'bg-gradient-to-r from-yellow-500 to-orange-500',
         borderColor: 'border-yellow-400',
         textColor: 'text-white',
         iconColor: 'text-yellow-100',
-        shadowColor: 'shadow-yellow-500/25'
+        shadowColor: 'shadow-yellow-500/25',
       },
       info: {
         icon: Info,
-        bgColor: theme === 'dark' 
-          ? 'bg-gradient-to-r from-blue-500/90 to-indigo-500/90' 
-          : 'bg-gradient-to-r from-blue-500 to-indigo-500',
+        bgColor:
+          theme === 'dark'
+            ? 'bg-gradient-to-r from-blue-500/90 to-indigo-500/90'
+            : 'bg-gradient-to-r from-blue-500 to-indigo-500',
         borderColor: 'border-blue-400',
         textColor: 'text-white',
         iconColor: 'text-blue-100',
-        shadowColor: 'shadow-blue-500/25'
-      }
+        shadowColor: 'shadow-blue-500/25',
+      },
     };
     return configs[type] || configs.info;
   };
@@ -91,9 +98,9 @@ const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRem
       const intervalTime = 100; // Update every 100ms
       const steps = notification.duration / intervalTime;
       const decrementPerStep = 100 / steps;
-      
+
       intervalRef.current = setInterval(() => {
-        setProgress(prev => {
+        setProgress((prev) => {
           const newProgress = prev - decrementPerStep;
           if (newProgress <= 0) {
             if (intervalRef.current) {
@@ -125,15 +132,15 @@ const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRem
       initial={{ opacity: 0, y: -50, scale: 0.95, x: 100 }}
       animate={{ opacity: 1, y: 0, scale: 1, x: 0 }}
       exit={{ opacity: 0, y: -20, scale: 0.95, x: 100 }}
-      transition={{ 
-        duration: 0.3, 
-        type: "spring", 
-        stiffness: 300, 
-        damping: 30
+      transition={{
+        duration: 0.3,
+        type: 'spring',
+        stiffness: 300,
+        damping: 30,
       }}
       className="relative overflow-hidden w-full max-w-sm"
     >
-      <div 
+      <div
         className={`
           relative flex items-start gap-3 p-4 
           ${config.bgColor} ${config.borderColor}
@@ -152,22 +159,27 @@ const NotificationItem: React.FC<NotificationItemProps> = ({ notification, onRem
         {/* Content */}
         <div className="flex-1 min-w-0">
           {notification.title && (
-            <h4 className={`text-sm font-semibold ${config.textColor} mb-1 flex items-center gap-2`}>
+            <h4
+              className={`text-sm font-semibold ${config.textColor} mb-1 flex items-center gap-2`}
+            >
               {notification.title}
-              {notification.type === 'warning' && notification.title.includes('Session') && (
-                <motion.div
-                  animate={{ scale: [1, 1.2, 1] }}
-                  transition={{ duration: 1, repeat: Infinity }}
-                  className="w-2 h-2 bg-yellow-300 rounded-full"
-                />
-              )}
+              {notification.type === 'warning' &&
+                notification.title.includes('Session') && (
+                  <motion.div
+                    animate={{ scale: [1, 1.2, 1] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                    className="w-2 h-2 bg-yellow-300 rounded-full"
+                  />
+                )}
             </h4>
           )}
           <p className={`text-sm ${config.textColor} leading-relaxed`}>
             {notification.message}
           </p>
           {notification.onClick && (
-            <p className={`text-xs ${config.textColor} opacity-80 mt-1 font-medium`}>
+            <p
+              className={`text-xs ${config.textColor} opacity-80 mt-1 font-medium`}
+            >
               Click to take action
             </p>
           )}

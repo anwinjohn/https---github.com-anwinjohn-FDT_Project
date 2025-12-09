@@ -19,24 +19,25 @@ import {
   Zap,
   Brain,
   TrendingUp,
-  ScanFace
+  ScanFace,
 } from 'lucide-react';
+import FaceIdLogin from './FaceIdLogin';
 
 const LoginPage = () => {
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
-  const { addNotification } = useNotifications();
 
   const [formData, setFormData] = useState({
     username: '',
     password: '',
-    rememberMe: false
+    rememberMe: false,
   });
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [authMethod, setAuthMethod] = useState('password');
   const [step, setStep] = useState('login');
+  const [showFaceId, setShowFaceId] = useState(false);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -48,11 +49,23 @@ const LoginPage = () => {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target;
     //  console.log( name === 'rememberMe' ? checked : value);
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : value
+      [name]: type === 'checkbox' ? checked : value,
     }));
     if (error) setError('');
+  };
+
+  const handleFaceIdSuccess = () => {
+    setStep('success');
+    // Navigate after animation completes
+    setTimeout(() => {
+      navigate('/dashboard');
+    }, 2000);
+  };
+
+  const handleFaceIdBack = () => {
+    setShowFaceId(false);
   };
 
   const logoPath = config.dashboard.logo;
@@ -84,23 +97,58 @@ const LoginPage = () => {
     }
   };
 
+  const handleAuthMethodChange = (methodId: string) => {
+    setAuthMethod(methodId);
+    if (methodId === 'faceid') {
+      setShowFaceId(true);
+    }
+  };
+
   // Filter auth methods based on config
   const authMethods = [
-    { id: 'password', label: 'Password', icon: Lock, description: 'Standard login' },
+    {
+      id: 'password',
+      label: 'Password',
+      icon: Lock,
+      description: 'Standard login',
+    },
     { id: 'faceid', label: 'Face ID', icon: ScanFace, description: 'Face ID' },
-    { id: 'sms', label: 'SMS', icon: Smartphone, description: 'SMS verification' }
-  ].filter(method => config.auth.methods[method.id]);
+    {
+      id: 'sms',
+      label: 'SMS',
+      icon: Smartphone,
+      description: 'SMS verification',
+    },
+  ].filter((method) => config.auth.methods[method.id]);
 
   const securityFeatures = [
     // { icon: Shield, text: 'Enterprise Security', description: 'Bank-grade encryption' },
-    { icon: Zap, text: 'Real-time Detection', description: 'Instant threat response' },
-    { icon: Brain, text: 'AI-Powered Analytics', description: 'Machine learning insights' }
+    {
+      icon: Zap,
+      text: 'Real-time Detection',
+      description: 'Instant threat response',
+    },
+    {
+      icon: Brain,
+      text: 'AI-Powered Analytics',
+      description: 'Machine learning insights',
+    },
   ];
+
+  if (showFaceId) {
+    return (
+      <FaceIdLogin
+        onSuccess={handleFaceIdSuccess}
+        onBack={handleFaceIdBack}
+        username={formData.username}
+      />
+    );
+  }
 
   const stats = [
     { value: '99.9%', label: 'Uptime', icon: TrendingUp },
     { value: '24/7', label: 'Monitoring', icon: Activity },
-    { value: 'AI', label: 'Powered', icon: Brain }
+    { value: 'AI', label: 'Powered', icon: Brain },
   ];
 
   return (
@@ -135,21 +183,21 @@ const LoginPage = () => {
         ))}
       </div>
 
-      <div className="relative w-full max-w-7xl mx-auto grid lg:grid-cols-2 gap-8 items-center z-10">
+      <div className="relative w-full max-w-7xl mx-auto flex lg:flex-row flex-col gap-8 items-start z-0">
         {/* Left Side - Enhanced Branding & Info */}
         <motion.div
           initial={{ opacity: 0, x: -50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8 }}
-          className="hidden lg:block space-y-8"
+          className="hidden lg:block space-y-12 lg:w-[60%] float-start flex-shrink-0"
         >
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* Logo and Title */}
             <div className="flex items-center gap-4">
               <motion.div
                 className="p-4 bg-gradient-to-br from-c-dark-blue-500 to-c-black-600 rounded-2xl shadow-2xl"
                 whileHover={{ scale: 1.05, rotate: 5 }}
-                transition={{ type: "spring", stiffness: 300 }}
+                transition={{ type: 'spring', stiffness: 300 }}
               >
                 <Shield className="w-12 h-12 text-white" />
               </motion.div>
@@ -181,15 +229,17 @@ const LoginPage = () => {
               transition={{ delay: 0.6 }}
             >
               <h2 className="text-4xl font-bold text-white leading-tight">
-                Advanced fraud monitoring<br />
+                Advanced fraud monitoring
+                <br />
                 <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
                   & analytics platform
                 </span>
               </h2>
               <p className="text-white/70 text-lg leading-relaxed max-w-lg">
-                A rule-based platform designed to detect and prevent fraud in real time.
-                Customize detection rules, monitor suspicious activity, and gain actionable
-                insights through intuitive dashboards.
+                A rule-based platform designed to detect and prevent fraud in
+                real time. Customize detection rules, monitor suspicious
+                activity, and gain actionable insights through intuitive
+                dashboards.
               </p>
             </motion.div>
           </div>
@@ -215,8 +265,12 @@ const LoginPage = () => {
                     <feature.icon className="w-5 h-5 text-blue-400 group-hover:text-blue-300 transition-colors" />
                   </div>
                   <div>
-                    <span className="text-white/90 font-medium block">{feature.text}</span>
-                    <span className="text-white/60 text-sm">{feature.description}</span>
+                    <span className="text-white/90 font-medium block">
+                      {feature.text}
+                    </span>
+                    <span className="text-white/60 text-sm">
+                      {feature.description}
+                    </span>
                   </div>
                 </motion.div>
               ))}
@@ -255,7 +309,7 @@ const LoginPage = () => {
           initial={{ opacity: 0, x: 50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8, delay: 0.2 }}
-          className="w-full max-w-md mx-auto float-right"
+          className="w-full lg:w-[40%] max-w-md mx-auto lg:mx-0 lg:ml-auto flex-shrink-0"
         >
           <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-8 shadow-2xl hover:shadow-3xl transition-all duration-300">
             {/* Mobile Header */}
@@ -265,7 +319,9 @@ const LoginPage = () => {
                   <Shield className="w-8 h-8 text-white" />
                 </div>
               </div>
-              <h1 className="text-3xl font-bold text-white mb-2">{appShortName}</h1>
+              <h1 className="text-3xl font-bold text-white mb-2">
+                {appShortName}
+              </h1>
               <p className="text-white/70">Secure Access Portal</p>
             </div>
 
@@ -281,11 +337,17 @@ const LoginPage = () => {
                 >
                   {/* Logo */}
                   <div className="flex justify-center mt-8">
-                    <img src={logoPath} alt="Logo" className="login-logo mb-4" />
+                    <img
+                      src={logoPath}
+                      alt="Logo"
+                      className="login-logo mb-4"
+                    />
                   </div>
                   <div className="text-center mb-8">
                     {/* <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2> */}
-                    <p className="text-white/70">Sign in to access your dashboard</p>
+                    <p className="text-white/70">
+                      Sign in to access your dashboard
+                    </p>
                   </div>
 
                   {/* Authentication Method Selector */}
@@ -295,14 +357,17 @@ const LoginPage = () => {
                         {authMethods.map((method) => (
                           <button
                             key={method.id}
-                            onClick={() => setAuthMethod(method.id)}
-                            className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${authMethod === method.id
-                              ? 'bg-white/20 text-white shadow-lg scale-105'
-                              : 'text-white/60 hover:text-white hover:bg-white/10'
-                              }`}
+                            onClick={() => handleAuthMethodChange(method.id)}
+                            className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${
+                              authMethod === method.id
+                                ? 'bg-white/20 text-white shadow-lg scale-105'
+                                : 'text-white/60 hover:text-white hover:bg-white/10'
+                            }`}
                           >
                             <method.icon className="w-5 h-5" />
-                            <span className="text-xs font-medium">{method.label}</span>
+                            <span className="text-xs font-medium">
+                              {method.label}
+                            </span>
                           </button>
                         ))}
                       </div>
@@ -312,7 +377,9 @@ const LoginPage = () => {
                   <form onSubmit={handleSubmit} className="space-y-6">
                     {/* Username Field - FIXED with dark background */}
                     <div className="space-y-2">
-                      <label className="text-white/80 text-sm font-medium">Username</label>
+                      <label className="text-white/80 text-sm font-medium">
+                        Username
+                      </label>
                       <div className="relative group">
                         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                           <User className="h-5 w-5 text-blue-400 group-focus-within:text-blue-300 transition-colors" />
@@ -330,13 +397,15 @@ const LoginPage = () => {
                     </div>
                     {authMethod === 'password' && (
                       <div className="space-y-2">
-                        <label className="text-white/80 text-sm font-medium">Password</label>
+                        <label className="text-white/80 text-sm font-medium">
+                          Password
+                        </label>
                         <div className="relative group">
                           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                             <Lock className="h-5 w-5 text-blue-400 group-focus-within:text-blue-300 transition-colors" />
                           </div>
                           <input
-                            type={showPassword ? "text" : "password"}
+                            type={showPassword ? 'text' : 'password'}
                             name="password"
                             value={formData.password}
                             onChange={handleInputChange}
@@ -349,7 +418,11 @@ const LoginPage = () => {
                             onClick={() => setShowPassword(!showPassword)}
                             className="absolute inset-y-0 right-0 pr-3 flex items-center text-blue-400 hover:text-blue-300 transition-colors"
                           >
-                            {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                            {showPassword ? (
+                              <EyeOff className="h-5 w-5" />
+                            ) : (
+                              <Eye className="h-5 w-5" />
+                            )}
                           </button>
                         </div>
                       </div>
@@ -365,7 +438,9 @@ const LoginPage = () => {
                           onChange={handleInputChange}
                           className="w-4 h-4 text-blue-600 bg-white/10 border-white/20 rounded focus:ring-blue-500 focus:ring-2 transition-all"
                         />
-                        <span className="text-white/70 text-sm group-hover:text-white/90 transition-colors">Remember me</span>
+                        <span className="text-white/70 text-sm group-hover:text-white/90 transition-colors">
+                          Remember me
+                        </span>
                       </label>
                       <button
                         type="button"
@@ -412,7 +487,11 @@ const LoginPage = () => {
                     <motion.div
                       initial={{ scale: 0, rotate: -180 }}
                       animate={{ scale: 1, rotate: 0 }}
-                      transition={{ delay: 0.2, type: "spring", stiffness: 200 }}
+                      transition={{
+                        delay: 0.2,
+                        type: 'spring',
+                        stiffness: 200,
+                      }}
                       className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center shadow-2xl"
                     >
                       <CheckCircle className="w-10 h-10 text-white" />
@@ -438,8 +517,8 @@ const LoginPage = () => {
                   <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: "100%" }}
-                      transition={{ duration: 2, ease: "easeInOut" }}
+                      animate={{ width: '100%' }}
+                      transition={{ duration: 2, ease: 'easeInOut' }}
                       className="h-full bg-gradient-to-r from-green-400 to-blue-400 rounded-full"
                     />
                   </div>
@@ -451,7 +530,7 @@ const LoginPage = () => {
             {step === 'login' && (
               <div className="mt-6 pt-6 border-t border-white/10 text-center">
                 <p className="text-white/60 text-sm">
-                  Need help? {' '}
+                  Need help?{' '}
                   <button className="text-blue-400 hover:text-blue-300 font-medium transition-colors hover:underline">
                     Contact Support
                   </button>
@@ -461,7 +540,8 @@ const LoginPage = () => {
           </div>
           <div className="mt-6 text-center">
             <p className="text-white/40 text-xs">
-              © {new Date().getFullYear()} {appShortName} - {appName}. All rights reserved.
+              © {new Date().getFullYear()} {appShortName} - {appName}. All
+              rights reserved.
             </p>
           </div>
         </motion.div>

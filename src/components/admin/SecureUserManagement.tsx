@@ -1,383 +1,396 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  useRef,
+} from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Users,
-  Search,
+  UserOnboardingData,
+  UserOnboardingFilters,
+  UserOnboardingPagination,
+} from '../../types/userOnboarding';
+import {
+  User,
+  ArrowUpRight,
+  Loader2,
   Filter,
-  MoreVertical,
+  Search,
+  ChevronDown,
+  Clock,
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  SlidersHorizontal,
+  X,
+  Info,
+  Shield,
+  CheckCircle,
+  AlertTriangle,
+  Mail,
+  Eye,
+  RefreshCw,
   UserCheck,
+  FileSpreadsheet,
+  Edit,
+  MoreVertical,
   UserX,
   Unlock,
-  RotateCcw,
-  Shield,
-  Eye,
-  EyeOff,
-  Download,
-  RefreshCw,
-  Plus,
-  Edit,
-  Trash2,
-  AlertTriangle,
-  CheckCircle,
-  Clock,
-  User as UserIcon,
-  X,
-  Save,
-  Mail,
+  Lock,
   Key,
-  Loader2,
+  Send,
+  Copy,
+  Trash2,
 } from 'lucide-react';
-import { User, Role, UserAction, UserSearchFilters, PaginationInfo, UserFilterOptions } from '../../types/admin';
-import { useAuth } from '../../context/AuthContext';
-import { useNotifications } from '../notifications';
 import { useTheme } from '../../context/ThemeContext';
-import { useMenuIds } from '../../hooks/useMenuIds';
-import PermissionGuard from '../PermissionGuard';
+import * as XLSX from 'xlsx';
+import { useNotifications } from '../notifications';
+import { add } from 'date-fns';
+import { update } from 'three/examples/jsm/libs/tween.module.js';
+import { log } from 'console';
 import apiClient from '../../utils/apiClient';
-import { logger } from '../../utils/logger';
-import { cos } from 'three/tsl';
-import adminDashboard from './AdminDashboard';
 
-const SecureUserManagement: React.FC = () => {
-  const [users, setUsers] = useState<User[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
+interface UserOnboardingProps {
+  apiEndpoint?: string;
+  fullWidth?: boolean;
+}
+
+const UserManagement: React.FC<UserOnboardingProps> = ({
+  apiEndpoint = 'http://127.0.0.1:8000/admin/users',
+  fullWidth = false,
+}) => {
+  const { theme } = useTheme();
+  const { addNotification } = useNotifications();
+
+  const [users, setUsers] = useState<UserOnboardingData[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [actionMenuOpen, setActionMenuOpen] = useState<string | null>(null);
-  const [confirmAction, setConfirmAction] = useState<{ action: UserAction; user: User } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState<'username' | 'email_id' | 'last_login'>(
+    'last_login'
+  );
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [exportLoading, setExportLoading] = useState(false);
 
-  // Edit user modal state
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [editFormData, setEditFormData] = useState({
-    username: '',
-    email_id: '',
-    full_name: '',
-    role_id: 0
-  });
-
-  // const [filters, setFilters] = useState<UserSearchFilters>({
-  //   search: '',
-  //   role_id: null,
-  //   is_active: null,
-  //   account_locked: null,
-  //   mfa_enabled: null
-  // });
-
-  const [filters, setFilters] = useState<UserFilterOptions>({
+  const [filters, setFilters] = useState<UserOnboardingFilters>({
     search: '',
     account_status: '',
     user_status: '',
-    user_roles: ''
+    user_roles: '',
   });
 
-  const [pagination, setPagination] = useState<PaginationInfo>({
+  const [pagination, setPagination] = useState<UserOnboardingPagination>({
     page: 1,
-    limit: 20,
+    page_size: fullWidth ? 20 : 10,
     total: 0,
-    totalPages: 0
+    total_pages: 0,
   });
 
-  const { addNotification } = useNotifications();
-  const { user: currentUser } = useAuth();
-  const { theme } = useTheme();
-  const { getMenuId, loading: menuIdsLoading } = useMenuIds();
+  const processedData = useMemo(() => {
+    return [...users]
+      .filter((user) => {
+        const matchesSearch =
+          user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          user.email_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          user.full_name.toLowerCase().includes(searchTerm.toLowerCase());
+        return matchesSearch;
+      })
+      .sort((a, b) => {
+        if (sortBy === 'username') {
+          return sortOrder === 'desc'
+            ? b.username.localeCompare(a.username)
+            : a.username.localeCompare(b.username);
+        } else if (sortBy === 'email_id') {
+          return sortOrder === 'desc'
+            ? b.email_id.localeCompare(a.email_id)
+            : a.email_id.localeCompare(b.email_id);
+        } else {
+          const dateA = a.last_login ? new Date(a.last_login).getTime() : 0;
+          const dateB = b.last_login ? new Date(b.last_login).getTime() : 0;
+          return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+        }
+      });
+  }, [users, searchTerm, sortBy, sortOrder]);
 
-  // Get menu ID dynamically
-  const USER_MANAGEMENT_MENU_ID = getMenuId('user_management');
+  // useEffect(() => {
+  //   fetchUsers();
+  // }, [
+  //   filters,
+  //   searchTerm,
+  //   sortBy,
+  //   sortOrder,
+  //   pagination.page,
+  //   pagination.page_size,
+  // ]);
+
+  // const fetchUsers = async () => {
+  //   try {
+  //     const queryParams = new URLSearchParams({
+  //       page: pagination.page.toString(),
+  //       page_size: pagination.page_size.toString(),
+  //       search: searchTerm || '',
+  //       user_status: filters.user_status || '',
+  //       account_status: filters.account_status || '',
+  //       sort_by: sortBy,
+  //       sort_order: sortOrder,
+  //     });
+
+  //     const response = await apiClient.get(
+  //       `/admin/users?${queryParams.toString()}`
+  //     );
+  //     setUsers(response.data.data);
+  //     setPagination((prev) => ({
+  //       ...prev,
+  //       total: response.data.total,
+  //       total_pages: response.data.total_pages,
+  //     }));
+  //   } catch (error) {
+  //     console.log(error);
+  //   }
+  // };
+
+  const exportToExcel = useCallback(async () => {
+    try {
+      addNotification('Exporting users to Excel...', 'info');
+      setExportLoading(true);
+
+      // Prepare data for export
+      const exportData = processedData.map((user) => ({
+        'Full Name': user.full_name,
+        Username: user.username,
+        Email: user.email_id,
+        'Email Verified': user.email_verified ? 'Yes' : 'No',
+        Role: user.user_roles,
+        'Account Status': user.account_status,
+        'Active Status': user.active_flag ? 'Active' : 'Inactive',
+        'Account Locked': user.account_locked ? 'Yes' : 'No',
+        'MFA Enabled': user.mfa_enabled ? 'Yes' : 'No',
+        'Last Login': user.last_login
+          ? formatDate(user.last_login).date +
+            ' ' +
+            formatDate(user.last_login).time
+          : 'Never',
+        'Created At': user.created_at
+          ? formatDate(user.created_at).date +
+            ' ' +
+            formatDate(user.created_at).time
+          : 'N/A',
+        'Updated At': user.updated_at
+          ? formatDate(user.updated_at).date +
+            ' ' +
+            formatDate(user.updated_at).time
+          : 'N/A',
+      }));
+
+      // Create workbook and worksheet
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(exportData);
+
+      // Set column widths for better readability
+      const colWidths = [
+        { wch: 20 }, // Full Name
+        { wch: 15 }, // Username
+        { wch: 25 }, // Email
+        { wch: 12 }, // Email Verified
+        { wch: 15 }, // Role
+        { wch: 15 }, // Account Status
+        { wch: 12 }, // Active Status
+        { wch: 12 }, // Account Locked
+        { wch: 12 }, // MFA Enabled
+        { wch: 20 }, // Last Login
+        { wch: 20 }, // Created At
+        { wch: 20 }, // Updated At
+      ];
+      ws['!cols'] = colWidths;
+
+      // Add worksheet to workbook
+      XLSX.utils.book_append_sheet(wb, ws, 'User Report');
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().split('T')[0];
+      const filename = `User_Report_${timestamp}.xlsx`;
+
+      // Export the file
+      XLSX.writeFile(wb, filename);
+    } catch (error) {
+      console.error('Error exporting to Excel:', error);
+      addNotification('Failed to export users to Excel.', 'error');
+    } finally {
+      setExportLoading(false);
+      addNotification('User export to Excel completed.', 'success');
+    }
+  }, [processedData]);
+
+  const exportAllUsersToExcel = useCallback(async () => {
+    try {
+      setExportLoading(true);
+
+      // Fetch all users for complete export
+      const params = new URLSearchParams({
+        page: '1',
+        page_size: pagination.total.toString(), // Get all users
+        ...(filters.search && { search: filters.search }),
+        ...(filters.account_status && {
+          account_status: filters.account_status,
+        }),
+        ...(filters.user_status && { user_status: filters.user_status }),
+        ...(filters.user_roles && { user_roles: filters.user_roles }),
+      });
+
+      const response = await fetch(`${apiEndpoint}?${params}`);
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch users for export');
+      }
+
+      const data = await response.json();
+      const allUsers = data.data || [];
+
+      const exportData = allUsers.map((user) => ({
+        'Full Name': user.full_name,
+        Username: user.username,
+        Email: user.email_id,
+        'Email Verified': user.email_verified ? 'Yes' : 'No',
+        Role: user.user_roles,
+        'Account Status': user.account_status,
+        'Active Status': user.active_flag ? 'Active' : 'Inactive',
+        'Account Locked': user.account_locked ? 'Yes' : 'No',
+        'MFA Enabled': user.mfa_enabled ? 'Yes' : 'No',
+        'Last Login': user.last_login
+          ? formatDate(user.last_login).date +
+            ' ' +
+            formatDate(user.last_login).time
+          : 'Never',
+        'Created At': user.created_at
+          ? formatDate(user.created_at).date +
+            ' ' +
+            formatDate(user.created_at).time
+          : 'N/A',
+        'Updated At': user.updated_at
+          ? formatDate(user.updated_at).date +
+            ' ' +
+            formatDate(user.updated_at).time
+          : 'N/A',
+      }));
+
+      // Create workbook and worksheet
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(exportData);
+
+      // Set column widths
+      const colWidths = [
+        { wch: 20 },
+        { wch: 15 },
+        { wch: 25 },
+        { wch: 12 },
+        { wch: 15 },
+        { wch: 15 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 20 },
+        { wch: 20 },
+        { wch: 20 },
+      ];
+      ws['!cols'] = colWidths;
+
+      // Add worksheet to workbook
+      XLSX.utils.book_append_sheet(wb, ws, 'All Users Report');
+
+      // Generate filename
+      const timestamp = new Date().toISOString().split('T')[0];
+      const filename = `All_Users_Report_${timestamp}.xlsx`;
+
+      // Export the file
+      XLSX.writeFile(wb, filename);
+    } catch (error) {
+      console.error('Error exporting all users to Excel:', error);
+      alert('Failed to export complete user report. Please try again.');
+    } finally {
+      setExportLoading(false);
+    }
+  }, [apiEndpoint, filters, pagination.total]);
 
   const loadUsers = useCallback(async () => {
     try {
-      setLoading(true);
-      setError(null);
+      setIsLoading(true);
 
       const params = new URLSearchParams({
         page: pagination.page.toString(),
-        page_size: pagination.limit.toString(),
+        page_size: pagination.page_size.toString(),
         ...(filters.search && { search: filters.search }),
-        ...(filters.user_status !== null && { user_status: filters.user_status.toString() }),
-        ...(filters.user_roles !== null && filters.user_status.length ? { user_roles: filters.user_roles.toString() } : {})
+        ...(filters.account_status && {
+          account_status: filters.account_status,
+        }),
+        ...(filters.user_status && { user_status: filters.user_status }),
+        ...(filters.user_roles && { user_roles: filters.user_roles }),
+        sort_by: sortBy,
+        sort_order: sortOrder,
       });
 
-      const response = await apiClient.get(`/admin/users?${params}`);
+      const response = await fetch(`${apiEndpoint}?${params}`);
 
-      if (response.success && response.data) {
-
-        const usersWithLegacyFields = response.data.data.map((user: User) => ({
-          ...user,
-          is_active: user.active_flag,
-          failed_login_count: user.login_attempts,
-          role_name: user.user_roles
-        }));
-
-        setUsers(usersWithLegacyFields);
-
-        setPagination(prev => ({
-          ...prev,
-          total: response.data.total,
-          totalPages: response.data.total_pages,
-          hasNext: response.data.has_next,
-          hasPrev: response.data.has_prev,
-          currentPage: response.data.current_page
-        }));
-
-        // Log successful user data fetch
-        logger.info(
-          'User management data loaded successfully',
-          currentUser?.full_name,
-          { count: response.data.users.length, total: response.data.pagination.total }
-        );
-      } else {
-        logger.error("failed to load users", currentUser?.full_name, { error: response.error });
-        throw new Error(response.error || 'Failed to load users');
+      if (!response.ok) {
+        throw new Error('Failed to fetch user onboarding data');
       }
-    } catch (err) {
-      setError('Failed to load users');
-      logger.error(
-        'Failed to load user management data',
-        currentUser?.full_name,
-        { error: err },
-        err instanceof Error ? err : new Error('User data fetch failed')
-      );
+
+      const data = await response.json();
+
+      setUsers(data.data || []);
+      setPagination((prev) => ({
+        ...prev,
+        total: data.total,
+        total_pages: data.total_pages,
+        has_next: data.has_next,
+        has_prev: data.has_prev,
+        current_page: data.current_page,
+      }));
+    } catch (error) {
+      console.error('Error loading users:', error);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
-  }, [filters, pagination.page, pagination.limit, currentUser?.full_name]);
-
-  const loadRoles = useCallback(async () => {
-    try {
-      const response = await apiClient.get('/api/admin/roles');
-      if (response.success && response.data) {
-        setRoles(response.data);
-        // Log successful roles fetch
-        logger.info('Roles loaded successfully', currentUser?.full_name, { count: response.data.length });
-      } else {
-        throw new Error(response.error || 'Failed to load roles');
-      }
-    } catch (err) {
-      console.error('Error loading roles:', err);
-
-      // Log error
-      logger.error(
-        'Failed to load roles',
-        currentUser?.full_name,
-        { error: err },
-        err instanceof Error ? err : new Error('Roles fetch failed')
-      );
-    }
-  }, [currentUser?.full_name]);
+  }, [
+    apiEndpoint,
+    filters,
+    pagination.page,
+    pagination.page_size,
+    sortBy,
+    sortOrder,
+  ]);
 
   useEffect(() => {
-    if (!menuIdsLoading && USER_MANAGEMENT_MENU_ID) {
-      loadUsers();
-    }
-  }, [loadUsers, menuIdsLoading, USER_MANAGEMENT_MENU_ID]);
+    loadUsers();
+  }, [loadUsers]);
 
   useEffect(() => {
-    loadRoles();
-  }, [loadRoles]);
-
-  const handleUserAction = async (action: UserAction, user: User) => {
-    try {
-      setLoading(true);
-
-      // Log the action attempt
-      logger.info(
-        `User action initiated: ${action.action} for user ${user.username}`,
-        currentUser?.full_name,
-        { action, userId: user.id }
-      );
-
-      const response = await apiClient.post('/api/admin/users/action', action);
-
-      if (response.success) {
-        addNotification(response.data?.message || 'Action completed successfully', 'success');
-        loadUsers();
-        setActionMenuOpen(null);
-        setConfirmAction(null);
-
-        // Log the successful action
-        logger.info(
-          `User action completed: ${action.action} for user ${user.username}`,
-          currentUser?.full_name,
-          { action, userId: user.id, success: true }
-        );
-      } else {
-        throw new Error(response.error || 'Action failed');
-      }
-    } catch (err) {
-      addNotification('Action failed', 'error');
-      console.error('Error performing user action:', err);
-
-      // Log the failed action
-      logger.error(
-        `User action failed: ${action.action} for user ${user.username}`,
-        currentUser?.full_name,
-        { action, userId: user.id, error: err },
-        err instanceof Error ? err : new Error('User action failed')
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBulkAction = async (action: string) => {
-    if (selectedUsers.size === 0) {
-      addNotification('Please select users first', 'warning');
-      return;
-    }
-
-    // Log the bulk action attempt
-    logger.info(
-      `Bulk user action initiated: ${action} for ${selectedUsers.size} users`,
-      currentUser?.full_name,
-      { action, userCount: selectedUsers.size }
-    );
-
-    for (const userId of selectedUsers) {
-      const user = users.find(u => u.id === userId);
-      if (user) {
-        await handleUserAction({ action: action as any, user_id: userId }, user);
-      }
-    }
-    setSelectedUsers(new Set());
-  };
-
-  const handleEditUser = (user: User) => {
-    setEditingUser(user);
-    setEditFormData({
-      username: user.username,
-      email_id: user.email_id,
-      full_name: user.full_name,
-      role_id: user.role_id
-    });
-    setShowEditModal(true);
-    setActionMenuOpen(null);
-  };
-
-  const handleSaveUserEdit = async () => {
-    if (!editingUser) return;
-
-    try {
-      setLoading(true);
-
-      // Validate form data
-      if (!editFormData.username.trim()) {
-        addNotification('Username is required', 'warning');
-        return;
-      }
-      if (!editFormData.email_id.trim()) {
-        addNotification('Email is required', 'warning');
-        return;
-      }
-      if (!editFormData.full_name.trim()) {
-        addNotification('Full name is required', 'warning');
-        return;
-      }
-
-      // Email validation
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(editFormData.email_id)) {
-        addNotification('Please enter a valid email address', 'warning');
-        return;
-      }
-
-      // Log the edit attempt
-      logger.info(
-        `User edit initiated for ${editingUser.username}`,
-        currentUser?.full_name,
-        { userId: editingUser.id, changes: editFormData }
-      );
-
-      // In a real implementation, this would call an API
-      // const response = await apiClient.put(`/api/admin/users/${editingUser.id}`, editFormData);
-
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Update local state to reflect the change
-      setUsers(prev => prev.map(u =>
-        u.id === editingUser.id
-          ? {
-            ...u,
-            username: editFormData.username,
-            email_id: editFormData.email_id,
-            full_name: editFormData.full_name,
-            role_id: editFormData.role_id,
-            role_name: roles.find(r => r.id === editFormData.role_id)?.role_name || u.role_name
-          }
-          : u
-      ));
-
-      // Show success notification
-      addNotification('User updated successfully', 'success');
-
-      // Log the successful edit
-      logger.info(
-        `User edit completed for ${editingUser.username}`,
-        currentUser?.full_name,
-        { userId: editingUser.id, success: true }
-      );
-
-      // Close the modal
-      setShowEditModal(false);
-      setEditingUser(null);
-    } catch (err) {
-      addNotification('Failed to update user', 'error');
-      console.error('Error updating user:', err);
-
-      // Log the failed edit
-      logger.error(
-        `User edit failed for ${editingUser.username}`,
-        currentUser?.full_name,
-        { userId: editingUser.id, error: err },
-        err instanceof Error ? err : new Error('User edit failed')
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getStatusBadge = (user: User) => {
-    if (user.account_locked) {
-      //   <div className={`animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 ${theme === 'dark' ? 'border-white' : 'border-gray-900'
-
-      return <span className={`px-2 py-1 text-xs font-medium rounded-full ${theme === 'dark' ? ' bg-red-500/20 text-red-300' : ' bg-red-500/20 text-red-300'} `}>Locked</span>;
-    }
-    if (!user.account_locked) {
-      return <span className={`px-2 py-1 text-xs font-medium rounded-full ${theme === 'dark' ? 'bg-green-500/20 text-green-600' : 'bg-green-500/20 text-green-800'} `}>Active</span>;
-  
-    }
-     return <span className={`px-2 py-1 text-xs font-medium rounded-full ${theme === 'dark' ? ' bg-gray-500/20 text-gray-300 ' : ' bg-gray-500/20 text-gray-300 '} `}>Inactive</span>;
-  };
-
-  const getRoleName = (roleId: number) => {
-    return roles.find(r => r.id === roleId)?.role_name || 'Unknown';
-  };
-
-  // const formatDate = (dateString: string | null) => {
-  //   if (!dateString) return 'Never';
-  //   return new Date(dateString).toLocaleDateString();
-  // };
-
-  // const formatDate = (dateString: string | null) => {
-  //   if (!dateString) return 'Never';
-
-  //   const date = new Date(dateString);
-  //   return date.toLocaleDateString('en-GB', {
-  //     day: '2-digit',
-  //     month: 'short',
-  //     year: 'numeric'
-  //   }).replace(/ /g, '-');
-  // };
+    const delay = setTimeout(() => {
+      setFilters((prev) => ({ ...prev, search: filters.search.trim() }));
+      setPagination((prev) => ({ ...prev, page: 1 }));
+    }, 400);
+    return () => clearTimeout(delay);
+  }, [filters.search]);
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return { date: 'Never', time: '' };
 
     const date = new Date(dateString);
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
 
     const day = String(date.getDate()).padStart(2, '0');
     const month = months[date.getMonth()];
@@ -389,799 +402,1225 @@ const SecureUserManagement: React.FC = () => {
 
     return {
       date: `${day}-${month}-${year}`,
-      time: formattedTime
+      time: formattedTime,
     };
   };
 
-  // Show loading while menu IDs are being fetched
-  if (menuIdsLoading) {
+  const [editingUser, setEditingUser] = useState(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState(null);
+
+  const handleEditUser = (user) => {
+    setEditingUser({ ...user });
+    setShowEditModal(true);
+    setOpenDropdown(null);
+  };
+
+  const updateUserstatus = async (userid, status) => {
+    try {
+      const response = await fetch(`${apiEndpoint}/update/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ user_id: userid, new_status: status }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to update user status');
+      }
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('Error updating user status:', error);
+    }
+  };
+
+  const handleUserAction = (action, user) => {
+    console.log(`Action: ${action} for user:`, user.username);
+    setOpenDropdown(null);
+
+    // Handle different actions
+    switch (action) {
+      case 'activate':
+        setUsers(
+          users.map((u) => (u.id === user.id ? { ...u, active_flag: true } : u))
+        );
+        updateUserstatus(user.id, 'Active');
+        break;
+      case 'deactivate':
+        setUsers(
+          users.map((u) =>
+            u.id === user.id ? { ...u, active_flag: false } : u
+          )
+        );
+        updateUserstatus(user.id, 'Inactive');
+        break;
+      case 'lock':
+        setUsers(
+          users.map((u) =>
+            u.id === user.id ? { ...u, account_locked: true } : u
+          )
+        );
+        break;
+      case 'unlock':
+        setUsers(
+          users.map((u) =>
+            u.id === user.id ? { ...u, account_locked: false } : u
+          )
+        );
+        break;
+      case 'reset_password':
+        alert(`Password reset email sent to ${user.email_id}`);
+        break;
+      case 'delete':
+        if (confirm(`Are you sure you want to delete ${user.full_name}?`)) {
+          setUsers(users.filter((u) => u.id !== user.id));
+        }
+        break;
+    }
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (openDropdown && !event.target.closest('.dropdown-container')) {
+        setOpenDropdown(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openDropdown]);
+
+  const getStatusBadge = (user: UserOnboardingData) => {
+    if (user.account_locked) {
+      return (
+        <span
+          className={`px-2 py-1 text-xs font-medium rounded-full ${
+            theme === 'dark'
+              ? 'bg-red-500/20 text-red-300'
+              : 'bg-red-100 text-red-700'
+          }`}
+        >
+          Locked
+        </span>
+      );
+    }
+    if (user.active_flag) {
+      return (
+        <span
+          className={`px-2 py-1 text-xs font-medium rounded-full ${
+            theme === 'dark'
+              ? 'bg-green-500/20 text-green-300'
+              : 'bg-green-100 text-green-700'
+          }`}
+        >
+          Active
+        </span>
+      );
+    }
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className={`animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 ${theme === 'dark' ? 'border-white' : 'border-gray-900'
-          }`}></div>
-      </div>
+      <span
+        className={`px-2 py-1 text-xs font-medium rounded-full ${
+          theme === 'dark'
+            ? 'bg-gray-500/20 text-gray-300'
+            : 'bg-gray-200 text-gray-700'
+        }`}
+      >
+        Inactive
+      </span>
     );
-  }
+  };
+
+  const stats = useMemo(() => {
+    const totalUsers = users.length;
+    const activeUsers = users.filter((u) => u.active_flag).length;
+    const lockedUsers = users.filter((u) => u.account_locked).length;
+    const verifiedEmails = users.filter((u) => u.email_verified).length;
+    const mfaEnabled = users.filter((u) => u.mfa_enabled).length;
+
+    return {
+      totalUsers,
+      activeUsers,
+      lockedUsers,
+      verifiedEmails,
+      mfaEnabled,
+    };
+  }, [users]);
 
   return (
-    <PermissionGuard
-      menuId={USER_MANAGEMENT_MENU_ID}
-      action="view"
-      fallback={
-        <div className={`text-center py-20 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-          }`}>
-          <Shield className="w-16 h-16 mx-auto mb-4 text-red-400" />
-          <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
-          <p className="text-gray-500">You don't have permission to view user management.</p>
-        </div>
-      }
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: 0.1 }}
+      className={`rounded-2xl border shadow-2xl overflow-hidden ${
+        theme === 'dark'
+          ? 'bg-white/10 border-white/20'
+          : 'bg-white border-gray-200 shadow-card'
+      } backdrop-blur-xl ${fullWidth ? 'col-span-full' : ''}`}
     >
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg">
-              <Users className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}>User Management</h1>
-              <p className={`${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                }`}>Manage user accounts with role-based permissions</p>
-            </div>
+      <div
+        className={`flex justify-between items-center p-6 border-b ${
+          theme === 'dark' ? 'border-white/20' : 'border-gray-200'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <div className="p-3 bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl shadow-lg">
+            <UserCheck className="w-6 h-6 text-white" />
           </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${showFilters
-                ? theme === 'dark'
-                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                  : 'bg-blue-100 text-blue-700 border border-blue-300'
-                : theme === 'dark'
-                  ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
-                }`}
+          <div>
+            <h2
+              className={`text-2xl font-bold ${
+                theme === 'dark' ? 'text-white' : 'text-gray-900'
+              }`}
             >
-              <Filter className="w-4 h-4" />
-              Filters
-            </button>
-
-            <button
-              onClick={loadUsers}
-              disabled={loading}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300'
-                }`}
+              User Management
+            </h2>
+            <p
+              className={`text-sm ${
+                theme === 'dark' ? 'text-blue-200/70' : 'text-blue-600'
+              }`}
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-
-            {/* <PermissionGuard menuId={USER_MANAGEMENT_MENU_ID} action="create">
-              <button className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'
-                : 'bg-green-100 hover:bg-green-200 text-green-700 border border-green-300'
-                }`}>
-                <Plus className="w-4 h-4" />
-                Add User
-              </button>
-            </PermissionGuard> */}
+              User registration & account management
+            </p>
           </div>
         </div>
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="relative">
+              <Search
+                className={`absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 ${
+                  theme === 'dark'
+                    ? ' border-white text-white'
+                    : 'border-gray-400 '
+                }`}
+              />
+              <input
+                type="text"
+                value={filters.search}
+                onChange={(e) => {
+                  setFilters({ ...filters, search: e.target.value });
+                }}
+                placeholder="Search..."
+                className={`w-full pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  theme === 'dark'
+                    ? 'bg-white/80 border-white/40 border background-color:#ccd1d7 text-white/80 placeholder-white'
+                    : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                }`}
+              />
+            </div>
+          </div>
 
-        {/* Filters */}
-        <AnimatePresence>
-          {showFilters && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className={`rounded-xl border p-6 overflow-hidden ${theme === 'dark'
-                ? 'bg-white/5 border-white/20'
-                : 'bg-gray-50 border-gray-200'
-                } backdrop-blur-xl`}
+          {processedData.length > 0 && (
+            <div
+              className={`p-4 ${
+                theme === 'dark' ? 'border-white/10' : 'border-gray-200'
+              }`}
             >
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                    }`}>Search</label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                    <input
-                      type="text"
-                      value={filters.search}
-                      onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                      placeholder="Search users..."
-                      className={`w-full pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                        }`}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                    }`}>Role</label>
-                  <select
-                    value={filters.user_roles ?? ''}
-                    onChange={(e) => 
-                      setFilters({ ...filters, 
-                       user_roles: e.target.value?? null
-                      })
-                    }
-                    className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
-                      ? 'bg-white/10 border border-white/20 text-white'
-                      : 'bg-white border border-gray-300 text-gray-900'
-                      }`}
-                  >
-                    <option value="">All Roles</option>
-                    {roles.map(role => (
-                      <option key={role.id} value={role.role_name} className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>
-                        {role.role_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                    }`}>Status</label>
-                  <select
-                    value={filters.user_status ?? ''}
-                    onChange={(e) => setFilters({ ...filters, user_status: e.target.value ? e.target.value.toString() : null })}
-                    className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
-                      ? 'bg-white/10 border border-white/20 text-white'
-                      : 'bg-white border border-gray-300 text-gray-900'
-                      }`}
-                  >
-                    <option value="">All Status</option>
-                    <option value="true" className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>Active</option>
-                    <option value="false" className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>Inactive</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                    }`}>Account</label>
-                  <select
-                    value={filters.account_status === null ? '' : filters.account_status.toString()}
-                    onChange={(e) => setFilters({ ...filters, account_status: e.target.value ? null : e.target.value.toString() })}
-                    className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
-                      ? 'bg-white/10 border border-white/20 text-white'
-                      : 'bg-white border border-gray-300 text-gray-900'
-                      }`}
-                  >
-                    <option value="">All Accounts</option>
-                    <option value="Unlocked" className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>Unlocked</option>
-                    <option value="Locked" className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>Locked</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-4">
+              <div className="flex justify-end">
                 <button
-                  onClick={() => {
-                   setFilters({ search: '', account_status: '', user_status: '', user_roles: '' });
-                   setPagination({ ...pagination, page: 1 });
-                  }}
-                  className={`px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                    ? 'bg-white/10 hover:bg-white/20 text-white'
-                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                    }`}
-                >
-                  Clear
-                </button>
-                <button
-                  onClick={() => setPagination({ ...pagination, page: 1 })}
-                  className={`px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                    ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
-                    : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
-                    }`}
-                >
-                  Apply Filters
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Bulk Actions */}
-        {selectedUsers.size > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className={`rounded-xl border p-4 ${theme === 'dark'
-              ? 'bg-blue-500/20 border-blue-500/30'
-              : 'bg-blue-100 border-blue-300'
-              } backdrop-blur-xl`}
-          >
-            <div className="flex justify-between items-center">
-              <span className={`font-medium ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'
-                }`}>
-                {selectedUsers.size} user{selectedUsers.size > 1 ? 's' : ''} selected
-              </span>
-              <div className="flex gap-2">
-                <PermissionGuard menuId={USER_MANAGEMENT_MENU_ID} action="edit">
-                  <button
-                    onClick={() => handleBulkAction('activate')}
-                    className={`px-3 py-1 rounded text-sm transition-colors ${theme === 'dark'
+                  onClick={exportToExcel}
+                  disabled={exportLoading || processedData.length === 0}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                    exportLoading || processedData.length === 0
+                      ? theme === 'dark'
+                        ? 'bg-gray-500/30 text-gray-400 cursor-not-allowed'
+                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : theme === 'dark'
                       ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'
-                      : 'bg-green-100 hover:bg-green-200 text-green-700 border border-green-300'
-                      }`}
-                  >
-                    Activate
-                  </button>
-                  <button
-                    onClick={() => handleBulkAction('deactivate')}
-                    className={`px-3 py-1 rounded text-sm transition-colors ${theme === 'dark'
-                      ? 'bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30'
-                      : 'bg-red-100 hover:bg-red-200 text-red-700 border border-red-300'
-                      }`}
-                  >
-                    Deactivate
-                  </button>
-                  <button
-                    onClick={() => handleBulkAction('unlock')}
-                    className={`px-3 py-1 rounded text-sm transition-colors ${theme === 'dark'
-                      ? 'bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 border border-yellow-500/30'
-                      : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-700 border border-yellow-300'
-                      }`}
-                  >
-                    Unlock
-                  </button>
-                </PermissionGuard>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {/* Users Table */}
-        <div className={`rounded-xl border overflow-hidden ${theme === 'dark'
-          ? 'bg-white/5 border-white/20'
-          : 'bg-white border-gray-200'
-          } backdrop-blur-xl shadow-2xl`}>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className={`border-b ${theme === 'dark'
-                ? 'bg-white/5 border-white/20'
-                : 'bg-gray-50 border-gray-200'
-                }`}>
-                <tr>
-                  <th className="px-6 py-4 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedUsers.size === users.length && users.length > 0}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedUsers(new Set(users.map(u => u.id)));
-                        } else {
-                          setSelectedUsers(new Set());
-                        }
-                      }}
-                      className="w-4 h-4 text-blue-600 bg-white/10 border-white/20 rounded focus:ring-blue-500"
-                    />
-                  </th>
-                  <th className={`px-6 py-4 text-left font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>User</th>
-                  <th className={`px-6 py-4 text-left font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Role</th>
-                  <th className={`px-6 py-4 text-left font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Status</th>
-                  <th className={`px-6 py-4 text-left font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Last Login</th>
-                  <th className={`px-6 py-4 text-left font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Failed Logins</th>
-                  <th className={`px-6 py-4 text-left font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>MFA</th>
-                  <th className={`px-6 py-4 text-right font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
-                      <div className="flex flex-col items-center gap-4">
-                        <Loader2 className={`h-12 w-12 animate-spin ${theme === 'dark' ? 'text-blue-400' : 'text-blue-600'
-                          }`} />
-                        <span className={theme === 'dark' ? 'text-white/60' : 'text-gray-600'}>Loading users...</span>
-                      </div>
-                    </td>
-                  </tr>
-                ) : users.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
-                      <div className="flex flex-col items-center gap-4">
-                        <UserIcon className={`w-12 h-12 ${theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                          }`} />
-                        <span className={theme === 'dark' ? 'text-white/60' : 'text-gray-600'}>No users found</span>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  users.map((user) => (
-                    <motion.tr
-                      key={user.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className={`border-b transition-colors ${theme === 'dark'
-                        ? 'border-white/10 hover:bg-white/5'
-                        : 'border-gray-100 hover:bg-gray-50'
-                        }`}
-                    >
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={selectedUsers.has(user.id)}
-                          onChange={(e) => {
-                            const newSelected = new Set(selectedUsers);
-                            if (e.target.checked) {
-                              newSelected.add(user.id);
-                            } else {
-                              newSelected.delete(user.id);
-                            }
-                            setSelectedUsers(newSelected);
-                          }}
-                          className="w-4 h-4 text-blue-600 bg-white/10 border-white/20 rounded focus:ring-blue-500"
-                        />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center">
-                            <UserIcon className="w-5 h-5 text-white" />
-                          </div>
-                          <div>
-                            <div className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                              }`}>{user.full_name}</div>
-                            <div className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                              }`}>{user.username}</div>
-                            <div className={` flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-white/40' : 'text-gray-500'
-                              }`}>{user.email_id}
-                              {user.email_verified ? (<CheckCircle className='w-4 h-4 text-green-600' />) : (<AlertTriangle className='w-4 h-4 text-red-600' />)}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${theme === 'dark'
-                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                          : 'bg-purple-100 text-purple-700 border border-purple-300'
-                          }`}>
-                          {getRoleName(user.role_id)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">{getStatusBadge(user)}</td>
-                      <td className="px-6 py-4">
-                        <div className={`flex items-start gap-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'}`}>
-                          <Clock className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                          <div className="flex flex-col">
-                            <span className="font-medium">
-                              {formatDate(user.last_login).date}
-                            </span>
-                            {formatDate(user.last_login).time && (
-                              <span className={`text-xs ${theme === 'dark' ? 'text-white/50' : 'text-gray-500'} mt-0.5`}>
-                                {formatDate(user.last_login).time}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      {/* <td className="px-6 py-4">
-                        <div className={`flex items-center gap-2 ${
-                          theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                        }`}>
-                          <Clock className="w-4 h-4 text-gray-400" />
-                          {formatDate(user.last_login)}
-                        </div>
-                      </td> */}
-                      <td className="px-6 py-4">
-                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${user.login_attempts > 0
-                          ? theme === 'dark'
-                            ? 'bg-red-500/20 text-red-300 border border-red-500/30'
-                            : 'bg-red-100 text-red-700 border border-red-300'
-                          : theme === 'dark'
-                            ? 'bg-green-500/20 text-green-300 border border-green-500/30'
-                            : 'bg-green-100 text-green-700 border border-green-300'
-                          }`}>
-                          {user.failed_login_count}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        {user.mfa_enabled ? (
-                          <CheckCircle className="w-5 h-5 text-green-400" />
-                        ) : (
-                          <AlertTriangle className="w-5 h-5 text-yellow-400" />
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <PermissionGuard
-                          menuId={USER_MANAGEMENT_MENU_ID}
-                          actions={['edit', 'delete']}
-                          fallback={
-                            <span className={`text-xs ${theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                              }`}>No access</span>
-                          }
-                        >
-                          <div className="relative">
-                            <button
-                              onClick={() => setActionMenuOpen(actionMenuOpen === user.id ? null : user.id)}
-                              className={`p-2 rounded-lg transition-colors ${theme === 'dark' ? 'hover:bg-white/10' : 'hover:bg-gray-100'
-                                }`}
-                            >
-                              <MoreVertical className={`w-4 h-4 ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                                }`} />
-                            </button>
-
-                            <AnimatePresence>
-                              {actionMenuOpen === user.id && (
-                                <motion.div
-                                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                                  className={`absolute right-0 top-full mt-1 w-48 rounded-lg shadow-xl z-20 border ${theme === 'dark'
-                                    ? 'bg-slate-800/95 border-white/20'
-                                    : 'bg-white border-gray-200'
-                                    } backdrop-blur-xl`}
-                                  style={{
-                                    maxHeight: '80vh',
-                                    overflowY: 'auto'
-                                  }}
-                                >
-                                  <div className="py-1">
-                                    <PermissionGuard menuId={USER_MANAGEMENT_MENU_ID} action="edit">
-                                      <button
-                                        onClick={() => setConfirmAction({
-                                          action: { action: user.is_active ? 'deactivate' : 'activate', user_id: user.id },
-                                          user
-                                        })}
-                                        className={`w-full px-4 py-2 text-left flex items-center gap-2 transition-colors ${theme === 'dark'
-                                          ? 'text-white/80 hover:bg-white/10'
-                                          : 'text-gray-700 hover:bg-gray-100'
-                                          }`}
-                                      >
-                                        {user.is_active ? <UserX className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
-                                        {user.is_active ? 'Deactivate' : 'Activate'}
-                                      </button>
-
-                                      {user.account_locked && (
-                                        <button
-                                          onClick={() => setConfirmAction({
-                                            action: { action: 'unlock', user_id: user.id },
-                                            user
-                                          })}
-                                          className={`w-full px-4 py-2 text-left flex items-center gap-2 transition-colors ${theme === 'dark'
-                                            ? 'text-white/80 hover:bg-white/10'
-                                            : 'text-gray-700 hover:bg-gray-100'
-                                            }`}
-                                        >
-                                          <Unlock className="w-4 h-4" />
-                                          Unlock Account
-                                        </button>
-                                      )}
-
-                                      {user.login_attempts > 0 && (
-                                        <button
-                                          onClick={() => setConfirmAction({
-                                            action: { action: 'reset_failed_login', user_id: user.id },
-                                            user
-                                          })}
-                                          className={`w-full px-4 py-2 text-left flex items-center gap-2 transition-colors ${theme === 'dark'
-                                            ? 'text-white/80 hover:bg-white/10'
-                                            : 'text-gray-700 hover:bg-gray-100'
-                                            }`}
-                                        >
-                                          <RotateCcw className="w-4 h-4" />
-                                          Reset Failed Logins
-                                        </button>
-                                      )}
-
-                                      <button
-                                        onClick={() => setConfirmAction({
-                                          action: { action: 'reset_password', user_id: user.id },
-                                          user
-                                        })}
-                                        className={`w-full px-4 py-2 text-left flex items-center gap-2 transition-colors ${theme === 'dark'
-                                          ? 'text-white/80 hover:bg-white/10'
-                                          : 'text-gray-700 hover:bg-gray-100'
-                                          }`}
-                                      >
-                                        <RotateCcw className="w-4 h-4" />
-                                        Reset Password
-                                      </button>
-
-                                      <button
-                                        onClick={() => setConfirmAction({
-                                          action: { action: user.mfa_enabled ? 'disable_mfa' : 'enable_mfa', user_id: user.id },
-                                          user
-                                        })}
-                                        className={`w-full px-4 py-2 text-left flex items-center gap-2 transition-colors ${theme === 'dark'
-                                          ? 'text-white/80 hover:bg-white/10'
-                                          : 'text-gray-700 hover:bg-gray-100'
-                                          }`}
-                                      >
-                                        {user.mfa_enabled ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                        {user.mfa_enabled ? 'Disable MFA' : 'Enable MFA'}
-                                      </button>
-                                    </PermissionGuard>
-
-                                    <div className={`border-t my-1 ${theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-                                      }`}></div>
-
-                                    <PermissionGuard menuId={USER_MANAGEMENT_MENU_ID} action="edit">
-                                      <button
-                                        onClick={() => handleEditUser(user)}
-                                        className={`w-full px-4 py-2 text-left flex items-center gap-2 transition-colors ${theme === 'dark'
-                                          ? 'text-white/80 hover:bg-white/10'
-                                          : 'text-gray-700 hover:bg-gray-100'
-                                          }`}
-                                      >
-                                        <Edit className="w-4 h-4" />
-                                        Edit User
-                                      </button>
-                                    </PermissionGuard>
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        </PermissionGuard>
-                      </td>
-                    </motion.tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination */}
-          {pagination.totalPages > 1 && (
-            <div className={`flex justify-between items-center px-6 py-4 border-t ${theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-              }`}>
-              <div className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                }`}>
-                Showing {((pagination.page - 1) * pagination.limit) + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} users
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPagination({ ...pagination, page: pagination.page - 1 })}
-                  disabled={pagination.page === 1}
-                  className={`px-3 py-1 rounded transition-colors ${theme === 'dark'
-                    ? 'bg-white/10 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed text-white'
-                    : 'bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700'
-                    }`}
+                      : 'bg-green-100 hover:bg-green-200 text-green-800 border border-green-300'
+                  }`}
                 >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setPagination({ ...pagination, page: pagination.page + 1 })}
-                  disabled={pagination.page === pagination.totalPages}
-                  className={`px-3 py-1 rounded transition-colors ${theme === 'dark'
-                    ? 'bg-white/10 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed text-white'
-                    : 'bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700'
-                    }`}
-                >
-                  Next
+                  {exportLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FileSpreadsheet className="w-4 h-4" />
+                  )}
+                  {exportLoading ? 'Exporting...' : 'Export'}
                 </button>
               </div>
             </div>
           )}
+
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
+              showFilters
+                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                : theme === 'dark'
+                ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+            }`}
+          >
+            <Filter className="w-4 h-4" />
+            <span>Filters</span>
+          </button>
+          <button
+            onClick={() => {
+              setFilters({
+                search: '',
+                account_status: '',
+                user_status: '',
+                user_roles: '',
+              });
+              setSortBy('last_login');
+              setSortOrder('desc');
+              setPagination((prev) => ({ ...prev, page: 1 }));
+              loadUsers();
+            }}
+            disabled={isLoading}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
+              theme === 'dark'
+                ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+            }`}
+          >
+            <RefreshCw
+              className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`}
+            />
+          </button>
         </div>
+      </div>
 
-        {/* Confirmation Modal */}
-        <AnimatePresence>
-          {confirmAction && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-              onClick={(e) => {
-                // Close when clicking outside the modal
-                if (e.target === e.currentTarget) {
-                  setConfirmAction(null);
-                }
-              }}
-            >
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className={`rounded-xl p-6 max-w-md w-full border ${theme === 'dark'
-                  ? 'bg-slate-800/95 border-white/20'
-                  : 'bg-white border-gray-200'
-                  } backdrop-blur-xl`}
-                onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside
+      <div className="p-6">
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center h-[350px] space-y-4">
+            <Loader2 className="w-12 h-12 text-blue-400 animate-spin" />
+            <div className="text-center">
+              <div
+                className={`font-medium ${
+                  theme === 'dark' ? 'text-white' : 'text-gray-900'
+                }`}
               >
-                <div className="flex items-center gap-3 mb-4">
-                  <AlertTriangle className="w-6 h-6 text-yellow-400" />
-                  <h3 className={`text-lg font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>Confirm Action</h3>
-                </div>
-
-                <p className={`mb-6 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}>
-                  Are you sure you want to {confirmAction.action.action.replace('_', ' ')} user "{confirmAction.user.full_name}"?
-                </p>
-
-                <div className="flex justify-end gap-3">
-                  <button
-                    onClick={() => setConfirmAction(null)}
-                    className={`px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                      ? 'bg-white/10 hover:bg-white/20 text-white'
-                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                      }`}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => {
-                      handleUserAction(confirmAction.action, confirmAction.user);
-                    }}
-                    className={`px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                      ? 'bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30'
-                      : 'bg-red-100 hover:bg-red-200 text-red-700 border border-red-300'
-                      }`}
-                  >
-                    Confirm
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Edit User Modal */}
-        <AnimatePresence>
-          {showEditModal && editingUser && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-              onClick={(e) => {
-                // Close when clicking outside the modal
-                if (e.target === e.currentTarget) {
-                  setShowEditModal(false);
-                }
-              }}
-            >
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className={`rounded-xl p-6 max-w-md w-full border ${theme === 'dark'
-                  ? 'bg-slate-800/95 border-white/20'
-                  : 'bg-white border-gray-200'
-                  } backdrop-blur-xl`}
-                onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside
+                Loading user onboarding data...
+              </div>
+              <div
+                className={`text-sm mt-1 ${
+                  theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                }`}
               >
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg">
-                      <Edit className="w-5 h-5 text-white" />
-                    </div>
-                    <h3 className={`text-lg font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                      }`}>Edit User</h3>
-                  </div>
-                  <button
-                    onClick={() => setShowEditModal(false)}
-                    className={`p-2 rounded-lg transition-colors ${theme === 'dark'
-                      ? 'hover:bg-white/10 text-white/60'
-                      : 'hover:bg-gray-100 text-gray-500'
+                Please wait while we fetch the users
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <AnimatePresence>
+              {showFilters && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className={`rounded-xl border p-4 mb-6 overflow-hidden ${
+                    theme === 'dark'
+                      ? 'bg-white/5 border-white/20'
+                      : 'bg-gray-50 border-gray-200'
+                  }`}
+                >
+                  <div className="flex justify-between items-center mb-4">
+                    <h3
+                      className={`font-semibold flex items-center gap-2 ${
+                        theme === 'dark' ? 'text-white' : 'text-gray-900'
                       }`}
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}>Username</label>
-                    <div className="relative">
-                      <UserIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                      <input
-                        type="text"
-                        value={editFormData.username}
-                        onChange={(e) => setEditFormData({ ...editFormData, username: e.target.value })}
-                        className={`w-full pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
-                          ? 'bg-white/10 border border-white/20 text-white'
-                          : 'bg-white border border-gray-300 text-gray-900'
-                          }`}
-                      />
-                    </div>
+                    >
+                      <SlidersHorizontal className="w-4 h-4 text-blue-400" />
+                      Advanced Filters
+                    </h3>
+                    <button
+                      onClick={() => setShowFilters(false)}
+                      className={`p-1.5 rounded-lg ${
+                        theme === 'dark'
+                          ? 'hover:bg-white/10 text-white/60'
+                          : 'hover:bg-gray-200 text-gray-500'
+                      }`}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
 
-                  <div>
-                    <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}>Email</label>
-                    <div className="relative">
-                      <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                      <input
-                        type="email"
-                        value={editFormData.email_id}
-                        onChange={(e) => setEditFormData({ ...editFormData, email_id: e.target.value })}
-                        className={`w-full pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
-                          ? 'bg-white/10 border border-white/20 text-white'
-                          : 'bg-white border border-gray-300 text-gray-900'
-                          }`}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}>Full Name</label>
-                    <input
-                      type="text"
-                      value={editFormData.full_name}
-                      onChange={(e) => setEditFormData({ ...editFormData, full_name: e.target.value })}
-                      className={`w-full px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white'
-                        : 'bg-white border border-gray-300 text-gray-900'
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div>
+                      <label
+                        className={`block text-sm font-medium mb-2 ${
+                          theme === 'dark' ? 'text-white/80' : 'text-gray-700'
                         }`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}>Role</label>
-                    <div className="relative">
-                      <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                      <select
-                        value={editFormData.role_id}
-                        onChange={(e) => setEditFormData({ ...editFormData, role_id: parseInt(e.target.value) })}
-                        className={`w-full pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${theme === 'dark'
-                          ? 'bg-white/10 border border-white/20 text-white'
-                          : 'bg-white border border-gray-300 text-gray-900'
-                          }`}
                       >
-                        {roles.map(role => (
-                          <option key={role.id} value={role.id} className={theme === 'dark' ? 'bg-slate-800' : 'bg-white'}>
-                            {role.role_name}
-                          </option>
-                        ))}
+                        Account Status
+                      </label>
+                      <select
+                        value={filters.account_status}
+                        onChange={(e) =>
+                          setFilters((prev) => ({
+                            ...prev,
+                            account_status: e.target.value,
+                          }))
+                        }
+                        className={`w-full px-3 py-2 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          theme === 'dark'
+                            ? 'bg-white/10 border border-white/20 text-white'
+                            : 'bg-white border border-gray-300 text-gray-900'
+                        }`}
+                      >
+                        <option value="">All Status</option>
+                        <option value="Locked">Locked</option>
+                        <option value="Unlocked">Unlocked</option>
                       </select>
                     </div>
+
+                    <div>
+                      <label
+                        className={`block text-sm font-medium mb-2 ${
+                          theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                        }`}
+                      >
+                        User Status
+                      </label>
+                      <select
+                        value={filters.user_status}
+                        onChange={(e) => {
+                          setFilters({
+                            ...filters,
+                            user_status: e.target.value,
+                          });
+                          setPagination((prev) => ({ ...prev, page: 1 }));
+                        }}
+                        className={`w-full px-3 py-2 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          theme === 'dark'
+                            ? 'bg-white/10 border border-white/20 text-white'
+                            : 'bg-white border border-gray-300 text-gray-900'
+                        }`}
+                      >
+                        <option value="">All Users</option>
+                        <option value="Active">Active</option>
+                        <option value="Inactive">Inactive</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        className={`block text-sm font-medium mb-2 ${
+                          theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                        }`}
+                      >
+                        Sort By
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={`${sortBy}-${sortOrder}`}
+                          onChange={(e) => {
+                            const [newSortBy, newSortOrder] =
+                              e.target.value.split('-') as [
+                                typeof sortBy,
+                                'asc' | 'desc'
+                              ];
+                            setSortBy(newSortBy);
+                            setSortOrder(newSortOrder);
+                          }}
+                          className={`w-full px-3 py-2 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                            theme === 'dark'
+                              ? 'bg-white/10 border border-white/20 text-white'
+                              : 'bg-white border border-gray-300 text-gray-900'
+                          }`}
+                        >
+                          <option value="last_login-desc">
+                            Last Login: Recent First
+                          </option>
+                          <option value="last_login-asc">
+                            Last Login: Oldest First
+                          </option>
+                          <option value="username-asc">Username: A to Z</option>
+                          <option value="username-desc">
+                            Username: Z to A
+                          </option>
+                          <option value="email_id-asc">Email: A to Z</option>
+                          <option value="email_id-desc">Email: Z to A</option>
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end mt-4">
+                    <button
+                      onClick={() => {
+                        setSearchTerm('');
+                        setFilters({
+                          search: '',
+                          account_status: '',
+                          user_status: '',
+                          user_roles: '',
+                        });
+                        setSortBy('last_login');
+                        setSortOrder('desc');
+                        setPagination((prev) => ({ ...prev, page: 1 }));
+                      }}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                        theme === 'dark'
+                          ? 'bg-white/10 hover:bg-white/20 text-white'
+                          : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      <Filter className="w-4 h-4" />
+                      Reset Filters
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div
+                className={`p-4 rounded-xl border ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-br from-blue-500/20 to-cyan-500/20 border-blue-500/30'
+                    : 'bg-gradient-to-br from-blue-100 to-cyan-100 border-blue-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <User className="w-4 h-4 text-blue-400" />
+                  <span
+                    className={`text-sm font-medium ${
+                      theme === 'dark' ? 'text-blue-300' : 'text-blue-700'
+                    }`}
+                  >
+                    Total Users
+                  </span>
+                </div>
+                <div
+                  className={`text-2xl font-bold ${
+                    theme === 'dark' ? 'text-white' : 'text-gray-900'
+                  }`}
+                >
+                  {stats.totalUsers}
+                </div>
+              </div>
+
+              <div
+                className={`p-4 rounded-xl border ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-br from-green-500/20 to-emerald-500/20 border-green-500/30'
+                    : 'bg-gradient-to-br from-green-100 to-emerald-100 border-green-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle className="w-4 h-4 text-green-400" />
+                  <span
+                    className={`text-sm font-medium ${
+                      theme === 'dark' ? 'text-green-300' : 'text-green-700'
+                    }`}
+                  >
+                    Active Users
+                  </span>
+                </div>
+                <div
+                  className={`text-2xl font-bold ${
+                    theme === 'dark' ? 'text-white' : 'text-gray-900'
+                  }`}
+                >
+                  {stats.activeUsers}
+                </div>
+              </div>
+
+              <div
+                className={`p-4 rounded-xl border ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-br from-red-500/20 to-orange-500/20 border-red-500/30'
+                    : 'bg-gradient-to-br from-red-100 to-orange-100 border-red-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-red-400" />
+                  <span
+                    className={`text-sm font-medium ${
+                      theme === 'dark' ? 'text-red-300' : 'text-red-700'
+                    }`}
+                  >
+                    Locked Accounts
+                  </span>
+                </div>
+                <div
+                  className={`text-2xl font-bold ${
+                    theme === 'dark' ? 'text-white' : 'text-gray-900'
+                  }`}
+                >
+                  {stats.lockedUsers}
+                </div>
+              </div>
+
+              <div
+                className={`p-4 rounded-xl border ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-br from-yellow-500/20 to-amber-500/20 border-yellow-500/30'
+                    : 'bg-gradient-to-br from-yellow-100 to-amber-100 border-yellow-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Mail className="w-4 h-4 text-yellow-400" />
+                  <span
+                    className={`text-sm font-medium ${
+                      theme === 'dark' ? 'text-yellow-300' : 'text-yellow-700'
+                    }`}
+                  >
+                    Verified Emails
+                  </span>
+                </div>
+                <div
+                  className={`text-2xl font-bold ${
+                    theme === 'dark' ? 'text-white' : 'text-gray-900'
+                  }`}
+                >
+                  {stats.verifiedEmails}
+                </div>
+              </div>
+
+              <div
+                className={`p-4 rounded-xl border ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-br from-purple-500/20 to-pink-500/20 border-purple-500/30'
+                    : 'bg-gradient-to-br from-purple-100 to-pink-100 border-purple-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Shield className="w-4 h-4 text-purple-400" />
+                  <span
+                    className={`text-sm font-medium ${
+                      theme === 'dark' ? 'text-purple-300' : 'text-purple-700'
+                    }`}
+                  >
+                    MFA Enabled
+                  </span>
+                </div>
+                <div
+                  className={`text-2xl font-bold ${
+                    theme === 'dark' ? 'text-white' : 'text-gray-900'
+                  }`}
+                >
+                  {stats.mfaEnabled}
+                </div>
+              </div>
+            </div> */}
+
+            <div
+              className={`rounded-xl border overflow-hidden ${
+                theme === 'dark'
+                  ? 'bg-white/5 border-white/10'
+                  : 'bg-white border-gray-200'
+              }`}
+            >
+              <div
+                className={`p-4 border-b ${
+                  theme === 'dark' ? 'border-white/10' : 'border-gray-200'
+                }`}
+              >
+                <div className="flex justify-between items-center">
+                  <h3
+                    className={`font-semibold ${
+                      theme === 'dark' ? 'text-white' : 'text-gray-900'
+                    }`}
+                  >
+                    User List
+                  </h3>
+
+                  {processedData.length > 0 && (
+                    <div
+                      className={`text-xs ${
+                        theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                      }`}
+                    >
+                      {searchTerm ||
+                      filters.account_status ||
+                      filters.user_status
+                        ? 'Filtered results'
+                        : 'All users'}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="overflow-x-auto relative">
+                <table className="w-full">
+                  <thead
+                    className={`${
+                      theme === 'dark'
+                        ? 'bg-white/5 border-b border-white'
+                        : 'bg-gray-50 border-b border-black'
+                    }`}
+                  >
+                    <tr>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark'
+                            ? 'text-white/70 border-b border-white'
+                            : 'text-gray-700 border-b border-black'
+                        }`}
+                      >
+                        User
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        Email
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        Role
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        Status
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        Failed Count
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        Account
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        Last Login
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        MFA
+                      </th>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-semibold ${
+                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                        }`}
+                      >
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <AnimatePresence>
+                    <tbody>
+                      {processedData.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-4 py-8 text-center">
+                            <AlertCircle
+                              className={`w-8 h-8 mx-auto mb-2 ${
+                                theme === 'dark'
+                                  ? 'text-white/40'
+                                  : 'text-gray-400'
+                              }`}
+                            />
+                            <p
+                              className={`${
+                                theme === 'dark'
+                                  ? 'text-white/60'
+                                  : 'text-gray-600'
+                              }`}
+                            >
+                              No users found
+                            </p>
+                            {(searchTerm ||
+                              filters.account_status ||
+                              filters.user_status) && (
+                              <button
+                                onClick={() => {
+                                  setSearchTerm('');
+                                  setFilters({
+                                    search: '',
+                                    account_status: '',
+                                    user_status: '',
+                                    user_roles: '',
+                                  });
+                                }}
+                                className={`mt-2 text-sm ${
+                                  theme === 'dark'
+                                    ? 'text-blue-400 hover:text-blue-300'
+                                    : 'text-blue-600 hover:text-blue-700'
+                                }`}
+                              >
+                                Clear filters
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ) : (
+                        processedData.map((user, index) => {
+                          const uniqueKey = `${user.id}-${index}-${pagination.page}`;
+
+                          return (
+                            <tr
+                              key={uniqueKey}
+                              className={`border-b ${
+                                theme === 'dark'
+                                  ? 'border-white/10'
+                                  : 'border-gray-100'
+                              } hover:bg-blue-500/5 transition-colors`}
+                            >
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-3">
+                                  <div
+                                    className={`p-2 rounded-lg ${
+                                      theme === 'dark'
+                                        ? 'bg-white/10'
+                                        : 'bg-gray-100'
+                                    }`}
+                                  >
+                                    <User className="w-4 h-4 text-blue-400" />
+                                  </div>
+                                  <div>
+                                    <div
+                                      className={`font-medium ${
+                                        theme === 'dark'
+                                          ? 'text-white'
+                                          : 'text-gray-900'
+                                      }`}
+                                    >
+                                      {user.full_name}
+                                    </div>
+                                    <div
+                                      className={`text-xs ${
+                                        theme === 'dark'
+                                          ? 'text-white/50'
+                                          : 'text-gray-500'
+                                      }`}
+                                    >
+                                      {user.username}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`text-sm ${
+                                      theme === 'dark'
+                                        ? 'text-white/80'
+                                        : 'text-gray-700'
+                                    }`}
+                                  >
+                                    {user.email_id}
+                                  </span>
+                                  {user.email_verified ? (
+                                    <CheckCircle className="w-4 h-4 text-green-500" />
+                                  ) : (
+                                    <AlertTriangle className="w-4 h-4 text-yellow-500" />
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`px-2 py-1 text-xs font-medium rounded-full ${
+                                    theme === 'dark'
+                                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                      : 'bg-purple-100 text-purple-700 border border-purple-300'
+                                  }`}
+                                >
+                                  {user.user_roles}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3">
+                                {getStatusBadge(user)}
+                              </td>
+                              <td className="flex px-4 py-3 items-center">
+                                {user.login_attempts > 0 ? (
+                                  <span className="bg-red-600 text-white"></span>
+                                ) : (
+                                  <span className="bg-green-800 text-white"></span>
+                                )}
+                                {user.login_attempts}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  {user.account_status.toLowerCase() ===
+                                  'locked' ? (
+                                    <span
+                                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
+                                        theme === 'dark'
+                                          ? 'bg-red-600 text-white'
+                                          : 'bg-gray-500/20  text-red-500'
+                                      }`}
+                                    >
+                                      <Lock className="w-3 h-3" />
+                                      {user.account_status}
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
+                                        theme === 'dark'
+                                          ? 'bg-green-600 text-white'
+                                          : 'bg-gray-500/20 text-green-600'
+                                      } `}
+                                    >
+                                      <Unlock className="w-3 h-3" />
+                                      {user.account_status}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div
+                                  className={`flex items-start gap-2 ${
+                                    theme === 'dark'
+                                      ? 'text-white/80'
+                                      : 'text-gray-700'
+                                  }`}
+                                >
+                                  <Clock className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                                  <div className="flex flex-col">
+                                    <span className="font-medium text-sm">
+                                      {formatDate(user.last_login).date}
+                                    </span>
+                                    {formatDate(user.last_login).time && (
+                                      <span
+                                        className={`text-xs ${
+                                          theme === 'dark'
+                                            ? 'text-white/50'
+                                            : 'text-gray-500'
+                                        } mt-0.5`}
+                                      >
+                                        {formatDate(user.last_login).time}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                {user.mfa_enabled ? (
+                                  <CheckCircle className="w-5 h-5 text-green-400" />
+                                ) : (
+                                  <AlertTriangle className="w-5 h-5 text-yellow-400" />
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex gap-2">
+                                  <button
+                                    className={`p-1.5 rounded-lg ${
+                                      theme === 'dark'
+                                        ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
+                                        : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                                    }`}
+                                    title="View Details"
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleEditUser(user)}
+                                    className={`p-1.5 rounded-lg ${
+                                      theme === 'dark'
+                                        ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
+                                        : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                                    }`}
+                                    title="Edit"
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </button>
+                                  <div className="relative dropdown-container">
+                                    <button
+                                      onClick={() =>
+                                        setOpenDropdown(
+                                          openDropdown === user.id
+                                            ? null
+                                            : user.id
+                                        )
+                                      }
+                                      className={`p-1.5 rounded-lg ${
+                                        theme === 'dark'
+                                          ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
+                                          : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                                      }`}
+                                      title="More"
+                                    >
+                                      <MoreVertical className="w-4 h-4" />
+                                    </button>
+
+                                    {openDropdown === user.id && (
+                                      <div
+                                        className={`${
+                                          index >= processedData.length - 4
+                                            ? ' fixed'
+                                            : 'absolute'
+                                        } right-0 top-full mt-1 w-56 bg-white rounded-lg shadow-2xl border border-gray-200 py-1 z-50 transform translate-y-2`}
+                                        style={{
+                                          top: '100%',
+                                          transform:
+                                            index >= processedData.length - 4
+                                              ? 'translateY(calc(-100% - 40px))'
+                                              : 'translateY(0)',
+                                        }}
+                                      >
+                                        {user.active_flag ? (
+                                          <button
+                                            onClick={() =>
+                                              handleUserAction(
+                                                'deactivate',
+                                                user
+                                              )
+                                            }
+                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                          >
+                                            <UserX className="w-4 h-4" />
+                                            Deactivate User
+                                          </button>
+                                        ) : (
+                                          <button
+                                            onClick={() =>
+                                              handleUserAction('activate', user)
+                                            }
+                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                          >
+                                            <UserCheck className="w-4 h-4 text-green-600" />
+                                            Activate User
+                                          </button>
+                                        )}
+
+                                        {user.account_locked ? (
+                                          <button
+                                            onClick={() =>
+                                              handleUserAction('unlock', user)
+                                            }
+                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                          >
+                                            <Unlock className="w-4 h-4 text-green-600" />
+                                            Unlock Account
+                                          </button>
+                                        ) : (
+                                          <button
+                                            onClick={() =>
+                                              handleUserAction('lock', user)
+                                            }
+                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                          >
+                                            <Lock className="w-4 h-4" />
+                                            Lock Account
+                                          </button>
+                                        )}
+
+                                        <button
+                                          onClick={() =>
+                                            handleUserAction(
+                                              'reset_password',
+                                              user
+                                            )
+                                          }
+                                          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                        >
+                                          <Key className="w-4 h-4" />
+                                          Reset Password
+                                        </button>
+
+                                        <button
+                                          onClick={() =>
+                                            handleUserAction('send_email', user)
+                                          }
+                                          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                        >
+                                          <Send className="w-4 h-4" />
+                                          Send Email
+                                        </button>
+
+                                        <button
+                                          onClick={() => {
+                                            navigator.clipboard.writeText(
+                                              user.email_id
+                                            );
+                                            alert('Email copied to clipboard!');
+                                            setOpenDropdown(null);
+                                          }}
+                                          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                        >
+                                          <Copy className="w-4 h-4" />
+                                          Copy Email
+                                        </button>
+
+                                        <div className="border-t border-gray-200 my-1"></div>
+
+                                        <button
+                                          onClick={() =>
+                                            handleUserAction('delete', user)
+                                          }
+                                          className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                          Delete User
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </AnimatePresence>
+                </table>
+              </div>
+
+              {pagination.total_pages > 1 && (
+                <div
+                  className={`p-4 border-t ${
+                    theme === 'dark' ? 'border-white/10' : 'border-gray-200'
+                  }`}
+                >
+                  <div className="flex justify-between items-center">
+                    <div
+                      className={`text-sm ${
+                        theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                      }`}
+                    >
+                      Showing {(pagination.page - 1) * pagination.page_size + 1}{' '}
+                      to{' '}
+                      {Math.min(
+                        pagination.page * pagination.page_size,
+                        pagination.total
+                      )}{' '}
+                      of {pagination.total} users
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() =>
+                          setPagination((prev) => ({
+                            ...prev,
+                            page: Math.max(1, prev.page - 1),
+                          }))
+                        }
+                        disabled={pagination.page === 1}
+                        className={`p-2 rounded-lg transition-colors ${
+                          pagination.page === 1
+                            ? theme === 'dark'
+                              ? 'bg-white/5 text-white/30 cursor-not-allowed'
+                              : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : theme === 'dark'
+                            ? 'bg-white/10 hover:bg-white/20 text-white'
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                        }`}
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+
+                      <div className="flex items-center gap-1">
+                        {Array.from(
+                          { length: Math.min(5, pagination.total_pages) },
+                          (_, i) => {
+                            let pageToShow;
+                            if (pagination.total_pages <= 5) {
+                              pageToShow = i + 1;
+                            } else if (pagination.page <= 3) {
+                              pageToShow = i + 1;
+                            } else if (
+                              pagination.page >=
+                              pagination.total_pages - 2
+                            ) {
+                              pageToShow = pagination.total_pages - 4 + i;
+                            } else {
+                              pageToShow = pagination.page - 2 + i;
+                            }
+
+                            return (
+                              <button
+                                key={pageToShow}
+                                onClick={() =>
+                                  setPagination((prev) => ({
+                                    ...prev,
+                                    page: pageToShow,
+                                  }))
+                                }
+                                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm transition-colors ${
+                                  pagination.page === pageToShow
+                                    ? theme === 'dark'
+                                      ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
+                                      : 'bg-blue-100 text-blue-700 border border-blue-300'
+                                    : theme === 'dark'
+                                    ? 'bg-white/10 hover:bg-white/20 text-white'
+                                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                                }`}
+                              >
+                                {pageToShow}
+                              </button>
+                            );
+                          }
+                        )}
+
+                        {pagination.total_pages > 5 &&
+                          pagination.page < pagination.total_pages - 2 && (
+                            <>
+                              <span
+                                className={
+                                  theme === 'dark'
+                                    ? 'text-white/50'
+                                    : 'text-gray-500'
+                                }
+                              >
+                                ...
+                              </span>
+                              <button
+                                onClick={() =>
+                                  setPagination((prev) => ({
+                                    ...prev,
+                                    page: pagination.total_pages,
+                                  }))
+                                }
+                                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm ${
+                                  theme === 'dark'
+                                    ? 'bg-white/10 hover:bg-white/20 text-white'
+                                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                                }`}
+                              >
+                                {pagination.total_pages}
+                              </button>
+                            </>
+                          )}
+                      </div>
+
+                      <button
+                        onClick={() =>
+                          setPagination((prev) => ({
+                            ...prev,
+                            page: Math.min(
+                              pagination.total_pages,
+                              prev.page + 1
+                            ),
+                          }))
+                        }
+                        disabled={pagination.page === pagination.total_pages}
+                        className={`p-2 rounded-lg transition-colors ${
+                          pagination.page === pagination.total_pages
+                            ? theme === 'dark'
+                              ? 'bg-white/5 text-white/30 cursor-not-allowed'
+                              : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : theme === 'dark'
+                            ? 'bg-white/10 hover:bg-white/20 text-white'
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                        }`}
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
-
-                <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200 dark:border-white/20">
-                  <button
-                    onClick={() => setShowEditModal(false)}
-                    className={`px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                      ? 'bg-white/10 hover:bg-white/20 text-white'
-                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                      }`}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleSaveUserEdit}
-                    disabled={loading}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${theme === 'dark'
-                      ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30'
-                      : 'bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-300'
-                      }`}
-                  >
-                    {loading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Save className="w-4 h-4" />
-                    )}
-                    Save Changes
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-    </PermissionGuard>
+    </motion.div>
   );
 };
 
-export default SecureUserManagement;
+export default UserManagement;
