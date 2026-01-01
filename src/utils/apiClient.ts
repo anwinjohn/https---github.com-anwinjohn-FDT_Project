@@ -3,6 +3,7 @@ import CryptoJS from 'crypto-js';
 import config from '../config/app-config.json';
 import { logger } from './logger';
 import { jwtDecode } from 'jwt-decode';
+import { string } from 'three/tsl';
 
 // Simplified Security Configuration
 const SECURITY_CONFIG = {
@@ -55,8 +56,11 @@ class SecureApiClient {
     this.axiosInstance.interceptors.request.use(
       async (request) => {
         try {
-          const token = localStorage.getItem('authToken');
-          if (token && !this.isTokenExpired(token)) {
+          let token = localStorage.getItem('authToken');
+          if (token) {
+            if (this.isTokenExpired(token)) {
+              token = await this.performTokenRefresh();
+            }
             request.headers.Authorization = `Bearer ${token}`;
           }
           request.headers['X-Timestamp'] = Math.floor(
@@ -145,9 +149,7 @@ class SecureApiClient {
       const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
       const decodedPayload = JSON.parse(window.atob(base64));
       const exp = decodedPayload.exp;
-
       if (!exp) return true;
-
       const now = Math.floor(Date.now() / 1000);
       return exp < now;
     } catch (err) {
@@ -225,32 +227,54 @@ class SecureApiClient {
   // }
 
   private async performTokenRefresh(): Promise<string> {
-    const currentToken = localStorage.getItem('authToken');
-    if (currentToken) {
-      try {
-        const response = await axios.post(`${config.api.authBaseUrl}/refresh`, {
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Client-Version': config.app.version,
-            'X-Client-Type': 'web-app',
-            Authorization: currentToken,
-          },
-        });
-        if (response.data) {
-          localStorage.setItem('authToken', response.data);
-          return response.data;
-        } else {
-          this.handleAuthenticationFailure();
-          return '';
-        }
-      } catch (err) {
-        logger.error('Token renewal failed', '', err);
-        return '';
-      }
-    } else {
-      this.handleAuthenticationFailure();
-      return '';
+    if (this.refreshTokenPromise) {
+      return this.refreshTokenPromise;
     }
+
+    this.refreshTokenPromise = (async () => {
+      const accessToken = localStorage.getItem('authToken');
+
+      if (!accessToken) {
+        // this.handleAuthenticationFailure();
+        throw new Error('No refresh token');
+      }
+      try {
+        const payload = JSON.stringify({
+          access_token: accessToken,
+        });
+        const encryptedPayload = this.encryptRequest(payload);
+        const response = await axios.post(
+          `${config.api.authBaseUrl}/refresh`,
+          {
+            data: encryptedPayload,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Client-Version': config.app.version,
+              'X-Client-Type': 'web-app',
+              'X-Encrypted': 'true',
+            },
+          }
+        );
+        const decryptedResponse = this.decryptResponse(response.data.data);
+        const newAccessToken = decryptedResponse?.access_token;
+        console.log(decryptedResponse, 'fff');
+        if (!newAccessToken) {
+          throw new Error('Invalid refresh response');
+        }
+
+        localStorage.setItem('authToken', newAccessToken);
+        return newAccessToken;
+      } catch (error) {
+        // this.handleAuthenticationFailure();
+        throw error;
+      } finally {
+        this.refreshTokenPromise = null;
+      }
+    })();
+
+    return this.refreshTokenPromise;
   }
 
   private handleAuthenticationFailure() {

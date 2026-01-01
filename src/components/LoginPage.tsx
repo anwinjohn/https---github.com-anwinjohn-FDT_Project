@@ -148,7 +148,7 @@ const LoginPage = () => {
   const stats = [
     { value: '99.9%', label: 'Uptime', icon: TrendingUp },
     { value: '24/7', label: 'Monitoring', icon: Activity },
-    { value: 'AI', label: 'Powered', icon: Brain },
+    { value: 'Ai', label: 'Powered', icon: Brain },
   ];
 
   return (
