@@ -32,7 +32,7 @@
   },
   "environment": "development",
   "logging": {
-    "console_enabled": true,
+    "console_enabled": false,
     "api_enabled": false,
     "level": "error",
     "maxEntries": 1000

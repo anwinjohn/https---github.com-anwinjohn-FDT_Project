@@ -76,7 +76,7 @@ class SecureApiClient {
             if (!encryptedData) {
               logger.error('Failed to encrypt', '', 'Interceptor Error');
             }
-            request.data = { payload: encryptedData };
+            request.data = { data: encryptedData };
           }
           return request;
         } catch (error) {
@@ -93,22 +93,16 @@ class SecureApiClient {
       (response) => {
         try {
           if (config.logging.console_enabled) {
-            console.log(response);
+            console.log('Raw response:', response.data);
           }
-          // Only decrypt if backend response contains encrypted payload
-          if (typeof response.data === 'string') {
-            // Entire string-encrypted data
-            response.data = this.decryptResponse(response.data);
-          } else if (response.data && response.data.encryptedData) {
-            // Encrypted under a property
-            response.data = this.decryptResponse(response.data.encryptedData);
+          if (response.data && typeof response.data == 'object' && typeof response.data.data === 'string') {
+            const decrypted = this.decryptResponse(response.data.data);
+            response.data = decrypted;
           }
-        } catch (err) {
-          console.warn(
-            'Response appears unencrypted or decryption failed. Returning raw data.'
-          );
+        } catch (error) {
+          logger.error('Response decryption failed', '', error);
+          throw error;
         }
-
         return response;
       },
 
@@ -259,7 +253,6 @@ class SecureApiClient {
         );
         const decryptedResponse = this.decryptResponse(response.data.data);
         const newAccessToken = decryptedResponse?.access_token;
-        console.log(decryptedResponse, 'fff');
         if (!newAccessToken) {
           throw new Error('Invalid refresh response');
         }
@@ -291,12 +284,15 @@ class SecureApiClient {
   // Public API methods with enhanced error handling
   async get<T = any>(
     url: string,
-    config?: AxiosRequestConfig
+    configs?: AxiosRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
+      if (config.logging.console_enabled) {
+        console.log('apiClient', 'post', `Posting to ${url} | ${configs}`);
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.get(
         url,
-        config
+        configs
       );
       return {
         success: true,
@@ -310,25 +306,26 @@ class SecureApiClient {
   async post<T = any>(
     url: string,
     data?: any,
-    config?: AxiosRequestConfig
+    configs?: AxiosRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
-      console.log(
-        'apiClient',
-        'post',
-        `Posting to ${url} with data: ${JSON.stringify(data)}`
-      );
+      if (config.logging.console_enabled) {
+        console.log('apiClient', 'post', `Posting to ${url} with data: ${JSON.stringify(data)}`
+        );
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.post(
         url,
         data,
-        config
+        configs
       );
       return {
         success: true,
         data: response.data,
       };
     } catch (error) {
-      logger.error('apiClient', 'post', `Error posting to ${url}: ${error}`);
+      if (config.logging.console_enabled) {
+        logger.error('apiClient', 'post', `Error posting to ${url}: ${error}`);
+      }
       return this.handleApiError(error);
     }
   }
@@ -336,13 +333,16 @@ class SecureApiClient {
   async put<T = any>(
     url: string,
     data?: any,
-    config?: AxiosRequestConfig
+    configs?: AxiosRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
+      if (config.logging.console_enabled) {
+        console.log('apiClient', 'post', `Posting to ${url} with data: ${JSON.stringify(data)}`);
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.put(
         url,
         data,
-        config
+        configs
       );
       return {
         success: true,
@@ -355,12 +355,15 @@ class SecureApiClient {
 
   async delete<T = any>(
     url: string,
-    config?: AxiosRequestConfig
+    configs?: AxiosRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
+      if (config.logging.console_enabled) {
+        console.log('apiClient', 'post', `Posting to ${url}`);
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.delete(
         url,
-        config
+        configs
       );
       return {
         success: true,

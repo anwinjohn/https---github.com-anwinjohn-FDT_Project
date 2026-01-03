@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
-import { useNotifications } from './notifications';
+import { useNotifications } from '../components/notifications';
 import config from '../config/app-config.json';
 import {
   Shield,
@@ -22,10 +22,46 @@ import {
   ScanFace,
 } from 'lucide-react';
 import FaceIdLogin from './FaceIdLogin';
+import { useLocalMachine } from "../context/DeviceInfoContext";
+import { useSystemSettings } from "../hooks/useSystemSettings";
 
 const LoginPage = () => {
+  
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
+  const { machineInfo, loading, available } = useLocalMachine();
+  const [username, setUsername] = useState("");
+  const [isReadOnly, setIsReadOnly] = useState(false);
+  const { fetchSettings, settings, loading: settingsLoading } = useSystemSettings();
+  const [isLDAPEnabled, setIsLDAPEnabled] = useState(false);
+
+  useEffect(() => {
+    const detectedUser = machineInfo?.UserName;
+    if (detectedUser) {
+      setUsername(detectedUser);
+      setIsReadOnly(true);
+    } else {
+      setUsername('');
+      setIsReadOnly(false);
+    }
+  }, [machineInfo]);
+
+  useEffect(() => {
+    const loadLdapSettings = async () => {
+      await fetchSettings('LDAP_LOGIN');
+    };
+    loadLdapSettings();
+  }, [fetchSettings]);
+
+  useEffect(() => {
+    const ldapValue = settings.get('LDAP_LOGIN');
+    //console.log('LDAP_LOGIN value from settings:', ldapValue);
+    if (ldapValue !== undefined) {
+      const isEnabled = Boolean(ldapValue);
+      setIsLDAPEnabled(isEnabled);
+      //console.log('LDAP Login enabled:', isEnabled);
+    }
+  }, [settings]);
 
   const [formData, setFormData] = useState({
     username: '',
@@ -68,6 +104,12 @@ const LoginPage = () => {
     setShowFaceId(false);
   };
 
+  useEffect(() => {
+    if (available && machineInfo) {
+      console.log("Auto-detected user:", machineInfo.User?.UserName);
+    }
+  }, [available, machineInfo]);
+
   const logoPath = config.dashboard.logo;
   const appName = config.app.name;
   const appShortName = config.app.shortName;
@@ -77,7 +119,7 @@ const LoginPage = () => {
     setIsLoading(true);
 
     try {
-      const success = await login(formData.username, formData.password);
+      const success = await login(username, formData.password);
 
       if (success) {
         setStep('success');
@@ -358,11 +400,10 @@ const LoginPage = () => {
                           <button
                             key={method.id}
                             onClick={() => handleAuthMethodChange(method.id)}
-                            className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${
-                              authMethod === method.id
-                                ? 'bg-white/20 text-white shadow-lg scale-105'
-                                : 'text-white/60 hover:text-white hover:bg-white/10'
-                            }`}
+                            className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${authMethod === method.id
+                              ? 'bg-white/20 text-white shadow-lg scale-105'
+                              : 'text-white/60 hover:text-white hover:bg-white/10'
+                              }`}
                           >
                             <method.icon className="w-5 h-5" />
                             <span className="text-xs font-medium">
@@ -387,8 +428,9 @@ const LoginPage = () => {
                         <input
                           type="text"
                           name="username"
-                          value={formData.username}
-                          onChange={handleInputChange}
+                          value={username}
+                          readOnly={isReadOnly}
+                          onChange={(e) => setUsername(e.target.value)}
                           className="login-input w-full pl-10 pr-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 backdrop-blur-sm"
                           placeholder="Enter your username"
                           required
