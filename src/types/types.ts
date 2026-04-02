@@ -3,12 +3,13 @@ export interface AlertSummary {
   rule_id: string;
   rule_desc: string;
   count: number;
-  scenario_logic:string; 
+  scenario_logic: string;
   rule_priority: string;
   active_status: boolean;
 }
 
-export interface UserAlertSummary {
+
+export interface UserAlertSummaryBase {
   emp_id: string;
   count: number;
   last_violation?: string; // Date of last violation
@@ -16,6 +17,17 @@ export interface UserAlertSummary {
   violation_types?: ViolationType[]; // Types of violations
 }
 
+export interface UserAlertSummary {
+  high_risk_cashiers_count: number;
+  total_cashiers: number;
+  date_range: {
+    from_date: string;
+    to_date: string;
+  };
+  avg_violations: string;
+  cashiers: UserAlertSummaryBase[]
+
+}
 export interface ViolationType {
   rule_id: string;
   rule_desc: string;
@@ -25,6 +37,21 @@ export interface ViolationType {
 export interface BranchAlertSummary {
   branch_name: string;
   count: number;
+}
+
+export interface BranchAlertDetails {
+  branch_name: string;
+  risk_level: string;
+  risk_score: number;
+  risk_percentage: number;
+  risk_rank: string;
+  total_alerts: number;
+  total_rows: number;
+  unique_cashiers: number;
+  unique_customers: number;
+  total_exposure: number;
+  last_alert_date: string;
+  top_rule: string;
 }
 
 // Dashboard state types
@@ -37,6 +64,8 @@ export interface DashboardData {
   alertsSummary: AlertSummary[];
   userAlertsSummary: UserAlertSummary[];
   branchAlertsSummary: BranchAlertSummary[];
+  branchAlertDetails: BranchAlertDetails[];
+  violationType: ViolationType[];
   isLoading: boolean;
   error: string | null;
   lastUpdated: Date | null;

@@ -16,6 +16,7 @@ interface AlertsResponse {
   current_page: number;
   total_open_alerts: number;
   total_high_priority_alerts: number;
+  pending_review_count: number;
   data: AlertSummary[];
 }
 
@@ -26,6 +27,7 @@ interface UseAlertsReturn {
   error: string | null;
   totalCount: number;
   totalOpenAlerts: number;
+  pendingReview: number;
   totalHighPriorityAlerts: number;
   currentPage: number;
   totalPages: number;
@@ -74,6 +76,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [totalOpenAlerts, setTotalOpenAlerts] = useState(0);
+  const [pendingReview, setPendingReview] = useState(0);
   const [totalHighPriorityAlerts, setTotalHighPriorityAlerts] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -194,6 +197,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
         setTotalCount(data.total || 0);
         setTotalPages(data.total_pages || 0);
         setTotalOpenAlerts(data.total_open_alerts || 0);
+        setPendingReview(data.pending_review_count || 0);
         setTotalHighPriorityAlerts(data.total_high_priority_alerts || 0);
         setHasNext(data.has_next || false);
         setHasPrev(data.has_prev || false);
@@ -216,6 +220,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
       setTotalCount(data.total);
       setTotalPages(data.total_pages);
       setTotalOpenAlerts(data.total_open_alerts);
+      setPendingReview(data.pending_review_count);
       setTotalHighPriorityAlerts(data.total_high_priority_alerts);
       setHasNext(data.has_next);
       setHasPrev(data.has_prev);
@@ -238,6 +243,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
       setTotalCount(0);
       setTotalPages(0);
       setTotalOpenAlerts(0);
+      setPendingReview(0);
       setTotalHighPriorityAlerts(0);
       setHasNext(false);
       setHasPrev(false);
@@ -363,6 +369,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
     error,
     totalCount,
     totalOpenAlerts,
+    pendingReview,
     totalHighPriorityAlerts,
     currentPage,
     totalPages,

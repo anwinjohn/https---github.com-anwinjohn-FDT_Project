@@ -48,6 +48,7 @@ const AlertsManagement: React.FC = () => {
     error,
     totalCount,
     totalOpenAlerts,
+    pendingReview,
     totalHighPriorityAlerts,
     currentPage,
     totalPages,
@@ -149,22 +150,22 @@ const AlertsManagement: React.FC = () => {
 
   const stats = [
     {
-      title: 'Total Alerts',
+      title: 'Total Individual Alerts',
       value: totalOpenAlerts,
       icon: AlertTriangle,
       color: 'from-red-500 to-red-600',
       bgColor: theme === 'dark' ? 'from-red-500/20 to-red-500/10' : 'from-red-100 to-red-50'
     },
     {
-      title: 'High Priority',
+      title: 'High Priority Alerts',
       value: totalHighPriorityAlerts,
       icon: Shield,
       color: 'from-orange-500 to-orange-600',
       bgColor: theme === 'dark' ? 'from-orange-500/20 to-orange-500/10' : 'from-orange-100 to-orange-50'
     },
     {
-      title: 'Pending Review',
-      value: alerts.length,
+      title: 'Alerts Pending Review',
+      value: pendingReview,
       icon: Clock,
       color: 'from-blue-500 to-blue-600',
       bgColor: theme === 'dark' ? 'from-blue-500/20 to-blue-500/10' : 'from-blue-100 to-blue-50'
@@ -313,7 +314,7 @@ const AlertsManagement: React.FC = () => {
                 }`}>
                 {formatNumber(stat.value)}
               </div>
-              <div className={`text-sm font-medium ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+              <div className={`alerts-panel  ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
                 }`}>
                 {stat.title}
               </div>
@@ -428,7 +429,7 @@ const AlertsManagement: React.FC = () => {
                               </div>
                               <div className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
                                 }`}>
-                                ID: {alert.alert_id.slice(0, 8)}...
+                                ID: {alert.alert_id}
                               </div>
                             </div>
                           </div>

@@ -1,24 +1,28 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { AlertSummary, UserAlertSummary, BranchAlertSummary, DateRange } from '../types/types';
+import { AlertSummary, UserAlertSummary, BranchAlertSummary, DateRange, ViolationType, BranchAlertDetails } from '../types/types';
 import config from '../config/app-config.json';
 
-const API_BASE_URL = 'http://127.0.0.1:8000';
+const API_BASE_URL = config.api?.baseUrl;
 
 interface UseApiReturn {
   alertsSummary: AlertSummary[];
   userAlertsSummary: UserAlertSummary[];
   branchAlertsSummary: BranchAlertSummary[];
+  branchAlertDetails : BranchAlertDetails[];
+  violationType: ViolationType[];
   isLoading: boolean;
   error: string | null;
   lastUpdated: Date | null;
   refreshData: () => Promise<void>;
 }
 
-export const useApi = (dateRange: DateRange, autoRefreshInterval = 60000): UseApiReturn => {
+export const useApi = (dateRange: DateRange, autoRefreshInterval = 0): UseApiReturn => {
   const [alertsSummary, setAlertsSummary] = useState<AlertSummary[]>([]);
   const [userAlertsSummary, setUserAlertsSummary] = useState<UserAlertSummary[]>([]);
   const [branchAlertsSummary, setBranchAlertsSummary] = useState<BranchAlertSummary[]>([]);
+  const [branchAlertDetails, setBranchAlertDetails] = useState<BranchAlertDetails[]>([]);
+  const [violationType, setViolationTypes] = useState<ViolationType[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -43,6 +47,7 @@ export const useApi = (dateRange: DateRange, autoRefreshInterval = 60000): UseAp
       const response = await axios.get<UserAlertSummary[]>(
         `${API_BASE_URL}/user-alerts-summary?from_date=${dateRange.fromDate}&to_date=${dateRange.toDate}`
       );
+      console.log(response.data);
       setUserAlertsSummary(response.data);
       return true;
     } catch (err) {
@@ -52,16 +57,44 @@ export const useApi = (dateRange: DateRange, autoRefreshInterval = 60000): UseAp
     }
   }, [dateRange]);
 
-  const fetchBranchAlertsSummary = useCallback(async () => {
+  // const fetchBranchAlertsSummary = useCallback(async () => {
+  //   try {
+  //     const response = await axios.get<BranchAlertSummary[]>(
+  //       `${API_BASE_URL}/branch-alerts-summary?from_date=${dateRange.fromDate}&to_date=${dateRange.toDate}`
+  //     );
+  //     setBranchAlertsSummary(response.data);
+  //     return true;
+  //   } catch (err) {
+  //     console.error('Error fetching branch alerts summary:', err);
+  //     setError('Failed to fetch branch alerts summary. Please try again later.');
+  //     return false;
+  //   }
+  // }, [dateRange]);
+
+   const fetchBranchAlertsSummary = useCallback(async () => {
     try {
-      const response = await axios.get<BranchAlertSummary[]>(
-        `${API_BASE_URL}/branch-alerts-summary?from_date=${dateRange.fromDate}&to_date=${dateRange.toDate}`
+      const response = await axios.get<BranchAlertDetails[]>(
+        `${API_BASE_URL}/branch-risk-data?from_date=${dateRange.fromDate}&to_date=${dateRange.toDate}`
       );
-      setBranchAlertsSummary(response.data);
+      setBranchAlertDetails(response.data);
       return true;
     } catch (err) {
-      console.error('Error fetching branch alerts summary:', err);
-      setError('Failed to fetch branch alerts summary. Please try again later.');
+      console.error('Error fetching branch alerts details:', err);
+      setError('Failed to fetch branch alerts details. Please try again later.');
+      return false;
+    }
+  }, [dateRange]);
+
+  const fetchViolationTypes = useCallback(async () => {
+    try {
+      const response = await axios.get<ViolationType[]>(
+        `${API_BASE_URL}/user-alerts-summary-alerts?from_date=${dateRange.fromDate}&to_date=${dateRange.toDate}`
+      );
+      setViolationTypes(response.data);
+      return true;
+    } catch (err) {
+      console.error('Error fetching violation types list:', err);
+      setError('Failed to fetch violation types list. Please try again later.');
       return false;
     }
   }, [dateRange]);
@@ -69,19 +102,20 @@ export const useApi = (dateRange: DateRange, autoRefreshInterval = 60000): UseAp
   const refreshData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    
+
     const results = await Promise.all([
       fetchAlertsSummary(),
       fetchUserAlertsSummary(),
-      fetchBranchAlertsSummary()
+      fetchBranchAlertsSummary(),
+      fetchViolationTypes()
     ]);
-    
+
     setIsLoading(false);
-    
+
     if (results.every(result => result)) {
       setLastUpdated(new Date());
     }
-  }, [fetchAlertsSummary, fetchUserAlertsSummary, fetchBranchAlertsSummary]);
+  }, [fetchAlertsSummary, fetchUserAlertsSummary, fetchBranchAlertsSummary, fetchViolationTypes]);
 
   // Initial data fetch
   useEffect(() => {
@@ -107,6 +141,8 @@ export const useApi = (dateRange: DateRange, autoRefreshInterval = 60000): UseAp
     alertsSummary,
     userAlertsSummary,
     branchAlertsSummary,
+    branchAlertDetails,
+    violationType,
     isLoading,
     error,
     lastUpdated,

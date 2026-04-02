@@ -26,7 +26,7 @@ import { useLocalMachine } from "../context/DeviceInfoContext";
 import { useSystemSettings } from "../hooks/useSystemSettings";
 
 const LoginPage = () => {
-  
+
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
   const { machineInfo, loading, available } = useLocalMachine();
@@ -523,7 +523,7 @@ const LoginPage = () => {
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ duration: 0.5 }}
-                  className="text-center"
+                  className="h-80 flex flex-col items-center justify-evenly"
                 >
                   <div className="mb-8">
                     <motion.div
@@ -555,7 +555,6 @@ const LoginPage = () => {
                       Login successful. Redirecting to dashboard...
                     </motion.p>
                   </div>
-
                   <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
@@ -566,6 +565,7 @@ const LoginPage = () => {
                   </div>
                 </motion.div>
               )}
+
             </AnimatePresence>
 
             {/* Footer Links */}

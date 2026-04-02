@@ -16,8 +16,8 @@
   },
   "dashboard": {
     "autoRefresh": {
-      "enabled": true,
-      "interval": 30000
+      "enabled": false,
+      "interval": 60000
     },
     "defaultDateRange": {
       "days": 7
