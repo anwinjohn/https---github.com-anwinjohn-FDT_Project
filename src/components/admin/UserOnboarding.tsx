@@ -91,7 +91,7 @@ const UserOnboarding: React.FC = () => {
       setFetchSuccess(false);
       
       // Call API to fetch user data by ID
-      const response = await fetch(`${config.api.baseUrl}/api/admin/fetch-user/${userId}`, {
+      const response = await fetch(`${config.api.baseUrl}/api/admin/fetch-userww/${userId}`, {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('authToken')}`

@@ -26,6 +26,10 @@ interface DecodedToken {
   [key: string]: any;
 }
 
+interface EncryptedApiResponse {
+  data: string;
+}
+
 class SecureApiClient {
   private static instance: SecureApiClient;
   private axiosInstance: AxiosInstance;
@@ -321,6 +325,49 @@ class SecureApiClient {
       return {
         success: true,
         data: response.data,
+      };
+    } catch (error) {
+      if (config.logging.console_enabled) {
+        logger.error('apiClient', 'post', `Error posting to ${url}: ${error}`);
+      }
+      return this.handleApiError(error);
+    }
+  }
+
+  // encryptRequest
+
+  async EncPost<T = any>(
+    url: string,
+    data?: any,
+    configs?: AxiosRequestConfig
+  ): Promise<ApiResponse<T>> {
+    try {
+      if (config.logging.console_enabled) {
+        console.log('apiClient', 'post', `Posting to ${url} with data: ${JSON.stringify(data)}`
+        );
+      }
+
+      const payload = JSON.stringify(data || {});
+      const encPayload = this.encryptRequest(payload)
+      let token = localStorage.getItem("authToken");
+
+      const response: AxiosResponse<EncryptedApiResponse> = await this.axiosInstance.post(
+        url,
+        { data: encPayload, },
+        {
+          ...configs,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Client-Version': config.app.version,
+            'X-Client-Type': 'web-app',
+            'X-Encrypted': 'true'
+          },
+        },
+      );
+      const decrypted = this.decryptResponse(response.data?.data);
+      return {
+        success: true,
+        data: decrypted.data,
       };
     } catch (error) {
       if (config.logging.console_enabled) {
