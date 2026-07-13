@@ -23,6 +23,7 @@ import AlertsManagement from './alerts/AlertsManagement';
 import SecureSidebar from './SecureSidebar';
 import PermissionGuard from './PermissionGuard';
 import AlertAuditLogComponent from './alerts/AlertAuditLog';
+import RulesManagement from './admin/RulesManagement';
 import {
   RefreshCw,
   AlertTriangle,
@@ -57,6 +58,9 @@ import {
 } from 'lucide-react';
 import { logger } from '../utils/logger';
 import config from '../config/app-config.json';
+import { Axios } from 'axios';
+import apiClient from '../utils/apiClient';
+
 
 const Dashboard: React.FC = () => {
   const { viewId } = useParams<{ viewId: string }>();
@@ -74,6 +78,11 @@ const Dashboard: React.FC = () => {
   const { user, logout, resetSessionTimer } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { getSetting } = useSystemSettings();
+
+  
+const [rules, setRules] = useState<AlertRule[]>([]);
+const [rulesLoading, setRulesLoading] = useState(false)
+
 
 
   // Update activeView when URL parameter changes
@@ -101,6 +110,44 @@ const Dashboard: React.FC = () => {
     refreshData,
   } = useApi(dateRange, shouldAutoRefresh ? ApiRefreshInteval : 0);
 
+
+  interface AlertRule {
+    rule_id: string;
+    scenario: string;
+    scenario_logic: string;
+    rule_priority: RulePriority;
+    active_status: boolean;
+    configs: RuleConfig[];
+  }
+  interface RuleConfig {
+  config_key: string;
+  config_value: string;
+  is_active: boolean;
+}
+
+
+useEffect(() => {
+  if (activeView !== 'rule-management') return;
+
+  const loadRules = async () => {
+    try {
+      setRulesLoading(true);
+
+      const response = await apiClient.get('http://localhost:8000/rules-config');
+console.log('rules config', response);
+      setRules(response.data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRulesLoading(false);
+    }
+  };
+
+  loadRules();
+}, [activeView]);
+
+
+type RulePriority = 'High' | 'Medium' | 'Low';
 
   const appName = config.app.name;
   const appShortName = config.app.shortName;
@@ -614,6 +661,8 @@ console.log( dateRange);
         );
       case 'alerts-management':
         return <AlertsManagement />;
+      case 'rule-management':
+        return <RulesManagement data={rules} isLoading={isLoading}/>;
       case 'risk-analytics':
         return <RiskAnalyticsDashboard dateRange={dateRange} />;
       case 'audit-logs':

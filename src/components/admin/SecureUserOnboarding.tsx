@@ -29,6 +29,7 @@ import { useNotifications } from '../notifications';
 import { useTheme } from '../../context/ThemeContext';
 import PermissionGuard from '../PermissionGuard';
 import apiClient from '../../utils/apiClient';
+import { useLocalMachine } from '../../context/DeviceInfoContext';
 
 // Menu ID for User Onboarding (should match database)
 const USER_ONBOARDING_MENU_ID = 15;
@@ -39,6 +40,7 @@ interface UserData {
   email_id: string;
   phone_number: string;
   title: string;
+  department: string;
 }
 
 interface Role {
@@ -58,6 +60,7 @@ const SecureUserOnboarding: React.FC = () => {
     email_id: '',
     phone_number: '',
     title: '',
+    department: '',
   });
   const [readonlyFields, setReadonlyFields] = useState({
     username: false,
@@ -65,6 +68,7 @@ const SecureUserOnboarding: React.FC = () => {
     email_id: false,
     phone_number: false,
     title: false,
+    department: false,
   });
   const [selectedRole, setSelectedRole] = useState<number | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -77,6 +81,7 @@ const SecureUserOnboarding: React.FC = () => {
   const [roleSearchQuery, setRoleSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
+  const { machineInfo, loading, available } = useLocalMachine();
 
   const { addNotification } = useNotifications();
   const { theme } = useTheme();
@@ -158,10 +163,11 @@ const SecureUserOnboarding: React.FC = () => {
       email_id: '',
       phone_number: '',
       title: '',
+      department: '',
     });
 
     if (!userId.trim()) {
-      addNotification('Please enter a User ID', 'warning');
+      addNotification('Please enter a User ID', 'warning',);
       return;
     }
 
@@ -180,7 +186,8 @@ const SecureUserOnboarding: React.FC = () => {
           full_name: user.FullName || '',
           email_id: user.EmailId || '',
           phone_number: (user.Phone || '').replace(/[^\d+]/g, ''),
-          title: user.Title || ''
+          title: user.Title || '',
+          department: user.Department || '',
         };
         setUserData(mappedData);
 
@@ -190,10 +197,11 @@ const SecureUserOnboarding: React.FC = () => {
           email_id: !!mappedData.email_id,
           phone_number: !!mappedData.phone_number,
           title: !!mappedData.title,
+          department: !!mappedData.department,
         });
 
         setFetchSuccess(true);
-        addNotification('User data fetched successfully', 'success');
+        addNotification('User data fetched successfully', 'success',);
       } else {
 
         setReadonlyFields({
@@ -202,6 +210,7 @@ const SecureUserOnboarding: React.FC = () => {
           email_id: false,
           phone_number: false,
           title: false,
+          department: false,
         });
 
         addNotification('User not found or error fetching data', 'error');
@@ -258,32 +267,46 @@ const SecureUserOnboarding: React.FC = () => {
     try {
       setIsSubmitting(true);
 
+      const authToken = localStorage.getItem("authToken");
+
       const onboardingData = {
         ...userData,
         role_id: selectedRole,
         source_user_id: userId || null,
         manual_entry: manualEntry,
+        machineInfo
       };
-
       const response = await apiClient.post(
-        '/api/admin/onboard-user',
+        '/admin/onboard-user',
         onboardingData
       );
+   
+      const resp_data = response.data;
 
-      if (response.success) {
-        addNotification('User onboarded successfully!', 'success');
-        // Reset form
-        setUserId('');
-        setUserData({
-          username: '',
-          full_name: '',
-          email_id: '',
-          phone_number: '',
-          title: '',
-        });
-        setSelectedRole(null);
-        setFetchSuccess(false);
-        setManualEntry(false);
+      if (response.success && resp_data) {
+
+        const status_code = resp_data.status_code
+ 
+        if (status_code != 200) {
+          addNotification(resp_data.detail, 'warning');
+        }
+        if (status_code == 200) {
+          addNotification('User onboarded successfully!', 'success');
+          // Reset form
+          setUserId('');
+          setUserData({
+            username: '',
+            full_name: '',
+            email_id: '',
+            phone_number: '',
+            title: '',
+            department: '',
+          });
+          setSelectedRole(null);
+          setFetchSuccess(false);
+          setManualEntry(false);
+        }
+
       } else {
         addNotification(response.error || 'Failed to onboard user', 'error');
       }
@@ -303,6 +326,7 @@ const SecureUserOnboarding: React.FC = () => {
       email_id: '',
       phone_number: '',
       title: '',
+      department: '',
     });
     setSelectedRole(null);
     setFetchSuccess(false);
@@ -605,7 +629,7 @@ const SecureUserOnboarding: React.FC = () => {
                     <Vault className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
                       type="tel"
-                      value={userData.phone_number}
+                      value={userData.department}
                       onChange={(e) =>
                         handleInputChange('phone_number', e.target.value)
                       }
@@ -614,7 +638,7 @@ const SecureUserOnboarding: React.FC = () => {
                         ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                         : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
                         }`}
-                      readOnly={readonlyFields.phone_number}
+                      readOnly={readonlyFields.department}
                     />
                   </div>
                 </div>

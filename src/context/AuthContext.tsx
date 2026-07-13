@@ -8,10 +8,18 @@ import { Clock, RefreshCw } from 'lucide-react';
 import { add } from 'date-fns';
 
 
+interface MachineInfo {
+  UserName: string;
+  Domain: string;
+  Identity: string;
+  MachineName: string;
+  Network: string;
+}
+
 interface AuthContextType {
   isAuthenticated: boolean;
   user: UserInfo | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: MachineInfo) => Promise<boolean>;
   logout: () => void;
   loading: boolean;
   resetSessionTimer: () => void;
@@ -451,7 +459,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const login = async (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: MachineInfo): Promise<boolean> => {
     try {
       // Clear any existing session data
       clearTimers();
@@ -459,23 +467,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       warningShownRef.current = false;
       isLoggingOutRef.current = false;
 
-      // Mock admin login
-      // if (username === 'admin' && password === 'admin123') {
-      //   localStorage.setItem('authToken', 'admin-token');
-      //   localStorage.setItem('userData', JSON.stringify(MOCK_ADMIN));
-      //   localStorage.setItem('lastActivity', Date.now().toString());
-      //   setUser(MOCK_ADMIN);
-      //   setIsAuthenticated(true);
-      //   resetSessionTimer();
-      //   return true;
-      // }
-      
       // Encrypt the credentials
       const iv = CryptoJS.lib.WordArray.random(16);
       const sessionId = iv.toString();
 
       const encrypted = CryptoJS.AES.encrypt(
-        JSON.stringify({ username, password, sessionId }),
+        JSON.stringify({ username, password, sessionId, isLDAPEnabled, machineInfo }),
         CryptoJS.enc.Utf8.parse(ENCRYPTION_KEY),
         {
           iv: iv,
@@ -485,7 +482,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
       // Combine IV and ciphertext
       const encryptedData = iv.concat(encrypted.ciphertext).toString(CryptoJS.enc.Base64);
-
       const response = await fetch(`${config.api.authBaseUrl}/login`, {
         method: 'POST',
         headers: {

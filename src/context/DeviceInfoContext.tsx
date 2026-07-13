@@ -16,7 +16,6 @@ export const LocalMachineProvider = ({ children }) => {
 
         const loadLocalInfo = async () => {
             const result = await fetchLocalMachineInfo();
-
             if (result.success) {
                 setMachineInfo(result.data);
                 setAvailable(true);

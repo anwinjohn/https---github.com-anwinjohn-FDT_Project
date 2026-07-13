@@ -8,6 +8,7 @@ import LoginPage from './components/LoginPage';
 import Dashboard from './components/Dashboard';
 import NotificationContainer from './components/notifications/NotificationContainer';
 import config from './config/app-config.json';
+import ChangePasswordPage from './components/ChangePasswordPage';
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
               <Route path="/login" element={
                 config.auth.enabled ? <LoginPage /> : <Navigate to="/dashboard" replace />
               } />
+              <Route path="/change-password" element={<ChangePasswordPage />} />
               <Route path="/dashboard/:viewId?" element={
                 <ProtectedRoute>
                   <Dashboard />

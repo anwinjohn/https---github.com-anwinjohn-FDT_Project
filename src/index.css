@@ -477,19 +477,19 @@ textarea {
    LOGIN FORM — Premium dark treatment
 ═══════════════════════════════════════════════════════════ */
 .login-input {
-  background-color: rgba(17, 17, 19, 0.95) !important;
-  color: rgb(250, 250, 250) !important;
+  background-color: rgb(250, 250, 250) !important;
+  color: rgb(12, 12, 12) !important;
   border-color: rgba(63, 63, 70, 0.7) !important;
   transition: all var(--duration-base) var(--ease-smooth) !important;
   letter-spacing: -0.01em !important;
 }
 .login-input:hover {
-  background-color: rgba(24, 24, 27, 0.98) !important;
+  background-color: rgba(238, 236, 236, 0.98) !important;
   border-color: rgba(113, 113, 122, 0.6) !important;
 }
 .login-input:focus {
-  background-color: rgba(17, 17, 19, 1) !important;
-  border-color: rgb(139, 92, 246) !important;
+  background-color: rgb(230, 230, 230) !important;
+  border-color: rgb(8, 165, 185) !important;
   box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15) !important;
 }
 .login-input::placeholder {

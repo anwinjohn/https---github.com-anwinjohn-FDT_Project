@@ -25,6 +25,7 @@ import FaceIdLogin from './FaceIdLogin';
 import { useLocalMachine } from "../context/DeviceInfoContext";
 import { useSystemSettings } from "../hooks/useSystemSettings";
 
+
 const LoginPage = () => {
 
   const navigate = useNavigate();
@@ -36,15 +37,19 @@ const LoginPage = () => {
   const [isLDAPEnabled, setIsLDAPEnabled] = useState(false);
 
   useEffect(() => {
-    const detectedUser = machineInfo?.UserName;
-    if (detectedUser) {
-      setUsername(detectedUser);
-      setIsReadOnly(true);
-    } else {
-      setUsername('');
-      setIsReadOnly(false);
+    if (machineInfo && !loading && isLDAPEnabled) {
+      setIsLoading(false);
+      const detectedUser = machineInfo?.UserName;
+      if (detectedUser) {
+        setUsername(detectedUser);
+        setIsReadOnly(true);
+      } else {
+        setUsername('');
+        setIsReadOnly(false);
+      }
     }
   }, [machineInfo]);
+
 
   useEffect(() => {
     const loadLdapSettings = async () => {
@@ -104,23 +109,24 @@ const LoginPage = () => {
     setShowFaceId(false);
   };
 
-  useEffect(() => {
-    if (available && machineInfo) {
-      console.log("Auto-detected user:", machineInfo.User?.UserName);
-    }
-  }, [available, machineInfo]);
-
   const logoPath = config.dashboard.logo;
   const appName = config.app.name;
   const appShortName = config.app.shortName;
+
+  interface MachineInfo {
+    UserName: string;
+    Domain: string;
+    Identity: string;
+    MachineName: string;
+    Network: string;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
-      const success = await login(username, formData.password);
-
+      const success = await login(username, formData.password, isLDAPEnabled, machineInfo);
       if (success) {
         setStep('success');
         setTimeout(() => {
@@ -162,6 +168,15 @@ const LoginPage = () => {
       description: 'SMS verification',
     },
   ].filter((method) => config.auth.methods[method.id]);
+
+  const handleForgotPassword = () => {
+    navigate('/change-password', {
+      state: {
+        forced: false,
+        username: username
+      }
+    });
+  };
 
   const securityFeatures = [
     // { icon: Shield, text: 'Enterprise Security', description: 'Bank-grade encryption' },
@@ -278,10 +293,9 @@ const LoginPage = () => {
                 </span>
               </h2>
               <p className="text-white/70 text-lg leading-relaxed max-w-lg">
-                A rule-based platform designed to detect and prevent fraud in
-                real time. Customize detection rules, monitor suspicious
-                activity, and gain actionable insights through intuitive
-                dashboards.
+                A comprehensive platform leveraging rule-based logic and artificial intelligence models to detect and prevent fraudulent activities in real time.
+                 The solution enables customization of detection rules, continuous monitoring of suspicious behavior, 
+                 and delivery of actionable insights through intuitive and informative dashboards.
               </p>
             </motion.div>
           </div>
@@ -486,9 +500,10 @@ const LoginPage = () => {
                       </label>
                       <button
                         type="button"
+                        onClick={handleForgotPassword}
                         className="text-blue-400 hover:text-blue-300 text-sm font-medium transition-colors hover:underline"
                       >
-                        Forgot password?
+                        Change Password?
                       </button>
                     </div>
 
