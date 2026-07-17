@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { AlertSummary, AlertDetail, AlertFilters, AlertDisposition } from '../types/alerts';
+import {
+  AlertSummary,
+  AlertDetail,
+  AlertFilters,
+  AlertDisposition,
+} from '../types/alerts';
 import apiClient from '../utils/apiClient';
 import { useNotifications } from '../components/notifications';
 import config from '../config/app-config.json';
@@ -62,16 +67,18 @@ const defaultFilters: AlertFilters = {
   priority: [],
   date_range: {
     from: '',
-    to: ''
+    to: '',
   },
   assigned_to: [],
   branch_name: [],
-  cust_nationality: []
+  cust_nationality: [],
 };
 
 export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
   const [alerts, setAlerts] = useState<AlertSummary[]>([]);
-  const [selectedAlert, setSelectedAlert] = useState<AlertDetail[] | null>(null);
+  const [selectedAlert, setSelectedAlert] = useState<AlertDetail[] | null>(
+    null
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
@@ -92,7 +99,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
     priorities: [],
     assignees: [],
     branches: [],
-    nationalities: []
+    nationalities: [],
   });
 
   const { addNotification } = useNotifications();
@@ -111,28 +118,28 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
 
     // Service type filter (multiple values)
     if (filters.service_type && filters.service_type.length > 0) {
-      filters.service_type.forEach(type => {
+      filters.service_type.forEach((type) => {
         queryParams.append('service_type', type);
       });
     }
 
     // Rule ID filter (multiple values)
     if (filters.rule_id && filters.rule_id.length > 0) {
-      filters.rule_id.forEach(id => {
+      filters.rule_id.forEach((id) => {
         queryParams.append('rule_id', id);
       });
     }
 
     // Status filter (multiple values)
     if (filters.status && filters.status.length > 0) {
-      filters.status.forEach(status => {
+      filters.status.forEach((status) => {
         queryParams.append('status', status);
       });
     }
 
     // Priority filter (multiple values)
     if (filters.priority && filters.priority.length > 0) {
-      filters.priority.forEach(priority => {
+      filters.priority.forEach((priority) => {
         queryParams.append('rule_priority', priority);
       });
     }
@@ -148,21 +155,21 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
 
     // Assigned to filter (multiple values)
     if (filters.assigned_to && filters.assigned_to.length > 0) {
-      filters.assigned_to.forEach(assignee => {
+      filters.assigned_to.forEach((assignee) => {
         queryParams.append('assigned_to', assignee);
       });
     }
 
     // Branch name filter (multiple values)
     if (filters.branch_name && filters.branch_name.length > 0) {
-      filters.branch_name.forEach(branch => {
+      filters.branch_name.forEach((branch) => {
         queryParams.append('branch_name', branch);
       });
     }
 
     // Customer nationality filter (multiple values)
     if (filters.cust_nationality && filters.cust_nationality.length > 0) {
-      filters.cust_nationality.forEach(nationality => {
+      filters.cust_nationality.forEach((nationality) => {
         queryParams.append('cust_nationality', nationality);
       });
     }
@@ -177,7 +184,9 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
       setErrorNotificationShown(false);
 
       const queryString = buildQueryParams();
-      const apiUrl = `${config.api.baseUrl}/open-alerts-summary${queryString ? `?${queryString}` : ''}`;
+      const apiUrl = `${config.api.baseUrl}/open-alerts-summary${
+        queryString ? `?${queryString}` : ''
+      }`;
       const response = await fetch(apiUrl, {
         method: 'GET',
         headers: {
@@ -189,7 +198,6 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
       const data: AlertsResponse = await response.json();
-
 
       // Handle empty data array
       if (!data.data || data.data.length === 0) {
@@ -207,7 +215,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
 
       // Deduplicate data based on alert_id (in case API returns duplicates)
       const uniqueAlertsMap = new Map<string, AlertSummary>();
-      data.data.forEach(alert => {
+      data.data.forEach((alert) => {
         if (!uniqueAlertsMap.has(alert.alert_id)) {
           uniqueAlertsMap.set(alert.alert_id, alert);
         }
@@ -225,9 +233,9 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
       setHasNext(data.has_next);
       setHasPrev(data.has_prev);
       setCurrentPage(data.current_page);
-
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alerts';
+      const errorMessage =
+        err instanceof Error ? err.message : 'Failed to fetch alerts';
       setError(errorMessage);
 
       // Only show notification once per error state
@@ -252,92 +260,108 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
     }
   }, [buildQueryParams, addNotification, errorNotificationShown]);
 
-  const fetchAlertDetails = useCallback(async (alertId: string) => {
-    try {
-      setLoading(true);
-      setError(null);
-      setErrorNotificationShown(false);
+  const fetchAlertDetails = useCallback(
+    async (alertId: string) => {
+      try {
+        setLoading(true);
+        setError(null);
+        setErrorNotificationShown(false);
 
-      const response = await fetch(`${config.api.baseUrl}/open-alerts-details`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ alert_id: alertId })
-      });
+        const response = await fetch(
+          `${config.api.baseUrl}/open-alerts-details`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ alert_id: alertId }),
+          }
+        );
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data: AlertDetail[] = await response.json();
+
+        // Handle empty response
+        if (!data || data.length === 0) {
+          setSelectedAlert([]);
+          return;
+        }
+
+        setSelectedAlert(data);
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : 'Failed to fetch alert details';
+        setError(errorMessage);
+
+        // Only show notification once per error state
+        if (!errorNotificationShown) {
+          addNotification('Failed to load alert details', 'error');
+          setErrorNotificationShown(true);
+        }
+        console.error('Error fetching alert details:', err);
+        setSelectedAlert(null);
+      } finally {
+        setLoading(false);
       }
-      const data: AlertDetail[] = await response.json();
-  
-      // Handle empty response
-      if (!data || data.length === 0) {
-        setSelectedAlert([]);
-        return;
+    },
+    [addNotification, errorNotificationShown]
+  );
+
+  const disposeAlert = useCallback(
+    async (disposition: AlertDisposition): Promise<boolean> => {
+      try {
+        setLoading(true);
+        setError(null);
+        setErrorNotificationShown(false);
+        console.log('Disposing alert with disposition:', disposition);
+        // In production, this would call the actual API
+        const response = await apiClient.post(
+          '/admin/alerts/update-status',
+          disposition
+        );
+
+        if (response.success) {
+          addNotification('Alert disposed successfully', 'success');
+          await fetchAlerts(); // Refresh the alerts list
+          return true;
+        } else {
+          throw new Error(response.error || 'Failed to dispose alert');
+        }
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : 'Failed to dispose alert';
+        setError(errorMessage);
+
+        // Only show notification once per error state
+        if (!errorNotificationShown) {
+          addNotification(errorMessage, 'error');
+          setErrorNotificationShown(true);
+        }
+
+        console.error('Error disposing alert:', err);
+        return false;
+      } finally {
+        setLoading(false);
       }
-
-      setSelectedAlert(data);
-
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alert details';
-      setError(errorMessage);
-
-      // Only show notification once per error state
-      if (!errorNotificationShown) {
-        addNotification('Failed to load alert details', 'error');
-        setErrorNotificationShown(true);
-      }
-      console.error('Error fetching alert details:', err);
-      setSelectedAlert(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [addNotification, errorNotificationShown]);
-
-  const disposeAlert = useCallback(async (disposition: AlertDisposition): Promise<boolean> => {
-    try {
-      setLoading(true);
-      setError(null);
-      setErrorNotificationShown(false);
-
-      // In production, this would call the actual API
-      const response = await apiClient.post('/api/alerts/dispose', disposition);
-
-      if (response.success) {
-        addNotification('Alert disposed successfully', 'success');
-        await fetchAlerts(); // Refresh the alerts list
-        return true;
-      } else {
-        throw new Error(response.error || 'Failed to dispose alert');
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to dispose alert';
-      setError(errorMessage);
-
-      // Only show notification once per error state
-      if (!errorNotificationShown) {
-        addNotification(errorMessage, 'error');
-        setErrorNotificationShown(true);
-      }
-
-      console.error('Error disposing alert:', err);
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }, [addNotification, fetchAlerts, errorNotificationShown]);
+    },
+    [addNotification, fetchAlerts, errorNotificationShown]
+  );
 
   const updateFilters = useCallback((newFilters: Partial<AlertFilters>) => {
-    setFilters(prev => ({ ...prev, ...newFilters }));
+    setFilters((prev) => ({ ...prev, ...newFilters }));
     setCurrentPage(1); // Reset to first page when filters change
   }, []);
 
-  const setPage = useCallback((page: number) => {
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page);
-    }
-  }, [totalPages]);
+  const setPage = useCallback(
+    (page: number) => {
+      if (page >= 1 && page <= totalPages) {
+        setCurrentPage(page);
+      }
+    },
+    [totalPages]
+  );
 
   const handleSetPageSize = useCallback((size: number) => {
     setPageSize(size);
@@ -385,6 +409,6 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
     setPage,
     setPageSize: handleSetPageSize,
     refreshAlerts,
-    fetchFilterOptions
+    fetchFilterOptions,
   };
 };

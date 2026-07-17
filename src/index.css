@@ -34,7 +34,7 @@
        Background is barely-off-white (f8f9fb) so pure-
        white cards pop cleanly against it.
     ─────────────────────────────────────────────────── */
-    --color-background:     248 249 251;  /* f8f9fb — near-white with no tint */
+    --color-background:     233 239 247;  /* f8f9fb — near-white with no tint */
     --color-surface:        255 255 255;  /* Pure white cards */
     --color-surface-hover:  252 252 255;  /* Barely perceptible lift */
 
@@ -123,6 +123,7 @@
     scroll-behavior: smooth;
     text-rendering: optimizeLegibility;
     -webkit-text-size-adjust: 100%;
+    font-size: 14px;
   }
 
   body {

@@ -50,19 +50,32 @@ export interface AlertDetail {
 
 export interface AlertDisposition {
   alert_id: string;
+  action_type: string;
   disposition_type: 'TRUE_POSITIVE' | 'FALSE_POSITIVE';
   risk_category: 'HIGH' | 'MEDIUM' | 'LOW';
-  findings: string;
-  remarks: string;
-  action_taken: string;
-  escalated: boolean;
-  escalation_reason?: string;
-  reviewed_by: string;
-  reviewed_at: string;
+  analyst_findings: string;
+  analyst_remarks: string;
+  analyst_actions: string;
+  analyst_recommendation?: string | null;
+  ai_findings: string;
+  ai_remarks: string;
+  ai_actions: string;
+  ai_confidence_score: number;
+  ai_similarity_score: number;
+  is_escalated: boolean;
+  escalated_to: string | null;
+  escalation_reason?: string | null;
+  user_comments: string | null;
+  actioned_by: string;
+  is_block_transaction?: boolean | false;
+  block_reason?: string | null;
+  actioned_at: string;
   supporting_documents?: string[];
   follow_up_required: boolean;
   follow_up_date?: string;
+  followup_assigned_to: string;
   compliance_notes?: string;
+  machine_info?: MachineInfo;
 }
 
 export interface AlertFilters {
@@ -90,9 +103,17 @@ export interface AlertAuditLog {
   ip_address?: string;
   user_agent?: string;
 }
-export interface AlertDisposition {
-  alert_id: string;
-  disposition: 'APPROVED' | 'REJECTED' | 'ESCALATED';
-  comments: string;
-  assigned_to?: string;
+// export interface AlertDisposition {
+//   alert_id: string;
+//   disposition: 'APPROVED' | 'REJECTED' | 'ESCALATED';
+//   comments: string;
+//   assigned_to?: string;
+// }
+
+export interface MachineInfo {
+  UserName: string;
+  Domain: string;
+  Identity: string;
+  MachineName: string;
+  Network: string;
 }

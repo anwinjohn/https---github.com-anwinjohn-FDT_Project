@@ -4,7 +4,7 @@ import config from '../config/app-config.json';
 import { logger } from './logger';
 import { jwtDecode } from 'jwt-decode';
 import { string } from 'three/tsl';
-import { useLocalMachine } from "../context/DeviceInfoContext";
+import { useLocalMachine } from '../context/DeviceInfoContext';
 
 // Simplified Security Configuration
 const SECURITY_CONFIG = {
@@ -30,7 +30,6 @@ interface DecodedToken {
 interface EncryptedApiResponse {
   data: string;
 }
-
 
 class SecureApiClient {
   private static instance: SecureApiClient;
@@ -98,7 +97,8 @@ class SecureApiClient {
     this.axiosInstance.interceptors.response.use(
       (response) => {
         try {
-          const isEncrypted = response.config?.headers?.['X-Encrypted'] === 'true' ||
+          const isEncrypted =
+            response.config?.headers?.['X-Encrypted'] === 'true' ||
             response.config?.headers?.['x-encrypted'] === 'true';
 
           if (config.logging.console_enabled) {
@@ -106,9 +106,12 @@ class SecureApiClient {
             console.log('response.data', response.data);
             console.log('tyepeof response.data', typeof response.data);
             console.log('response.data.data', response.data.data);
-
           }
-          if (isEncrypted && response.data && typeof response.data == 'string') {
+          if (
+            isEncrypted &&
+            response.data &&
+            typeof response.data == 'string'
+          ) {
             if (config.logging.console_enabled) {
               console.log('data: ', response.data);
               console.log('DECY data', this.decryptResponse(response.data));
@@ -191,7 +194,7 @@ class SecureApiClient {
 
   private decryptResponse = (encryptedData: string): any => {
     try {
-      console.log('Trying to decrypt : ', encryptedData);
+      // console.log('Trying to decrypt : ', encryptedData);
       // Decode base64
       const encryptedBytes = CryptoJS.enc.Base64.parse(encryptedData);
       // Extract IV (first 16 bytes/4 words)
@@ -218,7 +221,6 @@ class SecureApiClient {
       const decryptedStr = decrypted.toString(CryptoJS.enc.Utf8);
       return JSON.parse(decryptedStr);
     } catch (error) {
-
       logger.error('Error while decrypt response', '', error);
       throw new Error('Failed to decrypt server response');
     }
@@ -329,7 +331,10 @@ class SecureApiClient {
   ): Promise<ApiResponse<T>> {
     try {
       if (config.logging.console_enabled) {
-        console.log('apiClient', 'post', `Posting to ${url} with data: ${JSON.stringify(data)}`
+        console.log(
+          'apiClient',
+          'post',
+          `Posting to ${url} with data: ${JSON.stringify(data)}`
         );
       }
       const response: AxiosResponse<T> = await this.axiosInstance.post(
@@ -337,7 +342,7 @@ class SecureApiClient {
         data,
         configs
       );
-      
+
       if (config.logging.console_enabled) {
         console.log('POST Response', response.data);
       }
@@ -359,7 +364,11 @@ class SecureApiClient {
   ): Promise<ApiResponse<T>> {
     try {
       if (config.logging.console_enabled) {
-        console.log('apiClient', 'post', `Posting to ${url} with data: ${JSON.stringify(data)}`);
+        console.log(
+          'apiClient',
+          'post',
+          `Posting to ${url} with data: ${JSON.stringify(data)}`
+        );
       }
       const response: AxiosResponse<T> = await this.axiosInstance.put(
         url,
