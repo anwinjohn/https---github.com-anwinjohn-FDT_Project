@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useNotifications } from '../components/notifications';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import CryptoJS from 'crypto-js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Clock, RefreshCw } from 'lucide-react';

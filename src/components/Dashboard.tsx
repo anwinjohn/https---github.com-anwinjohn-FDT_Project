@@ -22,7 +22,7 @@ import SecureAdminDashboard from './admin/SecureAdminDashboard';
 import AlertsManagement from './alerts/AlertsManagement';
 import SecureSidebar from './SecureSidebar';
 import PermissionGuard from './PermissionGuard';
-import AlertAuditLogComponent from './alerts/AlertAuditLog';
+import SystemLogMonitor from './alerts/AlertAuditLog';
 import RulesManagement from './admin/RulesManagement';
 import {
   RefreshCw,
@@ -57,7 +57,7 @@ import {
   Power,
 } from 'lucide-react';
 import { logger } from '../utils/logger';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import { Axios } from 'axios';
 import apiClient from '../utils/apiClient';
 
@@ -707,7 +707,7 @@ const Dashboard: React.FC = () => {
         return <RiskAnalyticsDashboard dateRange={dateRange} />;
       case 'audit-logs':
       case 'logs':
-        return <AlertAuditLogComponent />;
+        return <SystemLogMonitor />;
       case 'rules':
         return (
           <DetailedRulesPanel data={alertsSummary} isLoading={isLoading} />
@@ -926,12 +926,12 @@ const Dashboard: React.FC = () => {
                               ? 'bg-gray-500/20 text-gray-400 border-gray-500/30 cursor-not-allowed'
                               : 'bg-gray-200 text-gray-500 border-gray-300 cursor-not-allowed'
                             : autoRefresh
-                            ? theme === 'dark'
-                              ? 'bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-200 border-green-500/40 shadow-green-500/20'
-                              : 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 border-green-300 shadow-green-200'
-                            : theme === 'dark'
-                            ? 'bg-gradient-to-r from-gray-500/20 to-slate-500/20 text-gray-300 border-gray-500/30 hover:from-gray-500/30 hover:to-slate-500/30'
-                            : 'bg-gradient-to-r from-gray-100 to-slate-100 text-gray-600 border-gray-300 hover:from-gray-200 hover:to-slate-200'
+                              ? theme === 'dark'
+                                ? 'bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-200 border-green-500/40 shadow-green-500/20'
+                                : 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 border-green-300 shadow-green-200'
+                              : theme === 'dark'
+                                ? 'bg-gradient-to-r from-gray-500/20 to-slate-500/20 text-gray-300 border-gray-500/30 hover:from-gray-500/30 hover:to-slate-500/30'
+                                : 'bg-gradient-to-r from-gray-100 to-slate-100 text-gray-600 border-gray-300 hover:from-gray-200 hover:to-slate-200'
                         }`}
                       >
                         {autoRefresh && masterLiveEnabled ? (
@@ -943,8 +943,8 @@ const Dashboard: React.FC = () => {
                           {!masterLiveEnabled
                             ? 'Live Disabled'
                             : autoRefresh
-                            ? 'Live'
-                            : 'Manual'}
+                              ? 'Live'
+                              : 'Manual'}
                         </span>
                       </motion.button>
 

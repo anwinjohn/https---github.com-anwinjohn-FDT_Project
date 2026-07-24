@@ -8,7 +8,7 @@ import {
   UserSearchFilters,
   PaginationInfo,
 } from '../types/admin';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 
 export const useAdminApi = () => {
   const [loading, setLoading] = useState(false);

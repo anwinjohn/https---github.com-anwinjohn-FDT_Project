@@ -17,7 +17,7 @@ import {
   Upload
 } from 'lucide-react';
 import { useNotifications } from '../notifications';
-import config from '../../config/app-config.json';
+import { appConfig as config } from '../../config/runtime-config';
 
 interface UserData {
   username: string;

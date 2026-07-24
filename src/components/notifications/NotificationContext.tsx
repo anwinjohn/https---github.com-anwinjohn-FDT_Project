@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect } from 'react';
-import config from '../../config/app-config.json'
+import { appConfig as config } from '../../config/runtime-config';
 
 export interface Notification {
   id: string;

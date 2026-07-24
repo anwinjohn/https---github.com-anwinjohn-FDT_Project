@@ -18,7 +18,7 @@ import {
     Check,
     X,
 } from 'lucide-react';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import { useNotifications } from '../components/notifications';
 import apiClient from '../utils/apiClient';
 

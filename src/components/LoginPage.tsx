@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../components/notifications';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import {
   Shield,
   Lock,

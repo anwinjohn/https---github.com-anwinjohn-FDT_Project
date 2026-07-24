@@ -7,7 +7,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './components/LoginPage';
 import Dashboard from './components/Dashboard';
 import NotificationContainer from './components/notifications/NotificationContainer';
-import config from './config/app-config.json';
+import { appConfig as config } from './config/runtime-config';
 import ChangePasswordPage from './components/ChangePasswordPage';
 
 function App() {

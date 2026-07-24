@@ -36,7 +36,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useNotifications } from '../components/notifications';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 
 const API_BASE_URL = config.api?.baseUrl;
 

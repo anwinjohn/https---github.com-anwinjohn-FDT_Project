@@ -147,55 +147,62 @@ const AlertManagementTable: React.FC = () => {
   //   }
   // }, [addNotification, user?.full_name]);
 
-  // const fetchAlertDetails = useCallback(async (alertId: string) => {
-  //   try {
-  //     setLoading(true);
-  //     setError(null);
+  // const fetchAlertDetails = useCallback(
+  //   async (alertId: string) => {
+  //     try {
+  //       setLoading(true);
+  //       setError(null);
 
-  //     const response = await fetch('http://127.0.0.1:8000/open-alerts-details', {
-  //       method: 'POST',
-  //       headers: {
-  //         'Content-Type': 'application/json',
-  //       },
-  //       body: JSON.stringify({ alert_id: alertId })
-  //     });
+  //       const response = await fetch(
+  //         'http://127.0.0.1:8000/open-alerts-details',
+  //         {
+  //           method: 'POST',
+  //           headers: {
+  //             'Content-Type': 'application/json',
+  //           },
+  //           body: JSON.stringify({ alert_id: alertId }),
+  //         }
+  //       );
 
-  //     if (!response.ok) {
-  //       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  //       if (!response.ok) {
+  //         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  //       }
+
+  //       const data = await response.json();
+  //       setSelectedAlertDetails(data);
+
+  //       // Log the successful fetch
+  //       logger.info(
+  //         `Alert details fetched for ID: ${alertId}`,
+  //         user?.full_name,
+  //         { alertId }
+  //       );
+  //     } catch (err) {
+  //       const errorMessage =
+  //         err instanceof Error ? err.message : 'Failed to fetch alert details';
+  //       setError(errorMessage);
+  //       console.error('Error fetching alert details:', err);
+
+  //       // Log the error
+  //       logger.error(
+  //         'Failed to fetch alert details',
+  //         user?.full_name,
+  //         { alertId, error: errorMessage },
+  //         err instanceof Error ? err : new Error(errorMessage)
+  //       );
+
+  //       // Show notification
+  //       addNotification('Failed to load alert details', 'error');
+  //     } finally {
+  //       setLoading(false);
   //     }
-
-  //     const data = await response.json();
-  //     setSelectedAlertDetails(data);
-
-  //     // Log the successful fetch
-  //     logger.info(
-  //       `Alert details fetched for ID: ${alertId}`,
-  //       user?.full_name,
-  //       { alertId }
-  //     );
-  //   } catch (err) {
-  //     const errorMessage = err instanceof Error ? err.message : 'Failed to fetch alert details';
-  //     setError(errorMessage);
-  //     console.error('Error fetching alert details:', err);
-
-  //     // Log the error
-  //     logger.error(
-  //       'Failed to fetch alert details',
-  //       user?.full_name,
-  //       { alertId, error: errorMessage },
-  //       err instanceof Error ? err : new Error(errorMessage)
-  //     );
-
-  //     // Show notification
-  //     addNotification('Failed to load alert details', 'error');
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // }, [addNotification, user?.full_name]);
+  //   },
+  //   [addNotification, user?.full_name]
+  // );
 
   const handleViewDetails = async (alert: AlertSummary) => {
     setSelectedAlertId(alert.alert_id);
-    //await fetchAlertDetails(alert.alert_id);
+    // await fetchAlertDetails(alert.alert_id);
     //setShowDetailsModal(true);
   };
 
@@ -416,12 +423,12 @@ const AlertManagementTable: React.FC = () => {
           ? 'bg-red-500/20 text-red-300 border-red-500/30'
           : 'bg-red-100 text-red-700 border-red-300'
         : level === 'MEDIUM'
-        ? theme === 'dark'
-          ? 'bg-orange-500/20 text-orange-300 border-orange-500/30'
-          : 'bg-orange-100 text-orange-700 border-orange-300'
-        : theme === 'dark'
-        ? 'bg-green-500/20 text-green-300 border-green-500/30'
-        : 'bg-green-100 text-green-700 border-green-300';
+          ? theme === 'dark'
+            ? 'bg-orange-500/20 text-orange-300 border-orange-500/30'
+            : 'bg-orange-100 text-orange-700 border-orange-300'
+          : theme === 'dark'
+            ? 'bg-green-500/20 text-green-300 border-green-500/30'
+            : 'bg-green-100 text-green-700 border-green-300';
 
     return (
       <span
@@ -530,8 +537,8 @@ const AlertManagementTable: React.FC = () => {
                     ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                     : 'bg-blue-100 text-blue-700 border border-blue-300'
                   : theme === 'dark'
-                  ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+                    ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
               }`}
             >
               <Filter className="w-4 h-4" />
@@ -829,8 +836,8 @@ const AlertManagementTable: React.FC = () => {
                   Array.isArray(v)
                     ? v.length > 0
                     : typeof v === 'object'
-                    ? Object.values(v).some((x) => x)
-                    : v
+                      ? Object.values(v).some((x) => x)
+                      : v
                 ) && (
                   <button
                     onClick={() => {
@@ -1223,8 +1230,8 @@ const AlertManagementTable: React.FC = () => {
                     currentPage === 1
                       ? 'opacity-50 cursor-not-allowed'
                       : theme === 'dark'
-                      ? 'bg-white/10 hover:bg-white/20 text-white'
-                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                        ? 'bg-white/10 hover:bg-white/20 text-white'
+                        : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                   }`}
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -1242,8 +1249,8 @@ const AlertManagementTable: React.FC = () => {
                     currentPage === totalPages
                       ? 'opacity-50 cursor-not-allowed'
                       : theme === 'dark'
-                      ? 'bg-white/10 hover:bg-white/20 text-white'
-                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                        ? 'bg-white/10 hover:bg-white/20 text-white'
+                        : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                   }`}
                 >
                   Next

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { AlertSummary, UserAlertSummary, BranchAlertSummary, DateRange, ViolationType, BranchAlertDetails } from '../types/types';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 
 const API_BASE_URL = config.api?.baseUrl;
 

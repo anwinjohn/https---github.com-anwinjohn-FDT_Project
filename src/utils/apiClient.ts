@@ -1,17 +1,14 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import CryptoJS from 'crypto-js';
-import config from '../config/app-config.json';
+import { appConfig as config, securityConfig } from '../config/runtime-config';
 import { logger } from './logger';
 import { jwtDecode } from 'jwt-decode';
-import { string } from 'three/tsl';
-import { useLocalMachine } from '../context/DeviceInfoContext';
 
 // Simplified Security Configuration
 const SECURITY_CONFIG = {
   SECRET_KEY: 'xK6$9pF2!qW8#zR1@lY3*uM5%vS7^dN$',
   JWT_SECRET:
     '3d915e06c745490f95e0d1713b2d67a168e5db1ed2cb6bd7d1622171f2a0bb5e',
-  MAX_REQUEST_AGE: 300, // 5 minutes in seconds
 };
 
 interface ApiResponse<T = any> {
@@ -165,7 +162,7 @@ class SecureApiClient {
       const exp = decodedPayload.exp;
       if (!exp) return true;
       const now = Math.floor(Date.now() / 1000);
-      return exp < now;
+      return exp < now + securityConfig.security.jwt.expirationBuffer;
     } catch (err) {
       console.error('Error decoding token:', err);
       return true;
@@ -174,7 +171,9 @@ class SecureApiClient {
 
   private encryptRequest = (data: string): any => {
     try {
-      const iv = CryptoJS.lib.WordArray.random(16);
+      const iv = CryptoJS.lib.WordArray.random(
+        securityConfig.security.encryption.ivLength
+      );
       const encrypted = CryptoJS.AES.encrypt(
         data,
         CryptoJS.enc.Utf8.parse(SECURITY_CONFIG.SECRET_KEY),
@@ -200,12 +199,12 @@ class SecureApiClient {
       // Extract IV (first 16 bytes/4 words)
       const iv = CryptoJS.lib.WordArray.create(
         encryptedBytes.words.slice(0, 4),
-        16
+        securityConfig.security.encryption.ivLength
       );
       // Extract ciphertext (rest of the data)
       const ciphertext = CryptoJS.lib.WordArray.create(
         encryptedBytes.words.slice(4),
-        encryptedBytes.sigBytes - 16
+        encryptedBytes.sigBytes - securityConfig.security.encryption.ivLength
       );
       // Decrypt
       const decrypted = CryptoJS.AES.decrypt(

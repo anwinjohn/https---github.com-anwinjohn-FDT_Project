@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import apiClient from '../utils/apiClient';
 
 interface SystemSetting {

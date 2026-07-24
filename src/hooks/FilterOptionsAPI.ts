@@ -2,7 +2,7 @@
 // In a real application, these would be actual API calls to your backend
 
 import { string } from 'three/tsl';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 
 
 interface RuleIdResponse {

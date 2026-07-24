@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/apiClient';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 
 export interface Permission {
   menuId: number;

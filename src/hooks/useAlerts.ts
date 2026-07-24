@@ -7,7 +7,7 @@ import {
 } from '../types/alerts';
 import apiClient from '../utils/apiClient';
 import { useNotifications } from '../components/notifications';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import FilterOptionsAPI from './FilterOptionsAPI';
 
 interface AlertsResponse {
