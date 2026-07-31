@@ -439,7 +439,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
   };
 
   const handleUserAction = (action, user) => {
-    console.log(`Action: ${action} for user:`, user.username);
+    // console.log(`Action: ${action} for user:`, user.username);
     setOpenDropdown(null);
 
     // Handle different actions

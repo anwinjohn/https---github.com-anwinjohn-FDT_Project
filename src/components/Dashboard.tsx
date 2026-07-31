@@ -152,7 +152,7 @@ const Dashboard: React.FC = () => {
         setRulesLoading(true);
 
         const response = await apiClient.get(`${apiBaseUrl}/rules-config`);
-        console.log('rules config', response);
+        // console.log('rules config', response);
         setRules(response.data);
       } catch (err) {
         console.error(err);
@@ -196,7 +196,7 @@ const Dashboard: React.FC = () => {
     },
     [resetSessionTimer]
   );
-  console.log(dateRange);
+  // console.log(dateRange);
   const handleRefresh = useCallback(() => {
     refreshData();
     resetSessionTimer();

@@ -66,7 +66,7 @@ export const useApi = (
       const response = await axios.get<UserAlertSummary[]>(
         `${API_BASE_URL}/user-alerts-summary?from_date=${dateRange.fromDate}&to_date=${dateRange.toDate}`
       );
-      console.log(response.data);
+      // console.log(response.data);
       setUserAlertsSummary(response.data);
       return true;
     } catch (err) {

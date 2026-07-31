@@ -31,7 +31,7 @@ export const getDateDaysAgo = (days: number): Date => {
 export const getDefaultDateRange = () => {
   const today = getTodayDate();
   const days = config.dashboard.defaultDateRange?.days ?? 7;
-  console.log('Datexx : ', config.dashboard.defaultDateRange?.days);
+  // console.log('Datexx : ', config.dashboard.defaultDateRange?.days);
   const fromDate = getDateDaysAgo(days);
   return {
     fromDate: formatDateForApi(fromDate),

@@ -77,7 +77,8 @@ const defaultFilters: AlertFilters = {
 
 export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
   const [alerts, setAlerts] = useState<AlertSummary[]>([]);
-  const [selectedAlert, setSelectedAlert] = useState<AlertDetailsResponse | null>(null);
+  const [selectedAlert, setSelectedAlert] =
+    useState<AlertDetailsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
@@ -308,7 +309,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
         setLoading(true);
         setError(null);
         setErrorNotificationShown(false);
-        console.log('Disposing alert with disposition:', disposition);
+        // console.log('Disposing alert with disposition:', disposition);
         // In production, this would call the actual API
         const response = await apiClient.post(
           '/admin/alerts/update-status',
