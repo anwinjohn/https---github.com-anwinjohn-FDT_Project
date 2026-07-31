@@ -41,6 +41,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useNotifications } from '../notifications';
 import { AlertSummary, AlertDisposition } from '../../types/alerts';
 import { logger } from '../../utils/logger';
+import { appConfig as config } from '../../config/runtime-config';
 
 // Disposition type labels
 const DISPOSITION_LABELS = {
@@ -53,6 +54,9 @@ const DISPOSITION_LABELS = {
   P: 'Positive Match',
   X: 'External Escalation',
 };
+
+const apiBaseUrl = config.api.baseUrl;
+const aiURL = config.api.aisuggestions;
 
 // Risk category options
 const RISK_CATEGORIES = ['HIGH', 'MEDIUM', 'LOW'];
@@ -726,16 +730,13 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
         setLoading(true);
         setError(null);
 
-        const response = await fetch(
-          'http://127.0.0.1:8000/open-alerts-details',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ alert_id: alertId }),
-          }
-        );
+        const response = await fetch(`${apiBaseUrl}/open-alerts-details`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ alert_id: alertId }),
+        });
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -906,7 +907,7 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
       };
 
       // Call the AI suggestions API
-      const response = await fetch('http://0.0.0.0:8002/generate_suggestions', {
+      const response = await fetch(`${aiURL}/generate_suggestions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

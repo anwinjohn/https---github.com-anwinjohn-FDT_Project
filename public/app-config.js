@@ -3,6 +3,7 @@ window.__APP_CONFIG__ = {
     baseUrl: 'http://127.0.0.1:8000',
     authBaseUrl: 'http://127.0.0.1:8000',
     userInfo: 'http://localhost:5050/users',
+    aisuggestions: 'http://0.0.0.0:8002',
     timeout: 30000,
   },
   auth: {

@@ -40,6 +40,7 @@ import {
 import { AlertDetailsResponse } from '../../types/alerts';
 import { useTheme } from '../../context/ThemeContext';
 import { formatNumber } from '../../utils/formatters';
+import { appConfig as config } from '../../config/runtime-config';
 
 interface AlertDetailsModalProps {
   isOpen: boolean;
@@ -70,11 +71,12 @@ interface RiskInsights {
   last_review_date?: string;
   analyst_notes?: string[];
 }
+const apiBaseUrl = config.api.baseUrl;
 
 // TODO: point this at your risk/customer-profile microservice.
 // Mirrors the same fetch pattern used for AI suggestions in
 // AlertDispositionModal.tsx (POST, JSON body, JSON response).
-const RISK_INSIGHTS_API_URL = 'http://localhost:5008/customer-risk-insight';
+const RISK_INSIGHTS_API_URL = `${apiBaseUrl}/customer-risk-insight`;
 
 /* ------------------------------------------------------------------ */
 /*  Small, presentational helper components (no business logic)       */

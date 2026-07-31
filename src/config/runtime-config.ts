@@ -10,6 +10,7 @@ interface AppConfig {
     authBaseUrl: string;
     userInfo: string;
     timeout?: number;
+    aisuggestions: string;
     [key: string]: unknown;
   };
   auth: {
@@ -49,15 +50,39 @@ interface AppConfig {
 
 interface SecurityConfig {
   security: {
-    encryption: { algorithm: string; keyLength: number; ivLength: number; [key: string]: unknown };
+    encryption: {
+      algorithm: string;
+      keyLength: number;
+      ivLength: number;
+      [key: string]: unknown;
+    };
     signature: { algorithm: string; keyLength: number; [key: string]: unknown };
-    jwt: { algorithm: string; expirationBuffer: number; [key: string]: unknown };
-    request: { maxAge: number; nonceLength: number; retryAttempts: number; [key: string]: unknown };
+    jwt: {
+      algorithm: string;
+      expirationBuffer: number;
+      [key: string]: unknown;
+    };
+    request: {
+      maxAge: number;
+      nonceLength: number;
+      retryAttempts: number;
+      [key: string]: unknown;
+    };
     endpoints: { sensitive: string[]; [key: string]: unknown };
     [key: string]: unknown;
   };
-  rateLimit: { maxRequests: number; windowMs: number; skipSuccessfulRequests: boolean; [key: string]: unknown };
-  cors: { allowedOrigins: string[]; allowedMethods: string[]; allowedHeaders: string[]; [key: string]: unknown };
+  rateLimit: {
+    maxRequests: number;
+    windowMs: number;
+    skipSuccessfulRequests: boolean;
+    [key: string]: unknown;
+  };
+  cors: {
+    allowedOrigins: string[];
+    allowedMethods: string[];
+    allowedHeaders: string[];
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -78,6 +103,11 @@ function requireRuntimeConfig<T>(name: string, config: T | undefined): T {
   return config;
 }
 
-export const appConfig = requireRuntimeConfig('app-config.js', window.__APP_CONFIG__);
-export const securityConfig = requireRuntimeConfig('security-config.js', window.__SECURITY_CONFIG__);
-
+export const appConfig = requireRuntimeConfig(
+  'app-config.js',
+  window.__APP_CONFIG__
+);
+export const securityConfig = requireRuntimeConfig(
+  'security-config.js',
+  window.__SECURITY_CONFIG__
+);
