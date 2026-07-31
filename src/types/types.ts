@@ -8,7 +8,6 @@ export interface AlertSummary {
   active_status: boolean;
 }
 
-
 export interface UserAlertSummaryBase {
   emp_id: string;
   count: number;
@@ -25,13 +24,12 @@ export interface UserAlertSummary {
     to_date: string;
   };
   avg_violations: string;
-  cashiers: UserAlertSummaryBase[]
-
+  cashiers: UserAlertSummaryBase[];
 }
 export interface ViolationType {
-  rule_id: string;
-  rule_desc: string;
+  category: string;
   count: number;
+  percentOfTotal: number;
 }
 
 export interface BranchAlertSummary {
@@ -69,4 +67,16 @@ export interface DashboardData {
   isLoading: boolean;
   error: string | null;
   lastUpdated: Date | null;
+}
+export interface FraudVolume {
+  /** Start of the API time bucket. Older responses use generatedAt instead. */
+  period?: string;
+  generatedAt: string;
+  alertsRaised: number;
+  confirmedFraud: number;
+  falsePositives: number;
+  /** Pending alert count returned by the fraud-volume endpoint. */
+  pendingAlerts?: number;
+  /** Backward-compatible alias if the API returns this field name. */
+  pendingCount?: number;
 }

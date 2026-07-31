@@ -1078,7 +1078,7 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
                 transition={{ type: 'spring', bounce: 0.15, duration: 0.4 }}
-                className={`relative w-full max-w-full rounded-3xl border shadow-2xl overflow-hidden ${
+                className={`relative max-w-screen-xl rounded-3xl border shadow-2xl overflow-hidden ${
                   theme === 'dark'
                     ? 'bg-gradient-to-br from-slate-900/98 via-blue-950/98 to-indigo-950/98 border-white/15'
                     : 'bg-gradient-to-br from-white via-gray-50/80 to-blue-50/60 border-gray-200'

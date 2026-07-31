@@ -4,6 +4,7 @@ import {
   AlertDetail,
   AlertFilters,
   AlertDisposition,
+  AlertDetailsResponse,
 } from '../types/alerts';
 import apiClient from '../utils/apiClient';
 import { useNotifications } from '../components/notifications';
@@ -27,7 +28,7 @@ interface AlertsResponse {
 
 interface UseAlertsReturn {
   alerts: AlertSummary[];
-  selectedAlert: AlertDetail[] | null;
+  selectedAlert: AlertDetailsResponse | null;
   loading: boolean;
   error: string | null;
   totalCount: number;
@@ -50,7 +51,7 @@ interface UseAlertsReturn {
     nationalities: string[];
   };
   fetchAlerts: () => Promise<void>;
-  fetchAlertDetails: (alertId: string) => Promise<void>;
+  fetchAlertDetails: (alertId: string, rule_id: string) => Promise<void>;
   disposeAlert: (disposition: AlertDisposition) => Promise<boolean>;
   updateFilters: (newFilters: Partial<AlertFilters>) => void;
   setPage: (page: number) => void;
@@ -76,9 +77,7 @@ const defaultFilters: AlertFilters = {
 
 export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
   const [alerts, setAlerts] = useState<AlertSummary[]>([]);
-  const [selectedAlert, setSelectedAlert] = useState<AlertDetail[] | null>(
-    null
-  );
+  const [selectedAlert, setSelectedAlert] = useState<AlertDetailsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
@@ -261,7 +260,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
   }, [buildQueryParams, addNotification, errorNotificationShown]);
 
   const fetchAlertDetails = useCallback(
-    async (alertId: string) => {
+    async (alertId: string, ruleId: string) => {
       try {
         setLoading(true);
         setError(null);
@@ -274,22 +273,16 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ alert_id: alertId }),
+            body: JSON.stringify({ alert_id: alertId, rule_id: ruleId }),
           }
         );
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-        const data: AlertDetail[] = await response.json();
 
-        // Handle empty response
-        if (!data || data.length === 0) {
-          setSelectedAlert([]);
-          return;
-        }
-
-        setSelectedAlert(data);
+        const responseData: AlertDetailsResponse = await response.json();
+        setSelectedAlert(responseData);
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : 'Failed to fetch alert details';

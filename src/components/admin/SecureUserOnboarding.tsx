@@ -23,7 +23,7 @@ import {
   Briefcase,
   Lock,
   KeyRound,
-  Vault
+  Vault,
 } from 'lucide-react';
 import { useNotifications } from '../notifications';
 import { useTheme } from '../../context/ThemeContext';
@@ -167,7 +167,7 @@ const SecureUserOnboarding: React.FC = () => {
     });
 
     if (!userId.trim()) {
-      addNotification('Please enter a User ID', 'warning',);
+      addNotification('Please enter a User ID', 'warning');
       return;
     }
 
@@ -176,10 +176,10 @@ const SecureUserOnboarding: React.FC = () => {
       setFetchSuccess(false);
 
       const request = { user_id: userId.trim() };
-      const response = await apiClient.post<any>("/admin/fetch-user", request);
+      const response = await apiClient.post<any>('/admin/fetch-user', request);
       //const response = await apiClient.post<any>("/admin/fetch-user", request);
       if (response?.success && response.data?.user) {
-        const user = response.data?.user
+        const user = response.data?.user;
 
         const mappedData = {
           username: user.UserLoginId || '',
@@ -201,9 +201,8 @@ const SecureUserOnboarding: React.FC = () => {
         });
 
         setFetchSuccess(true);
-        addNotification('User data fetched successfully', 'success',);
+        addNotification('User data fetched successfully', 'success');
       } else {
-
         setReadonlyFields({
           username: false,
           full_name: false,
@@ -267,26 +266,25 @@ const SecureUserOnboarding: React.FC = () => {
     try {
       setIsSubmitting(true);
 
-      const authToken = localStorage.getItem("authToken");
+      const authToken = localStorage.getItem('authToken');
 
       const onboardingData = {
         ...userData,
         role_id: selectedRole,
         source_user_id: userId || null,
         manual_entry: manualEntry,
-        machineInfo
+        machineInfo,
       };
       const response = await apiClient.post(
         '/admin/onboard-user',
         onboardingData
       );
-   
+
       const resp_data = response.data;
 
       if (response.success && resp_data) {
+        const status_code = resp_data.status_code;
 
-        const status_code = resp_data.status_code
- 
         if (status_code != 200) {
           addNotification(resp_data.detail, 'warning');
         }
@@ -306,7 +304,6 @@ const SecureUserOnboarding: React.FC = () => {
           setFetchSuccess(false);
           setManualEntry(false);
         }
-
       } else {
         addNotification(response.error || 'Failed to onboard user', 'error');
       }
@@ -351,8 +348,9 @@ const SecureUserOnboarding: React.FC = () => {
       action="view"
       fallback={
         <div
-          className={`text-center py-20 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-            }`}
+          className={`text-center py-20 ${
+            theme === 'dark' ? 'text-white' : 'text-gray-900'
+          }`}
         >
           <Shield className="w-16 h-16 mx-auto mb-4 text-red-400" />
           <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
@@ -376,14 +374,16 @@ const SecureUserOnboarding: React.FC = () => {
             </div>
             <div>
               <h1
-                className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
+                className={`text-2xl font-bold ${
+                  theme === 'dark' ? 'text-white' : 'text-gray-900'
+                }`}
               >
                 New User Onboarding
               </h1>
               <p
-                className={`${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                  }`}
+                className={`${
+                  theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                }`}
               >
                 Add new users to the system with proper authorization
               </p>
@@ -395,14 +395,15 @@ const SecureUserOnboarding: React.FC = () => {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={toggleManualEntry}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border ${manualEntry
-                ? theme === 'dark'
-                  ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 text-blue-300 border-blue-500/30'
-                  : 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700 border-blue-300'
-                : theme === 'dark'
-                  ? 'bg-white/10 hover:bg-white/20 text-white border-white/20'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
-                }`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border ${
+                manualEntry
+                  ? theme === 'dark'
+                    ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 text-blue-300 border-blue-500/30'
+                    : 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700 border-blue-300'
+                  : theme === 'dark'
+                    ? 'bg-white/10 hover:bg-white/20 text-white border-white/20'
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+              }`}
             >
               {manualEntry ? (
                 <Eye className="w-4 h-4" />
@@ -416,10 +417,11 @@ const SecureUserOnboarding: React.FC = () => {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={clearForm}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${theme === 'dark'
-                ? 'bg-white/10 hover:bg-white/20 text-white'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                }`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
+                theme === 'dark'
+                  ? 'bg-white/10 hover:bg-white/20 text-white'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
             >
               <RefreshCw className="w-4 h-4" />
               Clear
@@ -431,14 +433,16 @@ const SecureUserOnboarding: React.FC = () => {
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* User Data Fetch/Entry Section */}
           <div
-            className={`rounded-xl lg:col-span-2 items-center border p-6 ${theme === 'dark'
-              ? 'bg-white/5 border-white/20'
-              : 'bg-gray-50 border-gray-200'
-              } backdrop-blur-xl`}
+            className={`rounded-xl lg:col-span-2 items-center border p-6 ${
+              theme === 'dark'
+                ? 'bg-white/5 border-white/20'
+                : 'bg-gray-50 border-gray-200'
+            } backdrop-blur-xl`}
           >
             <h2
-              className={`text-lg font-semibold mb-6 flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}
+              className={`text-lg font-semibold mb-6 flex items-center gap-2 ${
+                theme === 'dark' ? 'text-white' : 'text-gray-900'
+              }`}
             >
               <Search className="w-5 h-5 text-blue-400" />
               {manualEntry ? 'Manual User Entry' : 'Fetch User Data'}
@@ -447,8 +451,9 @@ const SecureUserOnboarding: React.FC = () => {
             {!manualEntry && (
               <div className="mb-6">
                 <label
-                  className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                    }`}
+                  className={`block text-sm font-medium mb-2 ${
+                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                  }`}
                 >
                   User ID
                 </label>
@@ -458,20 +463,22 @@ const SecureUserOnboarding: React.FC = () => {
                     value={userId}
                     onChange={(e) => setUserId(e.target.value)}
                     placeholder="Enter User ID to fetch data"
-                    className={`flex-1 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
-                      ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                      : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                      }`}
+                    className={`flex-1 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                      theme === 'dark'
+                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                    }`}
                   />
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={fetchUserData}
                     disabled={isFetching || !userId.trim()}
-                    className={`px-6 py-3 ${theme === 'dark'
-                      ? 'bg-gradient-to-r from-red-800 to-red-600'
-                      : 'bg-gradient-to-r from-red-800 to-red-600'
-                      }  hover:from-red-600 hover:to-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-all duration-200 shadow-lg`}
+                    className={`px-6 py-3 ${
+                      theme === 'dark'
+                        ? 'bg-gradient-to-r from-red-800 to-red-600'
+                        : 'bg-gradient-to-r from-red-800 to-red-600'
+                    }  hover:from-red-600 hover:to-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-all duration-200 shadow-lg`}
                   >
                     {isFetching ? (
                       <RefreshCw className="w-5 h-5 animate-spin" />
@@ -499,8 +506,9 @@ const SecureUserOnboarding: React.FC = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label
-                    className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
                   >
                     Username *
                   </label>
@@ -513,18 +521,20 @@ const SecureUserOnboarding: React.FC = () => {
                         handleInputChange('username', e.target.value)
                       }
                       placeholder="Enter username"
-                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                        }`}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
                       readOnly={readonlyFields.username}
                     />
                   </div>
                 </div>
                 <div>
                   <label
-                    className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
                   >
                     Full Name *
                   </label>
@@ -535,19 +545,21 @@ const SecureUserOnboarding: React.FC = () => {
                       handleInputChange('full_name', e.target.value)
                     }
                     placeholder="Enter full name"
-                    className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
-                      ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                      : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                      }`}
+                    className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                      theme === 'dark'
+                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                    }`}
                     readOnly={readonlyFields.full_name}
                   />
                 </div>
               </div>
-              <div className='grid grid-cols-2 gap-4 mt-4'>
+              <div className="grid grid-cols-2 gap-4 mt-4">
                 <div>
                   <label
-                    className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
                   >
                     Email Address *
                   </label>
@@ -560,18 +572,20 @@ const SecureUserOnboarding: React.FC = () => {
                         handleInputChange('email_id', e.target.value)
                       }
                       placeholder="Enter email address"
-                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                        }`}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
                       readOnly={readonlyFields.email_id}
                     />
                   </div>
                 </div>
                 <div>
                   <label
-                    className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
                   >
                     Phone Number
                   </label>
@@ -584,60 +598,65 @@ const SecureUserOnboarding: React.FC = () => {
                         handleInputChange('phone_number', e.target.value)
                       }
                       placeholder="Enter phone number"
-                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                        }`}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
                       readOnly={readonlyFields.phone_number}
                     />
                   </div>
                 </div>
               </div>
-              <div className='grid grid-cols-2 gap-4 mt-4'>
+              <div className="grid grid-cols-2 gap-4 mt-4">
                 <div>
                   <label
-                    className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
                   >
                     Title
                   </label>
                   <div className="relative">
                     <KeyRound className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
-                      type="tel"
+                      type="text"
                       value={userData.title}
                       onChange={(e) =>
                         handleInputChange('title', e.target.value)
                       }
                       placeholder="Enter role title"
-                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                        }`}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
                       readOnly={readonlyFields.phone_number}
                     />
                   </div>
                 </div>
                 <div>
                   <label
-                    className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                      }`}
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
                   >
                     Department
                   </label>
                   <div className="relative">
                     <Vault className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
-                      type="tel"
+                      type="text"
                       value={userData.department}
                       onChange={(e) =>
-                        handleInputChange('phone_number', e.target.value)
+                        handleInputChange('department', e.target.value)
                       }
                       placeholder="Enter department"
-                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                        }`}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
                       readOnly={readonlyFields.department}
                     />
                   </div>
@@ -648,18 +667,20 @@ const SecureUserOnboarding: React.FC = () => {
 
           {/* Role Selection & Submit Section */}
           <div
-            className={` ${theme === 'dark'
-              ? 'bg-white/5 backdrop-blur-xl border border-white/10 '
-              : 'bg-gray-50 border-gray-200'
-              } rounded-2xl p-6 shadow-xl`}
+            className={` ${
+              theme === 'dark'
+                ? 'bg-white/5 backdrop-blur-xl border border-white/10 '
+                : 'bg-gray-50 border-gray-200'
+            } rounded-2xl p-6 shadow-xl`}
           >
             <div className="flex items-center gap-3 mb-6">
               <div className="p-2 bg-purple-500/20 rounded-lg">
                 <Shield className="w-5 h-5 text-purple-600" />
               </div>
               <h2
-                className={` ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  } text-xl font-semibold`}
+                className={` ${
+                  theme === 'dark' ? 'text-white' : 'text-gray-900'
+                } text-xl font-semibold`}
               >
                 Role Assignment
               </h2>
@@ -671,38 +692,43 @@ const SecureUserOnboarding: React.FC = () => {
                 onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)}
                 className={`w-full flex items-center justify-between px-4 py-4 border rounded-xl
                   ounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200
-                  ${theme === 'dark'
-                    ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                    : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                  } ${selectedRole
-                    ? 'border-purple-500/50 ring-2 ring-purple-500/20'
-                    : 'border-gray-50 hover:border-white/30'
+                  ${
+                    theme === 'dark'
+                      ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                      : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                  } ${
+                    selectedRole
+                      ? 'border-purple-500/50 ring-2 ring-purple-500/20'
+                      : 'border-gray-50 hover:border-white/30'
                   }`}
               >
                 <div className="flex items-center gap-3">
                   <Shield className="w-5 h-5 text-purple-400" />
                   {selectedRoleData ? (
                     <div className="text-left">
-                      <div className="text-white font-medium">{ }</div>
+                      <div className="text-white font-medium">{}</div>
                       <div
-                        className={`${theme === 'dark' ? 'text-white/50' : 'text-gray-900'
-                          } text-sm`}
+                        className={`${
+                          theme === 'dark' ? 'text-white/50' : 'text-gray-900'
+                        } text-sm`}
                       >
                         {selectedRoleData.role_name}
                       </div>
                     </div>
                   ) : (
                     <span
-                      className={`${theme === 'dark' ? 'text-white/50' : 'text-gray-900'
-                        }`}
+                      className={`${
+                        theme === 'dark' ? 'text-white/50' : 'text-gray-900'
+                      }`}
                     >
                       Select a role...
                     </span>
                   )}
                 </div>
                 <ChevronDown
-                  className={`w-5 h-5 text-white/50 transition-transform ${isRoleDropdownOpen ? 'rotate-180' : ''
-                    }`}
+                  className={`w-5 h-5 text-white/50 transition-transform ${
+                    isRoleDropdownOpen ? 'rotate-180' : ''
+                  }`}
                 />
               </button>
 
@@ -730,10 +756,11 @@ const SecureUserOnboarding: React.FC = () => {
                         <button
                           key={cat}
                           onClick={() => setSelectedCategory(cat)}
-                          className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${selectedCategory === cat
-                            ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
-                            : 'bg-white/5 text-white/60 border border-white/10 hover:bg-white/10'
-                            }`}
+                          className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                            selectedCategory === cat
+                              ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+                              : 'bg-white/5 text-white/60 border border-white/10 hover:bg-white/10'
+                          }`}
                         >
                           {cat === 'all' ? 'All Roles' : cat}
                         </button>
@@ -757,10 +784,11 @@ const SecureUserOnboarding: React.FC = () => {
                               setSelectedRole(role.id);
                               setIsRoleDropdownOpen(false);
                             }}
-                            className={`w-full text-left p-3 rounded-lg mb-1 transition-all ${selectedRole === role.id
-                              ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/40'
-                              : 'hover:bg-white/5 border border-transparent'
-                              }`}
+                            className={`w-full text-left p-3 rounded-lg mb-1 transition-all ${
+                              selectedRole === role.id
+                                ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/40'
+                                : 'hover:bg-white/5 border border-transparent'
+                            }`}
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex-1 min-w-0">
@@ -802,10 +830,11 @@ const SecureUserOnboarding: React.FC = () => {
             {/* Selected Role Detail Card */}
             {selectedRoleData && (
               <div
-                className={` ${theme === 'dark'
-                  ? 'bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/20'
-                  : 'bg-gradient-to-r from-slate-700 to-slate-700/20 border-purple-500/20'
-                  }  rounded-xl p-4`}
+                className={` ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/20'
+                    : 'bg-gradient-to-r from-slate-700 to-slate-700/20 border-purple-500/20'
+                }  rounded-xl p-4`}
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-2">
@@ -816,14 +845,16 @@ const SecureUserOnboarding: React.FC = () => {
                   </div>
                   <button
                     onClick={() => setSelectedRole(null)}
-                    className={` ${theme === 'dark'
-                      ? 'hover:bg-white/10'
-                      : 'hover:bg-white/20'
-                      } p-1  rounded-lg transition-colors`}
+                    className={` ${
+                      theme === 'dark'
+                        ? 'hover:bg-white/10'
+                        : 'hover:bg-white/20'
+                    } p-1  rounded-lg transition-colors`}
                   >
                     <X
-                      className={` ${theme === 'dark' ? 'text-white/60' : 'text-gray-800'
-                        }w-4 h-4 `}
+                      className={` ${
+                        theme === 'dark' ? 'text-white/60' : 'text-gray-800'
+                      }w-4 h-4 `}
                     />
                   </button>
                 </div>
@@ -848,28 +879,32 @@ const SecureUserOnboarding: React.FC = () => {
 
             {/* Submit Section */}
             <div
-              className={`rounded-xl border p-6 ${theme === 'dark'
-                ? 'bg-white/5 border-white/20'
-                : 'bg-gray-50 border-gray-200'
-                } backdrop-blur-xl mt-6`}
+              className={`rounded-xl border p-6 ${
+                theme === 'dark'
+                  ? 'bg-white/5 border-white/20'
+                  : 'bg-gray-50 border-gray-200'
+              } backdrop-blur-xl mt-6`}
             >
               <h2
-                className={`text-lg font-semibold mb-6 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
+                className={`text-lg font-semibold mb-6 ${
+                  theme === 'dark' ? 'text-white' : 'text-gray-900'
+                }`}
               >
                 Submit Onboarding
               </h2>
 
               <div className="space-y-4">
                 <div
-                  className={`p-4 rounded-xl border ${theme === 'dark'
-                    ? 'bg-blue-500/10 border-blue-500/20'
-                    : 'bg-blue-100 border-blue-300'
-                    }`}
+                  className={`p-4 rounded-xl border ${
+                    theme === 'dark'
+                      ? 'bg-blue-500/10 border-blue-500/20'
+                      : 'bg-blue-100 border-blue-300'
+                  }`}
                 >
                   <h3
-                    className={`font-medium mb-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                      }`}
+                    className={`font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white' : 'text-gray-900'
+                    }`}
                   >
                     Review Information
                   </h3>

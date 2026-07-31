@@ -1,4 +1,5 @@
 import { format, parse, addDays, isValid } from 'date-fns';
+import { appConfig as config } from '../config/runtime-config';
 
 // Format date to YYYY-MM-DD
 export const formatDateForApi = (date: Date): string => {
@@ -29,8 +30,11 @@ export const getDateDaysAgo = (days: number): Date => {
 // Get default date range (today)
 export const getDefaultDateRange = () => {
   const today = getTodayDate();
+  const days = config.dashboard.defaultDateRange?.days ?? 7;
+  console.log('Datexx : ', config.dashboard.defaultDateRange?.days);
+  const fromDate = getDateDaysAgo(days);
   return {
-    fromDate: formatDateForApi(today),
-    toDate: formatDateForApi(today)
+    fromDate: formatDateForApi(fromDate),
+    toDate: formatDateForApi(today),
   };
 };

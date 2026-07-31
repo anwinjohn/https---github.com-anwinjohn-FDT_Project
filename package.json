@@ -21,6 +21,8 @@
     "echarts": "^5.6.0",
     "echarts-for-react": "^3.0.2",
     "framer-motion": "^10.16.4",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.344.0",
     "plotly.js": "^3.0.1",

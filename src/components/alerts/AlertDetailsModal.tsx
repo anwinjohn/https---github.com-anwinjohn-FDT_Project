@@ -34,16 +34,17 @@ import {
   UserCheck,
   History,
   Hash,
+  HomeIcon,
 } from 'lucide-react';
 
-import { AlertDetail } from '../../types/alerts';
+import { AlertDetailsResponse } from '../../types/alerts';
 import { useTheme } from '../../context/ThemeContext';
 import { formatNumber } from '../../utils/formatters';
 
 interface AlertDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  alertDetails: AlertDetail[] | null;
+  alertDetails: AlertDetailsResponse | null;
   alertId: string | null;
   loading: boolean;
 }
@@ -341,12 +342,13 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
 }) => {
   const { theme } = useTheme();
 
-  const firstDetail = alertDetails?.[0];
-  const totalAmount =
-    alertDetails?.reduce(
-      (sum, detail) => sum + parseFloat(detail.amt_aed),
-      0
-    ) || 0;
+  const transactions = alertDetails?.data ?? [];
+  const ruleDetails = alertDetails?.rule ?? null;
+  const firstDetail = transactions[0];
+  const totalAmount = transactions.reduce(
+    (sum, detail) => sum + parseFloat(detail.amt_aed),
+    0
+  );
 
   // ---- Risk Insights (API-driven, additive, non-blocking) ----
   const [riskInsights, setRiskInsights] = useState<RiskInsights | null>(null);
@@ -399,20 +401,20 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
 
   // ---- Transaction analytics (derived client-side from existing data) ----
   const analytics = useMemo(() => {
-    if (!alertDetails || alertDetails.length === 0) return null;
+    if (transactions.length === 0) return null;
 
-    const amounts = alertDetails.map((d) => parseFloat(d.amt_aed) || 0);
+    const amounts = transactions.map((d) => parseFloat(d.amt_aed) || 0);
     const total = amounts.reduce((a, b) => a + b, 0);
-    const avg = total / alertDetails.length;
+    const avg = total / transactions.length;
     const max = Math.max(...amounts);
 
     const uniqueBeneficiaries = new Set(
-      alertDetails.map((d) => d.beneficiary_name).filter(Boolean)
+      transactions.map((d) => d.beneficiary_name).filter(Boolean)
     ).size;
     const uniqueCountries = new Set(
-      alertDetails.map((d) => d.payment_to_country).filter(Boolean)
+      transactions.map((d) => d.payment_to_country).filter(Boolean)
     ).size;
-    const employeeTxnCount = alertDetails.filter(
+    const employeeTxnCount = transactions.filter(
       (d) => d.is_employee_txn
     ).length;
 
@@ -420,14 +422,14 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
       (a) => a > 0 && a % 1000 === 0
     ).length;
 
-    const offHoursCount = alertDetails.filter((d) => {
+    const offHoursCount = transactions.filter((d) => {
       const t = new Date(d.transaction_date);
       if (isNaN(t.getTime())) return false;
       const h = t.getHours();
       return h >= 21 || h < 6;
     }).length;
 
-    const validDates = alertDetails
+    const validDates = transactions
       .map((d) => new Date(d.transaction_date).getTime())
       .filter((t) => !isNaN(t));
     const spanDays =
@@ -439,7 +441,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
         : 0;
 
     const dayCounts: Record<string, number> = {};
-    alertDetails.forEach((d) => {
+    transactions.forEach((d) => {
       const t = new Date(d.transaction_date);
       if (isNaN(t.getTime())) return;
       const day = t.toDateString();
@@ -461,7 +463,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
       spanDays,
       maxSameDay,
     };
-  }, [alertDetails]);
+  }, [transactions]);
 
   // ---- Transaction table: search / sort / pagination / expand ----
   const [searchTerm, setSearchTerm] = useState('');
@@ -474,9 +476,9 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   const filteredSortedDetails = useMemo(() => {
-    if (!alertDetails) return [];
+    if (!transactions.length) return [];
     const term = searchTerm.trim().toLowerCase();
-    let list = alertDetails;
+    let list = transactions;
     if (term) {
       list = list.filter((d) =>
         [
@@ -504,7 +506,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return sorted;
-  }, [alertDetails, searchTerm, sortField, sortDir]);
+  }, [transactions, searchTerm, sortField, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -530,7 +532,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
   };
 
   const handleExportCsv = () => {
-    if (!alertDetails || alertDetails.length === 0) return;
+    if (transactions.length === 0) return;
     const headers = [
       'Date',
       'Time',
@@ -610,7 +612,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
                 transition={{ type: 'spring', bounce: 0.15, duration: 0.4 }}
-                className={`w-full max-w-full rounded-3xl border shadow-2xl overflow-hidden ${
+                className={`w-full max-w-screen-xl rounded-3xl border shadow-2xl overflow-hidden ${
                   theme === 'dark'
                     ? 'bg-gradient-to-br from-slate-900/98 via-blue-950/98 to-indigo-950/98 border-white/15'
                     : 'bg-gradient-to-br from-white via-gray-50/80 to-blue-50/60 border-gray-200'
@@ -676,7 +678,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                         </span>
                       </div>
                     </div>
-                  ) : !alertDetails || alertDetails.length === 0 ? (
+                  ) : transactions.length === 0 ? (
                     <div className="text-center py-20">
                       <AlertTriangle className="w-16 h-16 mx-auto mb-4 text-red-400" />
                       <h3
@@ -699,7 +701,9 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                         <StatCard
                           icon={FileText}
                           label="Transactions"
-                          value={alertDetails.length}
+                          value={
+                            alertDetails?.total_records ?? transactions.length
+                          }
                           sub="Related transactions"
                           theme={theme}
                           gradient={
@@ -788,6 +792,80 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
                         {/* LEFT column */}
                         <div className="lg:col-span-2 space-y-6">
+                          {/* Rule Information */}
+                          {firstDetail && (
+                            <SectionCard
+                              icon={AlertTriangle}
+                              iconClass="bg-gradient-to-br from-red-500 to-orange-600"
+                              title="Rule Information"
+                              theme={theme}
+                            >
+                              <div className="space-y-4">
+                                <div className="grid grid-cols-3 gap-4">
+                                  <InfoRow
+                                    label="Rule ID"
+                                    value={firstDetail.rule_id}
+                                    theme={theme}
+                                  />
+                                  <div className="col-span-2">
+                                    <InfoRow
+                                      label="Scenario Logic"
+                                      value={
+                                        ruleDetails?.scenario_logic ??
+                                        firstDetail.rule_description
+                                      }
+                                      theme={theme}
+                                    />
+                                  </div>
+                                  <InfoRow
+                                    label="Priority"
+                                    value={ruleDetails?.rule_priority}
+                                    theme={theme}
+                                    icon={AlertTriangle}
+                                  />
+                                  <InfoRow
+                                    label="Category"
+                                    value={ruleDetails?.rule_category}
+                                    theme={theme}
+                                  />
+                                </div>
+                                <div
+                                  className={`pt-4 border-t ${theme === 'dark' ? 'border-white/10' : 'border-gray-100'}`}
+                                >
+                                  <InfoRow
+                                    label="Findings"
+                                    value={firstDetail.comments}
+                                    theme={theme}
+                                  />
+                                </div>
+                              </div>
+                            </SectionCard>
+                          )}
+                          {/* Branch & Cashier Information */}
+                          {firstDetail && (
+                            <SectionCard
+                              icon={HomeIcon}
+                              iconClass="bg-gradient-to-br from-blue-500 to-indigo-600"
+                              title="Branch & Cashier Information"
+                              theme={theme}
+                            >
+                              <div className="grid grid-cols-2 gap-4">
+                                <InfoRow
+                                  label="Cashier ID"
+                                  value={firstDetail.cashier}
+                                  theme={theme}
+                                  icon={User}
+                                />
+                                <InfoRow
+                                  label="Branch Name"
+                                  value={firstDetail.branch_name}
+                                  theme={theme}
+                                  icon={Globe}
+                                />
+                              </div>
+                            </SectionCard>
+                          )}
+
                           {/* Customer Information */}
                           {firstDetail && (
                             <SectionCard
@@ -815,12 +893,12 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 />
                                 <InfoRow
                                   label="Profession"
-                                  value={firstDetail.profession}
+                                  value={firstDetail.customer_profession}
                                   theme={theme}
                                 />
                                 <InfoRow
                                   label="Nationality"
-                                  value={firstDetail.customer_natioanlity}
+                                  value={firstDetail.customer_nationality}
                                   theme={theme}
                                   icon={Globe}
                                 />
@@ -847,42 +925,6 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                   >
                                     {firstDetail.is_employee_txn ? 'Yes' : 'No'}
                                   </span>
-                                </div>
-                              </div>
-                            </SectionCard>
-                          )}
-
-                          {/* Rule Information */}
-                          {firstDetail && (
-                            <SectionCard
-                              icon={AlertTriangle}
-                              iconClass="bg-gradient-to-br from-red-500 to-orange-600"
-                              title="Rule Information"
-                              theme={theme}
-                            >
-                              <div className="space-y-4">
-                                <div className="grid grid-cols-3 gap-4">
-                                  <InfoRow
-                                    label="Rule ID"
-                                    value={firstDetail.rule_id}
-                                    theme={theme}
-                                  />
-                                  <div className="col-span-2">
-                                    <InfoRow
-                                      label="Rule Description"
-                                      value={firstDetail.rule_description}
-                                      theme={theme}
-                                    />
-                                  </div>
-                                </div>
-                                <div
-                                  className={`pt-4 border-t ${theme === 'dark' ? 'border-white/10' : 'border-gray-100'}`}
-                                >
-                                  <InfoRow
-                                    label="Rule Remarks"
-                                    value={firstDetail.comments}
-                                    theme={theme}
-                                  />
                                 </div>
                               </div>
                             </SectionCard>
@@ -1094,13 +1136,13 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 <MiniStat
                                   icon={Users}
                                   label="Beneficiaries"
-                                  value={analytics.uniqueBeneficiaries}
+                                  value={alertDetails?.beneficiaries}
                                   theme={theme}
                                 />
                                 <MiniStat
                                   icon={Globe}
                                   label="Countries"
-                                  value={analytics.uniqueCountries}
+                                  value={alertDetails?.countries}
                                   theme={theme}
                                 />
                                 <MiniStat
@@ -1117,10 +1159,10 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                                 <MiniStat
                                   icon={Moon}
                                   label="Off-hours"
-                                  value={analytics.offHoursCount}
+                                  value={alertDetails?.off_hours}
                                   theme={theme}
                                   tone={
-                                    analytics.offHoursCount > 0
+                                    alertDetails?.off_hours > 0
                                       ? 'warn'
                                       : 'neutral'
                                   }

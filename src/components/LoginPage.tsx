@@ -22,18 +22,20 @@ import {
   ScanFace,
 } from 'lucide-react';
 import FaceIdLogin from './FaceIdLogin';
-import { useLocalMachine } from "../context/DeviceInfoContext";
-import { useSystemSettings } from "../hooks/useSystemSettings";
-
+import { useLocalMachine } from '../context/DeviceInfoContext';
+import { useSystemSettings } from '../hooks/useSystemSettings';
 
 const LoginPage = () => {
-
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
   const { machineInfo, loading, available } = useLocalMachine();
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState('');
   const [isReadOnly, setIsReadOnly] = useState(false);
-  const { fetchSettings, settings, loading: settingsLoading } = useSystemSettings();
+  const {
+    fetchSettings,
+    settings,
+    loading: settingsLoading,
+  } = useSystemSettings();
   const [isLDAPEnabled, setIsLDAPEnabled] = useState(false);
 
   useEffect(() => {
@@ -49,7 +51,6 @@ const LoginPage = () => {
       }
     }
   }, [machineInfo]);
-
 
   useEffect(() => {
     const loadLdapSettings = async () => {
@@ -126,7 +127,12 @@ const LoginPage = () => {
     setIsLoading(true);
 
     try {
-      const success = await login(username, formData.password, isLDAPEnabled, machineInfo);
+      const success = await login(
+        username,
+        formData.password,
+        isLDAPEnabled,
+        machineInfo
+      );
       if (success) {
         setStep('success');
         setTimeout(() => {
@@ -173,8 +179,8 @@ const LoginPage = () => {
     navigate('/change-password', {
       state: {
         forced: false,
-        username: username
-      }
+        username: username,
+      },
     });
   };
 
@@ -210,6 +216,18 @@ const LoginPage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Hard override so selected text in the login inputs is always legible,
+          regardless of any pre-existing global .login-input selection styles */}
+      <style>{`
+        .login-input::selection {
+          background-color: #3b82f6 !important;
+          color: #ffffff !important;
+        }
+        .login-input::-moz-selection {
+          background-color: #3b82f6 !important;
+          color: #ffffff !important;
+        }
+      `}</style>
       {/* Enhanced Background Effects */}
       <div className="absolute inset-0">
         <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-blue-500/10 to-transparent rounded-full blur-3xl animate-pulse"></div>
@@ -240,13 +258,13 @@ const LoginPage = () => {
         ))}
       </div>
 
-      <div className="relative w-full max-w-7xl mx-auto flex lg:flex-row flex-col gap-8 items-start z-0">
+      <div className="relative w-full max-w-[1680px] mx-auto flex lg:flex-row flex-col gap-10 lg:gap-8 items-center lg:items-stretch justify-between px-6 sm:px-10 lg:px-14 xl:px-20 z-0">
         {/* Left Side - Enhanced Branding & Info */}
         <motion.div
           initial={{ opacity: 0, x: -50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8 }}
-          className="hidden lg:block space-y-12 lg:w-[60%] float-start flex-shrink-0"
+          className="hidden lg:flex lg:flex-col lg:justify-center space-y-10 w-full lg:w-[68%] xl:w-[70%] flex-shrink-0"
         >
           <div className="space-y-4">
             {/* Logo and Title */}
@@ -285,17 +303,20 @@ const LoginPage = () => {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.6 }}
             >
-              <h2 className="text-4xl font-bold text-white leading-tight">
+              <h2 className="text-4xl xl:text-5xl font-bold text-white leading-tight">
                 Advanced fraud monitoring
                 <br />
                 <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
                   & analytics platform
                 </span>
               </h2>
-              <p className="text-white/70 text-lg leading-relaxed max-w-lg">
-                A comprehensive platform leveraging rule-based logic and artificial intelligence models to detect and prevent fraudulent activities in real time.
-                 The solution enables customization of detection rules, continuous monitoring of suspicious behavior, 
-                 and delivery of actionable insights through intuitive and informative dashboards.
+              <p className="text-white/70 text-lg leading-relaxed max-w-4xl">
+                A comprehensive platform leveraging rule-based logic and
+                artificial intelligence models to detect and prevent fraudulent
+                activities in real time. The solution enables customization of
+                detection rules, continuous monitoring of suspicious behavior,
+                and delivery of actionable insights through intuitive and
+                informative dashboards.
               </p>
             </motion.div>
           </div>
@@ -307,15 +328,15 @@ const LoginPage = () => {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.8 }}
           >
-            <div className="space-y-4">
+            <div className="grid sm:grid-cols-1 gap-6">
               {securityFeatures.map((feature, index) => (
                 <motion.div
                   key={index}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 1 + index * 0.1 }}
-                  whileHover={{ x: 10, scale: 1.02 }}
-                  className="flex items-center gap-4 p-4 bg-white/5 rounded-xl backdrop-blur-sm border border-white/10 hover:bg-white/10 transition-all duration-300 group cursor-pointer"
+                  whileHover={{ y: -3, scale: 1.02 }}
+                  className="flex items-center gap-4 p-4 bg-white/5 rounded-xl backdrop-blur-sm border border-white/10 hover:bg-white/10 transition-all duration-300 group cursor-pointer max-w-[500px]"
                 >
                   <div className="p-2 bg-gradient-to-br from-blue-500/20 to-purple-500/20 rounded-lg group-hover:from-blue-500/30 group-hover:to-purple-500/30 transition-all duration-300">
                     <feature.icon className="w-5 h-5 text-blue-400 group-hover:text-blue-300 transition-colors" />
@@ -335,7 +356,7 @@ const LoginPage = () => {
 
           {/* Enhanced Stats */}
           <motion.div
-            className="grid grid-cols-3 gap-4"
+            className="grid grid-cols-3 gap-4 max-w-xl"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 1.2 }}
@@ -360,250 +381,272 @@ const LoginPage = () => {
           </motion.div>
         </motion.div>
 
+        {/* Vertical divider - subtle separation between panels on large screens */}
+        <div className="hidden lg:block w-px self-stretch bg-gradient-to-b from-transparent via-white/15 to-transparent" />
+
         {/* Right Side - Enhanced Login Form */}
         <motion.div
           initial={{ opacity: 0, x: 50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8, delay: 0.2 }}
-          className="w-full lg:w-[40%] max-w-md mx-auto lg:mx-0 lg:ml-auto flex-shrink-0"
+          className="w-full lg:w-[32%] xl:w-[30%] flex-shrink-0 flex lg:items-center"
         >
-          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-8 shadow-2xl hover:shadow-3xl transition-all duration-300">
-            {/* Mobile Header */}
-            <div className="lg:hidden text-center mb-8">
-              <div className="flex justify-center mb-4">
-                <div className="p-3 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl">
-                  <Shield className="w-8 h-8 text-white" />
+          <div className="w-full max-w-md mx-auto lg:mx-0">
+            <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-8 shadow-2xl hover:shadow-3xl transition-all duration-300">
+              {/* Mobile Header */}
+              <div className="lg:hidden text-center mb-8">
+                <div className="flex justify-center mb-4">
+                  <div className="p-3 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl">
+                    <Shield className="w-8 h-8 text-white" />
+                  </div>
                 </div>
+                <h1 className="text-3xl font-bold text-white mb-2">
+                  {appShortName}
+                </h1>
+                <p className="text-white/70">Secure Access Portal</p>
               </div>
-              <h1 className="text-3xl font-bold text-white mb-2">
-                {appShortName}
-              </h1>
-              <p className="text-white/70">Secure Access Portal</p>
-            </div>
 
-            <AnimatePresence mode="wait">
-              {/* Login Step */}
-              {step === 'login' && (
-                <motion.div
-                  key="login"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  {/* Logo */}
-                  <div className="flex justify-center mt-8">
-                    <img
-                      src={logoPath}
-                      alt="Logo"
-                      className="login-logo mb-4"
-                    />
-                  </div>
-                  <div className="text-center mb-8">
-                    {/* <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2> */}
-                    <p className="text-white/70">
-                      Sign in to access your dashboard
-                    </p>
-                  </div>
+              <AnimatePresence mode="wait">
+                {/* Login Step */}
+                {step === 'login' && (
+                  <motion.div
+                    key="login"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    {/* Logo */}
+                    <div className="flex justify-center mt-8">
+                      <img
+                        src={logoPath}
+                        alt="Logo"
+                        className="login-logo mb-4"
+                      />
+                    </div>
+                    <div className="text-center mb-8">
+                      {/* <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2> */}
+                      <p className="text-white/70">
+                        Sign in to access your dashboard
+                      </p>
+                    </div>
 
-                  {/* Authentication Method Selector */}
-                  {authMethods.length > 1 && (
-                    <div className="mb-6">
-                      <div className="grid grid-cols-3 gap-2 p-1 bg-white/5 rounded-xl backdrop-blur-sm border border-white/10">
-                        {authMethods.map((method) => (
-                          <button
-                            key={method.id}
-                            onClick={() => handleAuthMethodChange(method.id)}
-                            className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${authMethod === method.id
-                              ? 'bg-white/20 text-white shadow-lg scale-105'
-                              : 'text-white/60 hover:text-white hover:bg-white/10'
+                    {/* Authentication Method Selector */}
+                    {authMethods.length > 1 && (
+                      <div className="mb-6">
+                        <div className="grid grid-cols-3 gap-2 p-1 bg-white/5 rounded-xl backdrop-blur-sm border border-white/10">
+                          {authMethods.map((method) => (
+                            <button
+                              key={method.id}
+                              onClick={() => handleAuthMethodChange(method.id)}
+                              className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${
+                                authMethod === method.id
+                                  ? 'bg-white/20 text-white shadow-lg scale-105'
+                                  : 'text-white/60 hover:text-white hover:bg-white/10'
                               }`}
-                          >
-                            <method.icon className="w-5 h-5" />
-                            <span className="text-xs font-medium">
-                              {method.label}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <form onSubmit={handleSubmit} className="space-y-6">
-                    {/* Username Field - FIXED with dark background */}
-                    <div className="space-y-2">
-                      <label className="text-white/80 text-sm font-medium">
-                        Username
-                      </label>
-                      <div className="relative group">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <User className="h-5 w-5 text-blue-400 group-focus-within:text-blue-300 transition-colors" />
-                        </div>
-                        <input
-                          type="text"
-                          name="username"
-                          value={username}
-                          readOnly={isReadOnly}
-                          onChange={(e) => setUsername(e.target.value)}
-                          className="login-input w-full pl-10 pr-4 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 backdrop-blur-sm"
-                          placeholder="Enter your username"
-                          required
-                        />
-                      </div>
-                    </div>
-                    {authMethod === 'password' && (
-                      <div className="space-y-2">
-                        <label className="text-white/80 text-sm font-medium">
-                          Password
-                        </label>
-                        <div className="relative group">
-                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <Lock className="h-5 w-5 text-blue-400 group-focus-within:text-blue-300 transition-colors" />
-                          </div>
-                          <input
-                            type={showPassword ? 'text' : 'password'}
-                            name="password"
-                            value={formData.password}
-                            onChange={handleInputChange}
-                            className="login-input w-full pl-10 pr-12 py-3 border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 backdrop-blur-sm"
-                            placeholder="Enter your password"
-                            required
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowPassword(!showPassword)}
-                            className="absolute inset-y-0 right-0 pr-3 flex items-center text-blue-400 hover:text-blue-300 transition-colors"
-                          >
-                            {showPassword ? (
-                              <EyeOff className="h-5 w-5" />
-                            ) : (
-                              <Eye className="h-5 w-5" />
-                            )}
-                          </button>
+                            >
+                              <method.icon className="w-5 h-5" />
+                              <span className="text-xs font-medium">
+                                {method.label}
+                              </span>
+                            </button>
+                          ))}
                         </div>
                       </div>
                     )}
 
-                    {/* Remember Me & Forgot Password */}
-                    <div className="flex items-center justify-between">
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          name="rememberMe"
-                          checked={formData.rememberMe}
-                          onChange={handleInputChange}
-                          className="w-4 h-4 text-blue-600 bg-white/10 border-white/20 rounded focus:ring-blue-500 focus:ring-2 transition-all"
-                        />
-                        <span className="text-white/70 text-sm group-hover:text-white/90 transition-colors">
-                          Remember me
-                        </span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={handleForgotPassword}
-                        className="text-blue-400 hover:text-blue-300 text-sm font-medium transition-colors hover:underline"
-                      >
-                        Change Password?
-                      </button>
-                    </div>
-
-                    {/* Enhanced Login Button */}
-                    <motion.button
-                      type="submit"
-                      disabled={isLoading}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed relative overflow-hidden group"
-                    >
-                      {/* Button shine effect */}
-                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -skew-x-12 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
-
-                      {isLoading ? (
-                        <div className="animate-spin rounded-full h-5 w-5 border-2 border-white/30 border-t-white"></div>
-                      ) : (
-                        <>
-                          Sign In
-                          <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                        </>
+                    <form onSubmit={handleSubmit} className="space-y-6">
+                      {/* Username Field - FIXED with dark background */}
+                      <div className="space-y-2">
+                        <label className="text-white/80 text-sm font-medium">
+                          Username
+                        </label>
+                        <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <User className="h-5 w-5 text-blue-400 group-focus-within:text-blue-300 transition-colors" />
+                          </div>
+                          <input
+                            type="text"
+                            name="username"
+                            value={username}
+                            readOnly={isReadOnly}
+                            autoComplete="username"
+                            aria-label="Username"
+                            onChange={(e) => setUsername(e.target.value)}
+                            className="login-input w-full pl-10 pr-4 py-3 border-2 border-white/15 rounded-xl bg-white/[0.06] text-white placeholder-white/35 caret-white selection:bg-blue-500 selection:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 backdrop-blur-sm disabled:opacity-60"
+                            placeholder="Enter your username"
+                            required
+                          />
+                        </div>
+                      </div>
+                      {authMethod === 'password' && (
+                        <div className="space-y-2">
+                          <label className="text-white/80 text-sm font-medium">
+                            Password
+                          </label>
+                          <div className="relative group">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                              <Lock className="h-5 w-5 text-blue-400 group-focus-within:text-blue-300 transition-colors" />
+                            </div>
+                            <input
+                              type={showPassword ? 'text' : 'password'}
+                              name="password"
+                              value={formData.password}
+                              onChange={handleInputChange}
+                              autoComplete="current-password"
+                              aria-label="Password"
+                              className="login-input w-full pl-10 pr-12 py-3 border-2 border-white/15 rounded-xl bg-white/[0.06] text-white placeholder-white/35 caret-white selection:bg-blue-500 selection:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 backdrop-blur-sm"
+                              placeholder="Enter your password"
+                              required
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              aria-label={
+                                showPassword ? 'Hide password' : 'Show password'
+                              }
+                              className="absolute inset-y-0 right-0 pr-3 flex items-center text-blue-400 hover:text-blue-300 transition-colors"
+                            >
+                              {showPassword ? (
+                                <EyeOff className="h-5 w-5" />
+                              ) : (
+                                <Eye className="h-5 w-5" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
                       )}
-                    </motion.button>
-                  </form>
-                </motion.div>
+
+                      {/* Remember Me & Forgot Password */}
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 cursor-pointer group">
+                          <input
+                            type="checkbox"
+                            name="rememberMe"
+                            checked={formData.rememberMe}
+                            onChange={handleInputChange}
+                            className="w-4 h-4 text-blue-600 bg-white/10 border-white/20 rounded focus:ring-blue-500 focus:ring-2 transition-all"
+                          />
+                          <span className="text-white/70 text-sm group-hover:text-white/90 transition-colors">
+                            Remember me
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleForgotPassword}
+                          className="text-blue-400 hover:text-blue-300 text-sm font-medium transition-colors hover:underline"
+                        >
+                          Change Password?
+                        </button>
+                      </div>
+
+                      {/* Enhanced Login Button */}
+                      <motion.button
+                        type="submit"
+                        disabled={isLoading}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed relative overflow-hidden group"
+                      >
+                        {/* Button shine effect */}
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -skew-x-12 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+
+                        {isLoading ? (
+                          <div className="animate-spin rounded-full h-5 w-5 border-2 border-white/30 border-t-white"></div>
+                        ) : (
+                          <>
+                            Sign In
+                            <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                          </>
+                        )}
+                      </motion.button>
+                    </form>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Footer Links */}
+              {step === 'login' && (
+                <div className="mt-6 pt-6 border-t border-white/10 text-center">
+                  <p className="text-white/60 text-sm">
+                    Need help?{' '}
+                    <button className="text-blue-400 hover:text-blue-300 font-medium transition-colors hover:underline">
+                      Contact Support
+                    </button>
+                  </p>
+                </div>
               )}
-
-              {/* Enhanced Success Step */}
-              {step === 'success' && (
-                <motion.div
-                  key="success"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.5 }}
-                  className="h-80 flex flex-col items-center justify-evenly"
-                >
-                  <div className="mb-8">
-                    <motion.div
-                      initial={{ scale: 0, rotate: -180 }}
-                      animate={{ scale: 1, rotate: 0 }}
-                      transition={{
-                        delay: 0.2,
-                        type: 'spring',
-                        stiffness: 200,
-                      }}
-                      className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center shadow-2xl"
-                    >
-                      <CheckCircle className="w-10 h-10 text-white" />
-                    </motion.div>
-                    <motion.h2
-                      className="text-2xl font-bold text-white mb-2"
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.4 }}
-                    >
-                      Welcome to FDT!
-                    </motion.h2>
-                    <motion.p
-                      className="text-white/70"
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.6 }}
-                    >
-                      Login successful. Redirecting to dashboard...
-                    </motion.p>
-                  </div>
-                  <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: '100%' }}
-                      transition={{ duration: 2, ease: 'easeInOut' }}
-                      className="h-full bg-gradient-to-r from-green-400 to-blue-400 rounded-full"
-                    />
-                  </div>
-                </motion.div>
-              )}
-
-            </AnimatePresence>
-
-            {/* Footer Links */}
-            {step === 'login' && (
-              <div className="mt-6 pt-6 border-t border-white/10 text-center">
-                <p className="text-white/60 text-sm">
-                  Need help?{' '}
-                  <button className="text-blue-400 hover:text-blue-300 font-medium transition-colors hover:underline">
-                    Contact Support
-                  </button>
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="mt-6 text-center">
-            <p className="text-white/40 text-xs">
-              © {new Date().getFullYear()} {appShortName} - {appName}. All
-              rights reserved.
-            </p>
+            </div>
+            <div className="mt-6 text-center">
+              <p className="text-white/40 text-xs">
+                © {new Date().getFullYear()} {appShortName} - {appName}. All
+                rights reserved.
+              </p>
+            </div>
           </div>
         </motion.div>
         {/* Footer */}
       </div>
+
+      {/* Welcome Modal - centered, full-screen overlay on successful login */}
+      <AnimatePresence>
+        {step === 'success' && (
+          <motion.div
+            key="success-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{
+                duration: 0.4,
+                type: 'spring',
+                stiffness: 220,
+                damping: 20,
+              }}
+              className="w-full max-w-sm bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-8 shadow-2xl text-center"
+            >
+              <motion.div
+                initial={{ scale: 0, rotate: -180 }}
+                animate={{ scale: 1, rotate: 0 }}
+                transition={{ delay: 0.15, type: 'spring', stiffness: 200 }}
+                className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center shadow-2xl"
+              >
+                <CheckCircle className="w-10 h-10 text-white" />
+              </motion.div>
+              <motion.h2
+                className="text-2xl font-bold text-white mb-2"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+              >
+                Welcome to FDT!
+              </motion.h2>
+              <motion.p
+                className="text-white/70 mb-6"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+              >
+                Login successful. Redirecting to dashboard...
+              </motion.p>
+              <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: '100%' }}
+                  transition={{ duration: 2, ease: 'easeInOut' }}
+                  className="h-full bg-gradient-to-r from-green-400 to-blue-400 rounded-full"
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
