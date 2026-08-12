@@ -25,6 +25,7 @@ import FaceIdLogin from './FaceIdLogin';
 import { useLocalMachine } from '../context/DeviceInfoContext';
 import { useSystemSettings } from '../hooks/useSystemSettings';
 
+
 const LoginPage = () => {
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
@@ -39,9 +40,9 @@ const LoginPage = () => {
   const [isLDAPEnabled, setIsLDAPEnabled] = useState(false);
 
   useEffect(() => {
-    if (machineInfo && !loading && isLDAPEnabled) {
+    if (machineInfo && !loading ) {
       setIsLoading(false);
-      const detectedUser = machineInfo?.UserName;
+      const detectedUser = machineInfo?.loggedInUser;
       if (detectedUser) {
         setUsername(detectedUser);
         setIsReadOnly(true);
@@ -114,13 +115,14 @@ const LoginPage = () => {
   const appName = config.app.name;
   const appShortName = config.app.shortName;
 
-  interface MachineInfo {
-    UserName: string;
-    Domain: string;
-    Identity: string;
-    MachineName: string;
-    Network: string;
+  interface machineInfo {
+    uniqueId: string | null;
+    systemName: string | null;
+    loggedInUser: string | null;
+    clientMacAddress: string | null;
+    clientIpAddress: string | null;
   }
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -439,11 +441,10 @@ const LoginPage = () => {
                             <button
                               key={method.id}
                               onClick={() => handleAuthMethodChange(method.id)}
-                              className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${
-                                authMethod === method.id
+                              className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${authMethod === method.id
                                   ? 'bg-white/20 text-white shadow-lg scale-105'
                                   : 'text-white/60 hover:text-white hover:bg-white/10'
-                              }`}
+                                }`}
                             >
                               <method.icon className="w-5 h-5" />
                               <span className="text-xs font-medium">

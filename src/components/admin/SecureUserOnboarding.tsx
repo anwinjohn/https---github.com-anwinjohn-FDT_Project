@@ -177,6 +177,7 @@ const SecureUserOnboarding: React.FC = () => {
 
       const request = { user_id: userId.trim() };
       const response = await apiClient.post<any>('/admin/fetch-user', request);
+
       //const response = await apiClient.post<any>("/admin/fetch-user", request);
       if (response?.success && response.data?.user) {
         const user = response.data?.user;
