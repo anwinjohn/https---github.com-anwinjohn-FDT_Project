@@ -31,6 +31,7 @@ import PermissionGuard from '../PermissionGuard';
 import apiClient from '../../utils/apiClient';
 import { logger } from '../../utils/logger';
 import { useAuth } from '../../context/AuthContext';
+import { invalidatePermissions } from '../../hooks/usePermissions';
 
 // ---------------------------------------------------------------------------
 // Types matching the new role/menu-permissions API response shape
@@ -680,6 +681,7 @@ const SecureRoleMenuPermissions: React.FC = () => {
           'success'
         );
         setHasChanges(false);
+        invalidatePermissions(selectedRole.id.toString());
 
         logger.info(
           `Role permissions saved for ${selectedRole.role_name}`,
@@ -1351,8 +1353,8 @@ const SecureRoleMenuPermissions: React.FC = () => {
                         ? 'bg-green-500/20 text-green-300 border border-green-500/30'
                         : 'bg-green-100 text-green-700 border border-green-300'
                       : theme === 'dark'
-                      ? 'bg-red-500/20 text-red-300 border border-red-500/30'
-                      : 'bg-red-100 text-red-700 border border-red-300'
+                        ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                        : 'bg-red-100 text-red-700 border border-red-300'
                   }`}
                 >
                   {selectedRole.is_active ? 'Active' : 'Inactive'}
