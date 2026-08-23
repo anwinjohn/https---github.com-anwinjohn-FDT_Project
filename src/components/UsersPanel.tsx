@@ -759,7 +759,7 @@ const UsersPanel: React.FC<UsersPanelProps> = ({
                                 <span
                                   className={`font-semibold text-sm truncate ${primaryText}`}
                                 >
-                                  {user.emp_id}
+                                  {user.emp_name || user.emp_id}
                                 </span>
                                 <span
                                   className={`text-xs px-1.5 py-0.5 rounded-md flex-shrink-0 ${badgeClass[risk.level as 'high' | 'medium' | 'low']}`}

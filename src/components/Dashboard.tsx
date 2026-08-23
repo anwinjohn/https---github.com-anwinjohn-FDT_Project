@@ -31,6 +31,8 @@ import PermissionGuard from './PermissionGuard';
 import SystemLogMonitor from './alerts/AlertAuditLog';
 import RulesManagement from './admin/RulesManagement';
 import ManagementFraudDashboard from './admin/Managementfrauddashboard';
+import AlertListing from './alerts/AlertListing';
+
 import {
   FraudVolumeOverTimeCard,
   FraudCategoryMixCard,
@@ -883,6 +885,8 @@ const Dashboard: React.FC = () => {
         return <RulesManagement data={rules} isLoading={isLoading} />;
       case 'risk-analytics':
         return <RiskAnalyticsDashboard dateRange={dateRange} />;
+      case 'alert-lists':
+        return <AlertListing />;
       case 'audit-logs':
       case 'logs':
         return <SystemLogMonitor />;

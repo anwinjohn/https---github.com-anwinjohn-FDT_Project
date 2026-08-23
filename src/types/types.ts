@@ -10,6 +10,7 @@ export interface AlertSummary {
 
 export interface UserAlertSummaryBase {
   emp_id: string;
+  emp_name: string;
   count: number;
   last_violation?: string; // Date of last violation
   rule_ids?: string[]; // List of rule IDs violated
