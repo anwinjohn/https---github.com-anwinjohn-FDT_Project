@@ -18,6 +18,7 @@ import {
   Inbox,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import apiClient from '../../utils/apiClient';
 
 /* ------------------------------------------------------------------ */
 /*  Types — merge these into ../types/types.ts                         */
@@ -27,6 +28,7 @@ export interface RuleConfig {
   config_key: string;
   config_value: string;
   is_active: boolean;
+  rule_id: string;
 }
 
 export type RulePriority = 'High' | 'Medium' | 'Low';
@@ -99,20 +101,26 @@ const ToggleSwitch: React.FC<{
       aria-label={label}
       onClick={onChange}
       className={`relative ${w} ${h} shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 ${
-        theme === 'dark' ? 'focus-visible:ring-offset-slate-900' : 'focus-visible:ring-offset-white'
+        theme === 'dark'
+          ? 'focus-visible:ring-offset-slate-900'
+          : 'focus-visible:ring-offset-white'
       } ${
         checked
           ? 'bg-gradient-to-r from-emerald-500 to-teal-500'
           : theme === 'dark'
-          ? 'bg-white/15'
-          : 'bg-gray-300'
+            ? 'bg-white/15'
+            : 'bg-gray-300'
       }`}
     >
       <motion.span
         layout
         transition={{ type: 'spring', stiffness: 500, damping: 32 }}
         className={`absolute top-0.5 ${knob} rounded-full bg-white shadow-md`}
-        style={{ left: checked ? `calc(100% - ${size === 'md' ? '22px' : '18px'})` : '2px' }}
+        style={{
+          left: checked
+            ? `calc(100% - ${size === 'md' ? '22px' : '18px'})`
+            : '2px',
+        }}
       />
     </button>
   );
@@ -126,15 +134,18 @@ const PriorityBadge: React.FC<{ priority: RulePriority }> = ({ priority }) => {
   const { theme } = useTheme();
 
   const styles: Record<RulePriority, string> = {
-    High: theme === 'dark'
-      ? 'bg-red-500/15 text-red-300 border-red-500/30'
-      : 'bg-red-50 text-red-700 border-red-200',
-    Medium: theme === 'dark'
-      ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-      : 'bg-amber-50 text-amber-700 border-amber-200',
-    Low: theme === 'dark'
-      ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
-      : 'bg-sky-50 text-sky-700 border-sky-200',
+    High:
+      theme === 'dark'
+        ? 'bg-red-500/15 text-red-300 border-red-500/30'
+        : 'bg-red-50 text-red-700 border-red-200',
+    Medium:
+      theme === 'dark'
+        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+        : 'bg-amber-50 text-amber-700 border-amber-200',
+    Low:
+      theme === 'dark'
+        ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+        : 'bg-sky-50 text-sky-700 border-sky-200',
   };
 
   const dot: Record<RulePriority, string> = {
@@ -157,7 +168,10 @@ const PriorityBadge: React.FC<{ priority: RulePriority }> = ({ priority }) => {
 /*  Toast                                                               */
 /* ------------------------------------------------------------------ */
 
-const Toast: React.FC<{ message: string; theme: string }> = ({ message, theme }) => (
+const Toast: React.FC<{ message: string; theme: string }> = ({
+  message,
+  theme,
+}) => (
   <motion.div
     initial={{ opacity: 0, y: 16, scale: 0.96 }}
     animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -189,19 +203,25 @@ const ConfigRow: React.FC<{
   return (
     <div
       className={`flex items-center gap-3 px-4 py-3 rounded-lg border ${
-        theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-gray-50 border-gray-200'
+        theme === 'dark'
+          ? 'bg-white/5 border-white/10'
+          : 'bg-gray-50 border-gray-200'
       }`}
     >
       <div className="flex-1 min-w-0">
-        <div className={`text-xs font-medium uppercase tracking-wide ${
-          theme === 'dark' ? 'text-white/50' : 'text-gray-500'
-        }`}>
+        <div
+          className={`text-xs font-medium uppercase tracking-wide ${
+            theme === 'dark' ? 'text-white/50' : 'text-gray-500'
+          }`}
+        >
           {humanizeKey(config.config_key)}
         </div>
         {editing ? (
           <input
             value={config.config_value}
-            onChange={(e) => onChange({ ...config, config_value: e.target.value })}
+            onChange={(e) =>
+              onChange({ ...config, config_value: e.target.value })
+            }
             className={`mt-1 w-full max-w-[220px] px-2 py-1 rounded-md text-sm font-semibold border focus:outline-none focus:ring-2 focus:ring-blue-400 ${
               theme === 'dark'
                 ? 'bg-slate-900/80 border-white/20 text-white'
@@ -209,9 +229,11 @@ const ConfigRow: React.FC<{
             }`}
           />
         ) : (
-          <div className={`mt-0.5 text-sm font-semibold ${
-            theme === 'dark' ? 'text-white' : 'text-gray-900'
-          }`}>
+          <div
+            className={`mt-0.5 text-sm font-semibold ${
+              theme === 'dark' ? 'text-white' : 'text-gray-900'
+            }`}
+          >
             {config.config_value}
           </div>
         )}
@@ -219,7 +241,9 @@ const ConfigRow: React.FC<{
       <ToggleSwitch
         size="sm"
         checked={config.is_active}
-        onChange={() => editing && onChange({ ...config, is_active: !config.is_active })}
+        onChange={() =>
+          editing && onChange({ ...config, is_active: !config.is_active })
+        }
         label={`Toggle ${config.config_key}`}
       />
     </div>
@@ -295,8 +319,8 @@ const RuleCard: React.FC<{
                       ? 'text-emerald-300'
                       : 'text-emerald-700'
                     : theme === 'dark'
-                    ? 'text-white/40'
-                    : 'text-gray-400'
+                      ? 'text-white/40'
+                      : 'text-gray-400'
                 }`}
               >
                 {rule.active_status ? (
@@ -308,32 +332,46 @@ const RuleCard: React.FC<{
               </span>
             </div>
 
-            <h4 className={`text-base font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+            <h4
+              className={`text-base font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}
+            >
               {rule.scenario}
             </h4>
-            <p className={`mt-1.5 text-sm leading-relaxed ${
-              theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-            }`}>
+            <p
+              className={`mt-1.5 text-sm leading-relaxed ${
+                theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+              }`}
+            >
               {renderLogic(rule.scenario_logic)}
             </p>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            <ToggleSwitch checked={rule.active_status} onChange={onToggleStatus} label={`Toggle ${rule.rule_id}`} />
+            <ToggleSwitch
+              checked={rule.active_status}
+              onChange={onToggleStatus}
+              label={`Toggle ${rule.rule_id}`}
+            />
           </div>
         </div>
 
-        <div className={`mt-4 pt-4 border-t flex items-center justify-between ${
-          theme === 'dark' ? 'border-white/10' : 'border-gray-100'
-        }`}>
+        <div
+          className={`mt-4 pt-4 border-t flex items-center justify-between ${
+            theme === 'dark' ? 'border-white/10' : 'border-gray-100'
+          }`}
+        >
           <button
             onClick={() => setExpanded((v) => !v)}
             className={`inline-flex items-center gap-1.5 text-sm font-medium transition-colors ${
-              theme === 'dark' ? 'text-blue-300 hover:text-blue-200' : 'text-blue-600 hover:text-blue-700'
+              theme === 'dark'
+                ? 'text-blue-300 hover:text-blue-200'
+                : 'text-blue-600 hover:text-blue-700'
             }`}
           >
             <Settings2 className="w-4 h-4" />
-            {hasConfigs ? `Configuration (${rule.configs.length})` : 'Configuration'}
+            {hasConfigs
+              ? `Configuration (${rule.configs.length})`
+              : 'Configuration'}
             <ChevronDown
               className={`w-4 h-4 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
             />
@@ -394,7 +432,9 @@ const RuleCard: React.FC<{
                       config={cfg}
                       editing={editing}
                       onChange={(next) =>
-                        setDraft((prev) => prev.map((c, i) => (i === idx ? next : c)))
+                        setDraft((prev) =>
+                          prev.map((c, i) => (i === idx ? next : c))
+                        )
                       }
                     />
                   ))
@@ -434,14 +474,20 @@ const StatCard: React.FC<{
   return (
     <div
       className={`p-4 rounded-xl border ${
-        theme === 'dark' ? `bg-gradient-to-br ${gradient} border-white/10` : `bg-gradient-to-br ${gradient} border-gray-200`
+        theme === 'dark'
+          ? `bg-gradient-to-br ${gradient} border-white/10`
+          : `bg-gradient-to-br ${gradient} border-gray-200`
       }`}
     >
       <div className="flex items-center gap-2 mb-2">
         <span className={accent}>{icon}</span>
         <span className={`text-sm font-medium ${accent}`}>{label}</span>
       </div>
-      <div className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{value}</div>
+      <div
+        className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}
+      >
+        {value}
+      </div>
     </div>
   );
 };
@@ -472,7 +518,9 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
   }, [toast]);
 
   const activeCount = rules.filter((r) => r.active_status).length;
-  const highPriorityCount = rules.filter((r) => r.rule_priority === 'High').length;
+  const highPriorityCount = rules.filter(
+    (r) => r.rule_priority === 'High'
+  ).length;
 
   const filteredRules = useMemo(() => {
     return rules.filter((rule) => {
@@ -484,7 +532,8 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
         statusFilter === 'all' ||
         (statusFilter === 'active' && rule.active_status) ||
         (statusFilter === 'inactive' && !rule.active_status);
-      const matchesPriority = priorityFilter === 'all' || rule.rule_priority === priorityFilter;
+      const matchesPriority =
+        priorityFilter === 'all' || rule.rule_priority === priorityFilter;
       return matchesSearch && matchesStatus && matchesPriority;
     });
   }, [rules, search, statusFilter, priorityFilter]);
@@ -501,9 +550,42 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
     );
   };
 
+  //  const response = await apiClient.post('/admin/modify-menu-assignment', {
+  //         roleId: selectedRole.id,
+  //         roleName: selectedRole.role_name,
+  //         actionedBy: user?.username,
+  //         actionedUserId: user?.id,
+  //         permissions: permissionsPayload,
+  //       });
+
+  // const response = await apiClient.post('/admin/toggle-rule-status', {
+  //         ruleId,
+  //         isActive,
+  //       });
+  //       return response.data;
+  //     }
+  //  }
+
+  const toggleRuleStatus = async (ruleId: string, isActive: boolean) => {
+    const response = await apiClient.post('/rule/toggle-status', {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        rule_id: ruleId,
+        active_status: isActive,
+      }),
+    });
+    return response.data;
+  }
+
   const handleSaveConfigs = (ruleId: string, configs: RuleConfig[]) => {
-    setRules((prev) => prev.map((r) => (r.rule_id === ruleId ? { ...r, configs } : r)));
+    setRules((prev) =>
+      prev.map((r) => (r.rule_id === ruleId ? { ...r, configs } : r))
+    );
     onSaveConfigs?.(ruleId, configs);
+    console.log(`Saving configs for ${ruleId}:`, configs);
+    toggleRuleStatus(ruleId, configs.some((c) => c.is_active)); // Example: activate rule if any config is active
     setToast(`${ruleId} configuration saved`);
   };
 
@@ -514,7 +596,9 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
   }`;
 
   const selectBase = `px-3 py-2.5 rounded-xl border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors ${
-    theme === 'dark' ? 'bg-white/5 border-white/15 text-white' : 'bg-white border-gray-200 text-gray-900'
+    theme === 'dark'
+      ? 'bg-white/5 border-white/15 text-white'
+      : 'bg-white border-gray-200 text-gray-900'
   }`;
 
   return (
@@ -523,31 +607,43 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
       className={`rounded-2xl border shadow-2xl overflow-hidden ${
-        theme === 'dark' ? 'bg-white/10 border-white/20' : 'bg-white border-gray-200 shadow-card'
+        theme === 'dark'
+          ? 'bg-white/10 border-white/20'
+          : 'bg-white border-gray-200 shadow-card'
       } backdrop-blur-xl`}
     >
       {/* Header */}
-      <div className={`flex justify-between items-center p-6 border-b ${
-        theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-      }`}>
+      <div
+        className={`flex justify-between items-center p-6 border-b ${
+          theme === 'dark' ? 'border-white/20' : 'border-gray-200'
+        }`}
+      >
         <div className="flex items-center gap-3">
           <div className="p-3 bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl shadow-lg">
             <ListChecks className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h3 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+            <h3
+              className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}
+            >
               Alert Rules
             </h3>
-            <p className={`text-sm ${theme === 'dark' ? 'text-blue-200/70' : 'text-blue-600'}`}>
+            <p
+              className={`text-sm ${theme === 'dark' ? 'text-blue-200/70' : 'text-blue-600'}`}
+            >
               Activate, deactivate and configure detection rules
             </p>
           </div>
         </div>
         <div className="text-right">
-          <div className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+          <div
+            className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}
+          >
             {rules.length}
           </div>
-          <div className={`text-xs font-medium ${theme === 'dark' ? 'text-blue-300' : 'text-blue-600'}`}>
+          <div
+            className={`text-xs font-medium ${theme === 'dark' ? 'text-blue-300' : 'text-blue-600'}`}
+          >
             Total Rules
           </div>
         </div>
@@ -556,14 +652,20 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
       <div className="p-6 space-y-6">
         {isLoading ? (
           <div className="flex flex-col items-center justify-center h-[350px] space-y-4">
-            <div className={`w-12 h-12 rounded-full border-4 border-t-transparent animate-spin ${
-              theme === 'dark' ? 'border-blue-400/60' : 'border-blue-500/60'
-            }`} />
+            <div
+              className={`w-12 h-12 rounded-full border-4 border-t-transparent animate-spin ${
+                theme === 'dark' ? 'border-blue-400/60' : 'border-blue-500/60'
+              }`}
+            />
             <div className="text-center">
-              <div className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+              <div
+                className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}
+              >
                 Loading rules...
               </div>
-              <div className={`text-sm mt-1 ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'}`}>
+              <div
+                className={`text-sm mt-1 ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'}`}
+              >
                 Fetching rule configuration
               </div>
             </div>
@@ -576,21 +678,35 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
                 icon={<Power className="w-4 h-4" />}
                 label="Active Rules"
                 value={activeCount}
-                gradient={theme === 'dark' ? 'from-emerald-500/20 to-teal-500/20' : 'from-emerald-100 to-teal-100'}
-                accent={theme === 'dark' ? 'text-emerald-300' : 'text-emerald-700'}
+                gradient={
+                  theme === 'dark'
+                    ? 'from-emerald-500/20 to-teal-500/20'
+                    : 'from-emerald-100 to-teal-100'
+                }
+                accent={
+                  theme === 'dark' ? 'text-emerald-300' : 'text-emerald-700'
+                }
               />
               <StatCard
                 icon={<ShieldOff className="w-4 h-4" />}
                 label="Inactive Rules"
                 value={rules.length - activeCount}
-                gradient={theme === 'dark' ? 'from-slate-500/20 to-slate-700/20' : 'from-gray-100 to-gray-200'}
+                gradient={
+                  theme === 'dark'
+                    ? 'from-slate-500/20 to-slate-700/20'
+                    : 'from-gray-100 to-gray-200'
+                }
                 accent={theme === 'dark' ? 'text-white/60' : 'text-gray-600'}
               />
               <StatCard
                 icon={<AlertTriangle className="w-4 h-4" />}
                 label="High Priority"
                 value={highPriorityCount}
-                gradient={theme === 'dark' ? 'from-red-500/20 to-orange-500/20' : 'from-red-100 to-orange-100'}
+                gradient={
+                  theme === 'dark'
+                    ? 'from-red-500/20 to-orange-500/20'
+                    : 'from-red-100 to-orange-100'
+                }
                 accent={theme === 'dark' ? 'text-red-300' : 'text-red-700'}
               />
             </div>
@@ -598,9 +714,11 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
             {/* Toolbar */}
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
-                <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${
-                  theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                }`} />
+                <Search
+                  className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${
+                    theme === 'dark' ? 'text-white/40' : 'text-gray-400'
+                  }`}
+                />
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -609,10 +727,14 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
                 />
               </div>
               <div className="flex items-center gap-2">
-                <SlidersHorizontal className={`w-4 h-4 ${theme === 'dark' ? 'text-white/40' : 'text-gray-400'}`} />
+                <SlidersHorizontal
+                  className={`w-4 h-4 ${theme === 'dark' ? 'text-white/40' : 'text-gray-400'}`}
+                />
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                  onChange={(e) =>
+                    setStatusFilter(e.target.value as StatusFilter)
+                  }
                   className={selectBase}
                 >
                   <option value="all">All statuses</option>
@@ -621,7 +743,9 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
                 </select>
                 <select
                   value={priorityFilter}
-                  onChange={(e) => setPriorityFilter(e.target.value as PriorityFilter)}
+                  onChange={(e) =>
+                    setPriorityFilter(e.target.value as PriorityFilter)
+                  }
                   className={selectBase}
                 >
                   <option value="all">All priorities</option>
@@ -641,17 +765,25 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
                       key={rule.rule_id}
                       rule={rule}
                       onToggleStatus={() => handleToggleStatus(rule.rule_id)}
-                      onSaveConfigs={(configs) => handleSaveConfigs(rule.rule_id, configs)}
+                      onSaveConfigs={(configs) =>
+                        handleSaveConfigs(rule.rule_id, configs)
+                      }
                     />
                   ))}
                 </AnimatePresence>
               </div>
             ) : (
-              <div className={`flex flex-col items-center justify-center py-16 rounded-xl border border-dashed ${
-                theme === 'dark' ? 'border-white/10 text-white/40' : 'border-gray-200 text-gray-400'
-              }`}>
+              <div
+                className={`flex flex-col items-center justify-center py-16 rounded-xl border border-dashed ${
+                  theme === 'dark'
+                    ? 'border-white/10 text-white/40'
+                    : 'border-gray-200 text-gray-400'
+                }`}
+              >
                 <RotateCcw className="w-8 h-8 mb-3" />
-                <p className="text-sm font-medium">No rules match your filters</p>
+                <p className="text-sm font-medium">
+                  No rules match your filters
+                </p>
                 <button
                   onClick={() => {
                     setSearch('');
@@ -670,7 +802,9 @@ const RulesManagement: React.FC<RulesManagementPageProps> = ({
         )}
       </div>
 
-      <AnimatePresence>{toast && <Toast message={toast} theme={theme} />}</AnimatePresence>
+      <AnimatePresence>
+        {toast && <Toast message={toast} theme={theme} />}
+      </AnimatePresence>
     </motion.div>
   );
 };

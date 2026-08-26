@@ -1,27 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Shield,
-  AlertTriangle,
-  Users,
-  Building,
-  Network,
-  FileText,
-  Target,
-  Zap,
-  ArrowUpRight,
-  Clock,
-  DollarSign,
-  Briefcase,
-  CreditCard,
-  Loader2,
-  AlertCircle,
-  RefreshCw,
-  BarChart3,
-  Calendar,
-  Gauge,
-  CheckCircle2,
-} from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   AreaChart,
   Area,
@@ -40,130 +18,78 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
+  ResponsiveContainer
 } from 'recharts';
+import {
+  Shield,
+  AlertTriangle,
+  Users,
+  Network,
+  FileText,
+  Target,
+  Zap,
+  Clock,
+  DollarSign,
+  Briefcase,
+  CreditCard,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+  BarChart3,
+  Calendar,
+  Gauge,
+  CheckCircle2,
+  Flag,
+  Activity,
+  Database,
+  Layers,
+  Radar,
+  ChevronRight,
+  X,
+  UserPlus,
+  Sparkles
+} from 'lucide-react';
 import { useRiskAnalytics } from '../hooks/useRiskAnalytics';
 import { DateRange } from '../types/types';
 import { useTheme } from '../context/ThemeContext';
 import { formatNumber } from '../utils/formatters';
+import { ThemeMode, CHART, severityHex, scoreHex, getTokens, chartTheme } from '../design/Tokens';
+import { Panel, StatCard, DataTable, SeverityBadge, EmptyState, ChartSkeleton, Tag, ProgressBar, MetricChip, Callout } from '../design/Primitives';
 
 interface RiskAnalyticsDashboardProps {
   dateRange: DateRange;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Defensive access                                                    */
+/*                                                                      */
+/*  metadata.data_quality reports missing_fields / data_warnings, which */
+/*  means this payload is expected to sometimes be incomplete. Every    */
+/*  read goes through safeGet with an explicit default, and every       */
+/*  section renders nothing (rather than crashing) when its slice of    */
+/*  data is absent or empty.                                            */
+/* ------------------------------------------------------------------ */
 
-type ThemeMode = 'dark' | 'light';
-
-const CHART = {
-  trend: '#2563EB',
-  amount: '#0D9488',
-  frequency: '#D97706',
-  network: '#7C3AED',
-  secondary: '#94A3B8',
-};
-
-const severityHex = (level: string) => {
-  switch ((level || '').toLowerCase()) {
-    case 'critical':
-      return '#DC2626';
-    case 'high':
-      return '#EA580C';
-    case 'medium':
-      return '#D97706';
-    case 'low':
-      return '#16A34A';
-    default:
-      return '#64748B';
+const safeGet = (obj: any, path: string, defaultValue: any = null) => {
+  try {
+    const value = path.split('.').reduce((current, key) => current?.[key], obj);
+    return value === undefined || value === null ? defaultValue : value;
+  } catch {
+    return defaultValue;
   }
 };
 
-const scoreHex = (score: number) => {
-  if (score >= 80) return '#DC2626';
-  if (score >= 60) return '#EA580C';
-  if (score >= 40) return '#D97706';
-  return '#16A34A';
-};
-
-const badgeClasses = (level: string, theme: ThemeMode) => {
-  const key = (level || '').toLowerCase();
-  const dark: Record<string, string> = {
-    critical: 'bg-red-500/15 text-red-400 ring-1 ring-inset ring-red-500/30',
-    high: 'bg-orange-500/15 text-orange-400 ring-1 ring-inset ring-orange-500/30',
-    medium:
-      'bg-amber-500/15 text-amber-400 ring-1 ring-inset ring-amber-500/30',
-    low: 'bg-emerald-500/15 text-emerald-400 ring-1 ring-inset ring-emerald-500/30',
-  };
-  const light: Record<string, string> = {
-    critical: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
-    high: 'bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200',
-    medium: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
-    low: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200',
-  };
-  const map = theme === 'dark' ? dark : light;
-  return (
-    map[key] ||
-    (theme === 'dark'
-      ? 'bg-slate-500/15 text-slate-400 ring-1 ring-inset ring-slate-500/30'
-      : 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200')
-  );
-};
-
-const getTokens = (theme: ThemeMode) => ({
-  page: theme === 'dark' ? 'bg-[#0B1220]' : 'bg-[#F4F6F9]',
-  surface:
-    theme === 'dark'
-      ? 'bg-[#111827] border-[#1F2937]'
-      : 'bg-white border-[#E3E8EF]',
-  surfaceAlt:
-    theme === 'dark'
-      ? 'bg-[#0D1420] border-[#1F2937]'
-      : 'bg-[#F8FAFC] border-[#E3E8EF]',
-  border: theme === 'dark' ? 'border-[#1F2937]' : 'border-[#E3E8EF]',
-  textPrimary: theme === 'dark' ? 'text-white' : 'text-[#101828]',
-  textSecondary: theme === 'dark' ? 'text-slate-400' : 'text-[#475467]',
-  textTertiary: theme === 'dark' ? 'text-slate-500' : 'text-[#98A2B3]',
-  rowHover: theme === 'dark' ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50',
-  chip:
-    theme === 'dark'
-      ? 'bg-white/[0.04] border-white/10'
-      : 'bg-slate-50 border-slate-200',
-});
-
-const chartTheme = (theme: ThemeMode) => ({
-  grid: theme === 'dark' ? 'rgba(255,255,255,0.06)' : '#EEF2F6',
-  tick: theme === 'dark' ? '#7C8BA1' : '#64748B',
-  tooltip: {
-    contentStyle: {
-      backgroundColor: theme === 'dark' ? '#0F172A' : '#FFFFFF',
-      border: `1px solid ${theme === 'dark' ? '#1F2937' : '#E2E8F0'}`,
-      borderRadius: '8px',
-      fontSize: '12px',
-      boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-    },
-    labelStyle: {
-      color: theme === 'dark' ? '#E2E8F0' : '#101828',
-      fontWeight: 600,
-      marginBottom: 4,
-    },
-    itemStyle: { color: theme === 'dark' ? '#CBD5E1' : '#334155' },
-  },
-});
-
-/* ------------------------------------------------------------------ */
-/*  Shared primitives                                                  */
-/* ------------------------------------------------------------------ */
-
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode; fallback?: React.ReactNode },
-  { hasError: boolean; error?: Error }
+  { hasError: boolean }
 > {
   constructor(props: any) {
     super(props);
     this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
+  static getDerivedStateFromError() {
+    return { hasError: true };
   }
 
   componentDidCatch(error: Error, errorInfo: any) {
@@ -172,248 +98,39 @@ class ErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
-      return (
-        this.props.fallback || (
-          <div className="flex flex-col items-center justify-center h-64 space-y-4">
-            <AlertCircle className="w-10 h-10 text-red-500" />
-            <div className="text-center">
-              <h3 className="text-base font-semibold text-slate-200 mb-1">
-                Something went wrong
-              </h3>
-              <p className="text-slate-400 text-sm">
-                Unable to display this section. Please try refreshing.
-              </p>
-              <button
-                onClick={() => this.setState({ hasError: false })}
-                className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
-              >
-                Try Again
-              </button>
-            </div>
+      return this.props.fallback || (
+        <div className="flex flex-col items-center justify-center h-64 space-y-4">
+          <AlertCircle className="w-10 h-10 text-red-500" />
+          <div className="text-center">
+            <h3 className="text-base font-semibold text-slate-200 mb-1">Something went wrong</h3>
+            <p className="text-slate-400 text-sm">Unable to display this section.</p>
+            <button
+              onClick={() => this.setState({ hasError: false })}
+              className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+            >
+              Try Again
+            </button>
           </div>
-        )
+        </div>
       );
     }
-
     return this.props.children;
   }
 }
 
-const safeGet = (obj: any, path: string, defaultValue: any = null) => {
-  try {
-    return (
-      path.split('.').reduce((current, key) => current?.[key], obj) ??
-      defaultValue
-    );
-  } catch {
-    return defaultValue;
-  }
+const parseDate = (value: string) => new Date((value || '').replace(' ', 'T'));
+
+const formatDateShort = (value: string) => {
+  const d = parseDate(value);
+  return isNaN(d.getTime()) ? value : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
-const EmptyState: React.FC<{
-  icon: React.ComponentType<any>;
-  title: string;
-  description: string;
-  action?: () => void;
-  actionLabel?: string;
-  theme: ThemeMode;
-}> = ({ icon: Icon, title, description, action, actionLabel, theme }) => {
-  const tk = getTokens(theme);
-  return (
-    <div className="flex flex-col items-center justify-center h-64 space-y-4">
-      <div className={`p-3.5 rounded-xl border ${tk.chip}`}>
-        <Icon className={`w-8 h-8 ${tk.textTertiary}`} />
-      </div>
-      <div className="text-center max-w-md">
-        <h3 className={`text-base font-semibold mb-1.5 ${tk.textPrimary}`}>
-          {title}
-        </h3>
-        <p className={`text-sm ${tk.textSecondary}`}>{description}</p>
-        {action && actionLabel && (
-          <button
-            onClick={action}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            {actionLabel}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-};
+const HOURS_24 = Array.from({ length: 24 }, (_, i) => i);
 
-const Panel: React.FC<{
-  icon?: React.ComponentType<any>;
-  iconColor?: string;
-  title: string;
-  meta?: React.ReactNode;
-  theme: ThemeMode;
-  delay?: number;
-  children: React.ReactNode;
-}> = ({ icon: Icon, iconColor, title, meta, theme, delay = 0, children }) => {
-  const tk = getTokens(theme);
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, delay }}
-      className={`rounded-xl border ${tk.surface} shadow-sm overflow-hidden`}
-    >
-      <div
-        className={`flex items-center justify-between px-5 py-4 border-b ${tk.border}`}
-      >
-        <h3
-          className={`text-sm font-semibold flex items-center gap-2 ${tk.textPrimary}`}
-        >
-          {Icon && (
-            <Icon
-              className="w-4 h-4"
-              style={{ color: iconColor || CHART.trend }}
-            />
-          )}
-          {title}
-        </h3>
-        {meta}
-      </div>
-      <div className="p-5">{children}</div>
-    </motion.div>
-  );
-};
-
-const StatCard: React.FC<{
-  icon: React.ComponentType<any>;
-  label: string;
-  value: React.ReactNode;
-  sublabel: string;
-  accent: 'critical' | 'high' | 'medium' | 'info';
-  theme: ThemeMode;
-  delay?: number;
-}> = ({ icon: Icon, label, value, sublabel, accent, theme, delay = 0 }) => {
-  const tk = getTokens(theme);
-  const accentHex = {
-    critical: '#DC2626',
-    high: '#EA580C',
-    medium: '#D97706',
-    info: '#2563EB',
-  }[accent];
-  const iconWrap =
-    theme === 'dark'
-      ? {
-          critical: 'bg-red-500/10',
-          high: 'bg-orange-500/10',
-          medium: 'bg-amber-500/10',
-          info: 'bg-blue-500/10',
-        }[accent]
-      : {
-          critical: 'bg-red-50',
-          high: 'bg-orange-50',
-          medium: 'bg-amber-50',
-          info: 'bg-blue-50',
-        }[accent];
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, delay }}
-      className={`rounded-xl border ${tk.surface} shadow-sm p-5 border-l-4`}
-      style={{ borderLeftColor: accentHex }}
-    >
-      <div className="flex items-center gap-2.5 mb-3">
-        <div className={`p-1.5 rounded-lg ${iconWrap}`}>
-          <Icon className="w-4 h-4" style={{ color: accentHex }} />
-        </div>
-        <span
-          className={`text-xs font-medium uppercase tracking-wide ${tk.textSecondary}`}
-        >
-          {label}
-        </span>
-      </div>
-      <div className={`text-3xl font-bold tabular-nums ${tk.textPrimary}`}>
-        {value}
-      </div>
-      <div className={`text-xs mt-1.5 ${tk.textTertiary}`}>{sublabel}</div>
-    </motion.div>
-  );
-};
-
-const alignClass: Record<string, string> = {
-  left: 'text-left',
-  right: 'text-right',
-  center: 'text-center',
-};
-
-const DataTable: React.FC<{
-  columns: {
-    key: string;
-    label: string;
-    align?: 'left' | 'right' | 'center';
-    render?: (row: any) => React.ReactNode;
-  }[];
-  rows: any[];
-  theme: ThemeMode;
-  keyField?: string;
-}> = ({ columns, rows, theme, keyField }) => {
-  const tk = getTokens(theme);
-  return (
-    <div className="overflow-x-auto -mx-1">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className={`border-b ${tk.border}`}>
-            {columns.map((col) => (
-              <th
-                key={col.key}
-                className={`py-2 px-3 font-medium text-[11px] uppercase tracking-wide whitespace-nowrap ${tk.textTertiary} ${alignClass[col.align || 'left']}`}
-              >
-                {col.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={keyField ? (row[keyField] ?? i) : i}
-              className={`border-b last:border-0 ${tk.border} ${tk.rowHover} transition-colors`}
-            >
-              {columns.map((col) => (
-                <td
-                  key={col.key}
-                  className={`py-2.5 px-3 ${alignClass[col.align || 'left']} ${tk.textPrimary}`}
-                >
-                  {col.render ? col.render(row) : row[col.key]}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-};
-
-const SeverityBadge: React.FC<{ label: string; theme: ThemeMode }> = ({
-  label,
-  theme,
-}) => (
-  <span
-    className={`px-2 py-0.5 text-[11px] font-semibold rounded-full whitespace-nowrap ${badgeClasses(label, theme)}`}
-  >
-    {(label || 'UNKNOWN').toUpperCase()}
-  </span>
-);
-
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
-
-const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
-  dateRange,
-}) => {
-  const { data, isLoading, error, lastUpdated, refreshData } =
-    useRiskAnalytics(dateRange);
+const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({ dateRange }) => {
+  const { data, isLoading, error, lastUpdated, refreshData } = useRiskAnalytics(dateRange);
   const [activeTab, setActiveTab] = useState('overview');
+  const [selectedCluster, setSelectedCluster] = useState<string | null>(null);
   const { theme } = useTheme() as { theme: ThemeMode };
   const tk = getTokens(theme);
   const ct = chartTheme(theme);
@@ -424,7 +141,7 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
     { id: 'transactions', label: 'Transaction Analysis', icon: CreditCard },
     { id: 'network', label: 'Network Analysis', icon: Network },
     { id: 'temporal', label: 'Temporal Patterns', icon: BarChart3 },
-    { id: 'actions', label: 'Action Items', icon: Target },
+    { id: 'actions', label: 'Action Items', icon: Target }
   ];
 
   const safeData = useMemo(() => {
@@ -438,11 +155,7 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
       networkAnalysis: safeGet(data, 'network_analysis', {}),
       temporalAnalysis: safeGet(data, 'temporal_analysis', {}),
       predictiveInsights: safeGet(data, 'predictive_insights', {}),
-      actionableRecommendations: safeGet(
-        data,
-        'actionable_recommendations',
-        []
-      ),
+      actionableRecommendations: safeGet(data, 'actionable_recommendations', [])
     };
   }, [data]);
 
@@ -451,12 +164,8 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
       <div className="flex flex-col items-center justify-center h-[600px] space-y-4">
         <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
         <div className="text-center">
-          <div className={`font-medium text-base ${tk.textPrimary}`}>
-            Loading Risk Analytics...
-          </div>
-          <div className={`text-sm mt-1 ${tk.textSecondary}`}>
-            Analyzing fraud patterns and risk indicators
-          </div>
+          <div className={`font-medium text-base ${tk.textPrimary}`}>Loading Risk Analytics...</div>
+          <div className={`text-sm mt-1 ${tk.textSecondary}`}>Analyzing fraud patterns and risk indicators</div>
         </div>
       </div>
     );
@@ -466,12 +175,8 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
     return (
       <div className="text-center py-20">
         <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-red-500" />
-        <h2 className={`text-xl font-bold mb-2 ${tk.textPrimary}`}>
-          Unable to Load Risk Analytics
-        </h2>
-        <p className={`mb-6 text-sm ${tk.textSecondary}`}>
-          {error || 'No data available for the selected period'}
-        </p>
+        <h2 className={`text-xl font-bold mb-2 ${tk.textPrimary}`}>Unable to Load Risk Analytics</h2>
+        <p className={`mb-6 text-sm ${tk.textSecondary}`}>{error || 'No data available for the selected period'}</p>
         <button
           onClick={refreshData}
           className="px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
@@ -489,13 +194,32 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
     const executiveSummary = safeData.executiveSummary;
     const keyRiskIndicators = safeData.keyRiskIndicators;
     const metadata = safeData.metadata;
-    const score =
-      Number(safeGet(executiveSummary, 'overall_risk_score', 0)) || 0;
+    const transactionAnalysis = safeData.transactionAnalysis;
+    const networkAnalysis = safeData.networkAnalysis;
+    const temporalAnalysis = safeData.temporalAnalysis;
+
+    const score = Number(safeGet(executiveSummary, 'overall_risk_score', 0)) || 0;
     const trend = safeGet(executiveSummary, 'risk_trend', 'Unknown');
-    const findings: string[] =
-      safeGet(executiveSummary, 'key_findings', []) || [];
+    const findings: string[] = safeGet(executiveSummary, 'key_findings', []) || [];
+    const topRiskFactors: string[] = safeGet(executiveSummary, 'top_risk_factors', []) || [];
     const gaugeColor = scoreHex(score);
     const gaugeData = [{ name: 'score', value: score, fill: gaugeColor }];
+
+    const completeness = safeGet(metadata, 'data_quality.completeness_score', null);
+    const dataWarnings: string[] = safeGet(metadata, 'data_quality.data_warnings', []) || [];
+
+    const customerRiskCounts = safeGet(keyRiskIndicators, 'customer_risk', {});
+    const severityDistribution = [
+      { severity: 'critical', count: Number(safeGet(customerRiskCounts, 'critical', 0)) || 0 },
+      { severity: 'high', count: Number(safeGet(customerRiskCounts, 'high', 0)) || 0 },
+      { severity: 'medium', count: Number(safeGet(customerRiskCounts, 'medium', 0)) || 0 },
+      { severity: 'low', count: Number(safeGet(customerRiskCounts, 'low', 0)) || 0 }
+    ].filter((s) => s.count > 0);
+    const severityTotal = severityDistribution.reduce((sum, s) => sum + s.count, 0) || 1;
+
+    const anomalousSpikes = safeGet(temporalAnalysis, 'alert_trends.anomalous_spikes', []) || [];
+    const totalAnomalies = safeGet(transactionAnalysis, 'amount_analysis.anomaly_detection.total_anomalies', 0);
+    const clusterCount = (safeGet(networkAnalysis, 'cluster_analysis', []) || []).length;
 
     return (
       <ErrorBoundary>
@@ -508,36 +232,31 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
                   <Shield className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <h1
-                    className={`text-xl font-bold tracking-tight ${tk.textPrimary}`}
-                  >
-                    Fraud &amp; Risk Analytics
-                  </h1>
-                  <p className={`text-sm ${tk.textSecondary}`}>
-                    Executive risk dashboard
-                  </p>
+                  <h1 className={`text-xl font-bold tracking-tight ${tk.textPrimary}`}>Fraud &amp; Risk Analytics</h1>
+                  <p className={`text-sm ${tk.textSecondary}`}>Executive risk dashboard</p>
                 </div>
               </div>
 
               <div className="flex items-center gap-6">
                 <div className="text-right">
-                  <div
-                    className={`text-xs uppercase tracking-wide ${tk.textTertiary}`}
-                  >
-                    Report Period
-                  </div>
+                  <div className={`text-xs uppercase tracking-wide ${tk.textTertiary}`}>Report Period</div>
                   <div className={`text-sm font-semibold ${tk.textPrimary}`}>
-                    {safeGet(metadata, 'analysis_period.start', 'N/A')} &ndash;{' '}
-                    {safeGet(metadata, 'analysis_period.end', 'N/A')}
+                    {safeGet(metadata, 'analysis_period.start', 'N/A')} &ndash; {safeGet(metadata, 'analysis_period.end', 'N/A')}
                   </div>
-                  {lastUpdated && (
-                    <div
-                      className={`text-xs mt-0.5 flex items-center justify-end gap-1 ${tk.textTertiary}`}
-                    >
-                      <Clock className="w-3 h-3" />
-                      Updated {lastUpdated.toLocaleTimeString()}
-                    </div>
-                  )}
+                  <div className={`text-xs mt-1 flex items-center justify-end gap-2 ${tk.textTertiary}`}>
+                    {lastUpdated && (
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {lastUpdated.toLocaleTimeString()}
+                      </span>
+                    )}
+                    {completeness != null && (
+                      <span className="flex items-center gap-1">
+                        <Database className="w-3 h-3" />
+                        {completeness}% complete
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Signature element: risk gauge */}
@@ -553,50 +272,65 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
                       endAngle={0}
                       data={gaugeData}
                     >
-                      <PolarAngleAxis
-                        type="number"
-                        domain={[0, 100]}
-                        dataKey="value"
-                        angleAxisId={0}
-                        tick={false}
-                      />
-                      <RadialBar
-                        background={{
-                          fill: theme === 'dark' ? '#1F2937' : '#EEF2F6',
-                        }}
-                        dataKey="value"
-                        cornerRadius={6}
-                      />
+                      <PolarAngleAxis type="number" domain={[0, 100]} dataKey="value" angleAxisId={0} tick={false} />
+                      <RadialBar background={{ fill: theme === 'dark' ? '#1F2937' : '#EEF2F6' }} dataKey="value" cornerRadius={6} />
                     </RadialBarChart>
                   </ResponsiveContainer>
                   <div className="absolute inset-x-0 bottom-1 flex flex-col items-center">
-                    <span
-                      className={`text-2xl font-bold tabular-nums leading-none`}
-                      style={{ color: gaugeColor }}
-                    >
-                      {score}
-                    </span>
-                    <span
-                      className={`text-[10px] uppercase tracking-wide mt-0.5 ${tk.textTertiary}`}
-                    >
-                      Risk Score &middot; {trend}
-                    </span>
+                    <span className="text-2xl font-bold tabular-nums leading-none" style={{ color: gaugeColor }}>{score}</span>
+                    <span className={`text-[10px] uppercase tracking-wide mt-0.5 ${tk.textTertiary}`}>Risk Score &middot; {trend}</span>
                   </div>
                 </div>
               </div>
             </div>
+
+            {topRiskFactors.length > 0 && (
+              <div className={`flex flex-wrap items-center gap-2 mt-5 pt-5 border-t ${tk.border}`}>
+                <span className={`text-xs font-medium uppercase tracking-wide mr-1 ${tk.textTertiary}`}>Top Risk Factors</span>
+                {topRiskFactors.map((f, i) => (
+                  <Tag key={i} label={f} theme={theme} />
+                ))}
+              </div>
+            )}
           </div>
 
+          {anomalousSpikes.length > 0 && (
+            <Callout
+              theme={theme}
+              variant="warning"
+              icon={Activity}
+              title={`Alert volume spike detected — ${anomalousSpikes[0].date}`}
+              description={`${formatNumber(anomalousSpikes[0].count)} alerts, ${anomalousSpikes[0].deviation_from_normal} vs. normal volume.`}
+              meta={
+                (anomalousSpikes[0].primary_contributors || []).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {anomalousSpikes[0].primary_contributors.map((c: string, i: number) => (
+                      <Tag key={i} label={c} theme={theme} />
+                    ))}
+                  </div>
+                )
+              }
+            />
+          )}
+
+          {dataWarnings.length > 0 && (
+            <Callout
+              theme={theme}
+              variant="info"
+              icon={Database}
+              title="Data quality notice"
+              description={dataWarnings.join(' ')}
+            />
+          )}
+
           {/* KPI stat cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard
               theme={theme}
               icon={AlertTriangle}
               label="Total Alerts"
-              value={formatNumber(
-                safeGet(keyRiskIndicators, 'volume_metrics.total_alerts', 0)
-              )}
-              sublabel="Active fraud alerts"
+              value={formatNumber(safeGet(keyRiskIndicators, 'volume_metrics.total_alerts', 0))}
+              sublabel={`${formatNumber(safeGet(keyRiskIndicators, 'volume_metrics.unique_customers', 0))} unique customers`}
               accent="high"
               delay={0.05}
             />
@@ -604,54 +338,80 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
               theme={theme}
               icon={Users}
               label="Critical Customers"
-              value={safeGet(keyRiskIndicators, 'customer_risk.critical', 0)}
+              value={safeGet(customerRiskCounts, 'critical', 0)}
               sublabel="Requiring immediate attention"
               accent="critical"
               delay={0.1}
             />
             <StatCard
               theme={theme}
-              icon={Building}
-              label="High-Risk Branches"
-              value={safeGet(
-                keyRiskIndicators,
-                'branch_risk.high_risk_branches',
-                0
-              )}
-              sublabel="Requiring audit"
+              icon={Sparkles}
+              label="Anomalous Transactions"
+              value={formatNumber(totalAnomalies)}
+              sublabel="Flagged by amount analysis"
               accent="medium"
               delay={0.15}
             />
+            <StatCard
+              theme={theme}
+              icon={Layers}
+              label="Suspicious Clusters"
+              value={clusterCount}
+              sublabel="Networks under review"
+              accent="info"
+              delay={0.2}
+            />
           </div>
 
-          {/* Key findings */}
-          <Panel
-            theme={theme}
-            icon={FileText}
-            iconColor={CHART.trend}
-            title="Key Findings"
-            delay={0.2}
-          >
-            {findings.length === 0 ? (
-              <p className={`text-sm ${tk.textTertiary}`}>
-                No key findings for this period.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {findings.map((finding: string, index: number) => (
-                  <div
-                    key={index}
-                    className={`flex items-start gap-2.5 p-3 rounded-lg border ${tk.chip}`}
-                  >
-                    <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0 text-blue-500" />
-                    <span className={`text-sm ${tk.textSecondary}`}>
-                      {finding}
-                    </span>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Key findings */}
+            <Panel theme={theme} icon={FileText} iconColor={CHART.trend} title="Key Findings" delay={0.25}>
+              {findings.length === 0 ? (
+                <p className={`text-sm ${tk.textTertiary}`}>No key findings for this period.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {findings.map((finding: string, index: number) => (
+                    <div key={index} className={`flex items-start gap-2.5 p-3 rounded-lg border ${tk.chip}`}>
+                      <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0 text-blue-500" />
+                      <span className={`text-sm ${tk.textSecondary}`}>{finding}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+
+            {/* Customer risk distribution */}
+            <Panel theme={theme} icon={Flag} iconColor={severityHex('critical')} title="Customer Risk Distribution" delay={0.3}>
+              {severityDistribution.length === 0 ? (
+                <p className={`text-sm ${tk.textTertiary}`}>No customer risk data for this period.</p>
+              ) : (
+                <div className="grid grid-cols-2 gap-4 items-center">
+                  <div className="h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={severityDistribution} dataKey="count" nameKey="severity" innerRadius={48} outerRadius={72} paddingAngle={3}>
+                          {severityDistribution.map((entry, i) => (
+                            <Cell key={i} fill={severityHex(entry.severity)} />
+                          ))}
+                        </Pie>
+                        <Tooltip {...ct.tooltip} formatter={(v: any, name: any) => [formatNumber(v), String(name).charAt(0).toUpperCase() + String(name).slice(1)]} />
+                      </PieChart>
+                    </ResponsiveContainer>
                   </div>
-                ))}
-              </div>
-            )}
-          </Panel>
+                  <div className="space-y-2">
+                    {severityDistribution.map((entry, i) => (
+                      <div key={i} className="flex items-center justify-between">
+                        <SeverityBadge label={entry.severity} theme={theme} />
+                        <span className={`text-sm font-semibold tabular-nums ${tk.textPrimary}`}>
+                          {entry.count} <span className={`font-normal text-xs ${tk.textTertiary}`}>({Math.round((entry.count / severityTotal) * 100)}%)</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Panel>
+          </div>
         </div>
       </ErrorBoundary>
     );
@@ -661,17 +421,20 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
 
   const renderCustomersTab = () => {
     const customerRiskAnalysis = safeData.customerRiskAnalysis;
-    const criticalCustomers =
-      safeGet(customerRiskAnalysis, 'critical_customers', []) || [];
+    const predictiveInsights = safeData.predictiveInsights;
+    const criticalCustomers = safeGet(customerRiskAnalysis, 'critical_customers', []) || [];
+    const newHighRisk = safeGet(customerRiskAnalysis, 'emerging_risks.new_high_risk_customers', []) || [];
+    const dormantReactivated = safeGet(customerRiskAnalysis, 'emerging_risks.dormant_reactivated', []) || [];
+    const propensityCustomers = safeGet(predictiveInsights, 'propensity_scores.high_risk_customers', []) || [];
 
-    if (criticalCustomers.length === 0) {
+    if (criticalCustomers.length === 0 && newHighRisk.length === 0 && propensityCustomers.length === 0) {
       return (
         <ErrorBoundary>
           <EmptyState
             theme={theme}
             icon={Users}
-            title="No Critical Customers Found"
-            description="No customers with critical risk levels were identified in the current analysis period."
+            title="No Customer Risk Data Found"
+            description="No critical, emerging, or predicted high-risk customers were identified in the current analysis period."
             action={refreshData}
             actionLabel="Refresh Data"
           />
@@ -683,157 +446,179 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
       name: safeGet(c, 'name', 'Unknown'),
       alerts: Number(safeGet(c, 'activity_summary.alert_count', 0)) || 0,
       amount: Number(safeGet(c, 'activity_summary.total_amount', 0)) || 0,
-      beneficiaries:
-        Number(safeGet(c, 'activity_summary.beneficiary_count', 0)) || 0,
-      id: safeGet(c, 'customer_id', i),
+      beneficiaries: Number(safeGet(c, 'activity_summary.beneficiary_count', 0)) || 0,
+      id: safeGet(c, 'customer_id', i)
     }));
+
+    const propensityChartData = propensityCustomers
+      .slice()
+      .sort((a: any, b: any) => (Number(b.propensity_score) || 0) - (Number(a.propensity_score) || 0))
+      .map((c: any, i: number) => ({
+        id: safeGet(c, 'customer_id', i),
+        label: safeGet(c, 'name', 'Unknown'),
+        score: Number(safeGet(c, 'propensity_score', 0)) || 0
+      }));
 
     return (
       <ErrorBoundary>
         <div className="space-y-6">
-          <Panel
-            theme={theme}
-            icon={Target}
-            iconColor="#DC2626"
-            title={`Critical Risk Customers (${criticalCustomers.length})`}
-            meta={
-              <span className={`text-xs ${tk.textTertiary}`}>
-                Bubble size = beneficiaries
-              </span>
-            }
-          >
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart
-                  margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
-                  <XAxis
-                    type="number"
-                    dataKey="alerts"
-                    name="Alerts"
-                    tick={{ fill: ct.tick, fontSize: 12 }}
-                    label={{
-                      value: 'Alert Count',
-                      position: 'insideBottom',
-                      offset: -4,
-                      fill: ct.tick,
-                      fontSize: 11,
-                    }}
-                  />
-                  <YAxis
-                    type="number"
-                    dataKey="amount"
-                    name="Total Amount"
-                    tick={{ fill: ct.tick, fontSize: 12 }}
-                    tickFormatter={(v) => formatNumber(v)}
-                    width={70}
-                  />
-                  <ZAxis
-                    type="number"
-                    dataKey="beneficiaries"
-                    range={[60, 400]}
-                    name="Beneficiaries"
-                  />
-                  <Tooltip
-                    {...ct.tooltip}
-                    cursor={{ strokeDasharray: '3 3' }}
-                    formatter={(value: any, name: string) =>
-                      name === 'Total Amount'
-                        ? [`AED ${formatNumber(value)}`, name]
-                        : [formatNumber(value), name]
-                    }
-                    labelFormatter={() => ''}
-                  />
-                  <Scatter
-                    data={bubbleData}
-                    fill={CHART.amount}
-                    fillOpacity={0.75}
-                  />
-                </ScatterChart>
-              </ResponsiveContainer>
-            </div>
-          </Panel>
-
-          <Panel
-            theme={theme}
-            icon={Users}
-            iconColor="#DC2626"
-            title="Customer Detail"
-            delay={0.05}
-          >
-            <DataTable
+          {criticalCustomers.length > 0 && (
+            <Panel
               theme={theme}
-              keyField="id"
-              rows={criticalCustomers.map((c: any, i: number) => ({
-                id: safeGet(c, 'customer_id', i),
-                name: safeGet(c, 'name', 'Unknown Customer'),
-                profession: safeGet(c, 'profession', 'Unknown'),
-                alerts: safeGet(c, 'activity_summary.alert_count', 0),
-                beneficiaries: safeGet(
-                  c,
-                  'activity_summary.beneficiary_count',
-                  0
-                ),
-                amount: safeGet(c, 'activity_summary.total_amount', 0),
-              }))}
-              columns={[
-                {
-                  key: 'name',
-                  label: 'Customer',
-                  render: (r) => (
-                    <div>
-                      <div className="font-medium">{r.name}</div>
-                      <div
-                        className={`text-xs flex items-center gap-1 mt-0.5 ${tk.textTertiary}`}
-                      >
-                        <Briefcase className="w-3 h-3" />
-                        {r.profession}
+              icon={Target}
+              iconColor="#DC2626"
+              title={`Critical Risk Customers (${criticalCustomers.length})`}
+              meta={<span className={`text-xs ${tk.textTertiary}`}>Bubble size = beneficiaries</span>}
+            >
+              <div className="h-80 mb-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                    <XAxis
+                      type="number"
+                      dataKey="alerts"
+                      name="Alerts"
+                      tick={{ fill: ct.tick, fontSize: 12 }}
+                      label={{ value: 'Alert Count', position: 'insideBottom', offset: -4, fill: ct.tick, fontSize: 11 }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="amount"
+                      name="Total Amount"
+                      tick={{ fill: ct.tick, fontSize: 12 }}
+                      tickFormatter={(v) => formatNumber(v)}
+                      width={70}
+                    />
+                    <ZAxis type="number" dataKey="beneficiaries" range={[60, 400]} name="Beneficiaries" />
+                    <Tooltip
+                      {...ct.tooltip}
+                      cursor={{ strokeDasharray: '3 3' }}
+                      formatter={(value: any, name: any) => (name === 'Total Amount' ? [`AED ${formatNumber(value)}`, name] : [formatNumber(value), name])}
+                      labelFormatter={() => ''}
+                    />
+                    <Scatter data={bubbleData} fill={CHART.amount} fillOpacity={0.75} />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+              <DataTable
+                theme={theme}
+                keyField="id"
+                rows={criticalCustomers.map((c: any, i: number) => ({
+                  id: safeGet(c, 'customer_id', i),
+                  name: safeGet(c, 'name', 'Unknown Customer'),
+                  profession: safeGet(c, 'profession', 'Unknown'),
+                  riskScore: safeGet(c, 'risk_profile.score', null),
+                  factors: safeGet(c, 'risk_profile.factors', []) || [],
+                  velocity: safeGet(c, 'activity_summary.transaction_velocity', 'N/A'),
+                  alerts: safeGet(c, 'activity_summary.alert_count', 0),
+                  beneficiaries: safeGet(c, 'activity_summary.beneficiary_count', 0),
+                  amount: safeGet(c, 'activity_summary.total_amount', 0)
+                }))}
+                columns={[
+                  {
+                    key: 'name',
+                    label: 'Customer',
+                    render: (r) => (
+                      <div>
+                        <div className="font-medium">{r.name}</div>
+                        <div className={`text-xs flex items-center gap-1 mt-0.5 ${tk.textTertiary}`}>
+                          <Briefcase className="w-3 h-3" />
+                          {r.profession} &middot; {r.velocity}
+                        </div>
+                        {r.factors.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {r.factors.map((f: string, i: number) => (
+                              <Tag key={i} label={f} theme={theme} />
+                            ))}
+                          </div>
+                        )}
                       </div>
+                    )
+                  },
+                  {
+                    key: 'riskScore',
+                    label: 'Risk Score',
+                    align: 'right',
+                    render: (r) => (r.riskScore != null ? <span className="tabular-nums font-semibold" style={{ color: scoreHex(r.riskScore * 10) }}>{r.riskScore}</span> : <span className={tk.textTertiary}>N/A</span>)
+                  },
+                  { key: 'alerts', label: 'Alerts', align: 'right', render: (r) => <span className="tabular-nums font-medium">{formatNumber(r.alerts)}</span> },
+                  { key: 'beneficiaries', label: 'Beneficiaries', align: 'right', render: (r) => <span className="tabular-nums">{formatNumber(r.beneficiaries)}</span> },
+                  { key: 'amount', label: 'Total Amount', align: 'right', render: (r) => <span className="tabular-nums font-medium">AED {formatNumber(r.amount)}</span> }
+                ]}
+              />
+            </Panel>
+          )}
+
+          {propensityChartData.length > 0 && (
+            <Panel theme={theme} icon={Radar} iconColor={CHART.network} title="Predictive Risk Propensity" subtitle="Model-scored likelihood of escalating risk" delay={0.05}>
+              <div className="h-56 mb-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={propensityChartData} layout="vertical" margin={{ left: 8, right: 24 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} horizontal={false} />
+                    <XAxis type="number" domain={[0, 100]} tick={{ fill: ct.tick, fontSize: 12 }} />
+                    <YAxis type="category" dataKey="label" tick={{ fill: ct.tick, fontSize: 12 }} width={140} />
+                    <Tooltip {...ct.tooltip} formatter={(v: any) => [`${v}`, 'Propensity Score']} />
+                    <Bar dataKey="score" radius={[0, 4, 4, 0]} barSize={16}>
+                      {propensityChartData.map((entry: any, i: number) => (
+                        <Cell key={i} fill={scoreHex(entry.score)} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {propensityCustomers.map((c: any, i: number) => (
+                  <div key={i} className={`p-3 rounded-lg border ${tk.chip}`}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className={`text-sm font-medium ${tk.textPrimary}`}>{safeGet(c, 'name', 'Unknown')}</span>
+                      <span className="text-sm font-bold tabular-nums" style={{ color: scoreHex(Number(safeGet(c, 'propensity_score', 0))) }}>
+                        {safeGet(c, 'propensity_score', 0)}
+                      </span>
                     </div>
-                  ),
-                },
-                {
-                  key: 'alerts',
-                  label: 'Alerts',
-                  align: 'right',
-                  render: (r) => (
-                    <span className="tabular-nums font-medium">
-                      {formatNumber(r.alerts)}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'beneficiaries',
-                  label: 'Beneficiaries',
-                  align: 'right',
-                  render: (r) => (
-                    <span className="tabular-nums">
-                      {formatNumber(r.beneficiaries)}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'amount',
-                  label: 'Total Amount',
-                  align: 'right',
-                  render: (r) => (
-                    <span className="tabular-nums font-medium">
-                      AED {formatNumber(r.amount)}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'status',
-                  label: 'Status',
-                  align: 'right',
-                  render: () => (
-                    <SeverityBadge label="critical" theme={theme} />
-                  ),
-                },
-              ]}
-            />
-          </Panel>
+                    <ProgressBar value={Number(safeGet(c, 'propensity_score', 0))} theme={theme} color={scoreHex(Number(safeGet(c, 'propensity_score', 0)))} />
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {(safeGet(c, 'top_risk_factors', []) || []).map((f: string, fi: number) => (
+                        <Tag key={fi} label={f} theme={theme} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {(newHighRisk.length > 0 || dormantReactivated.length > 0) && (
+            <Panel theme={theme} icon={UserPlus} iconColor={CHART.frequency} title="Emerging Risks" subtitle="Customers newly entering high-risk status" delay={0.1}>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {newHighRisk.length > 0 && (
+                  <div>
+                    <h4 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${tk.textTertiary}`}>New High-Risk Customers</h4>
+                    <DataTable
+                      theme={theme}
+                      keyField="id"
+                      rows={newHighRisk.map((c: any, i: number) => ({
+                        id: safeGet(c, 'customer_id', i),
+                        name: safeGet(c, 'name', 'Unknown'),
+                        days: safeGet(c, 'days_since_first_alert', 0),
+                        perDay: safeGet(c, 'alerts_per_day', 0)
+                      }))}
+                      columns={[
+                        { key: 'name', label: 'Customer' },
+                        { key: 'days', label: 'Days Since First Alert', align: 'right' },
+                        { key: 'perDay', label: 'Alerts/Day', align: 'right', render: (r) => <span className="tabular-nums font-medium">{r.perDay}</span> }
+                      ]}
+                    />
+                  </div>
+                )}
+                {dormantReactivated.length > 0 && (
+                  <div>
+                    <h4 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${tk.textTertiary}`}>Dormant Accounts Reactivated</h4>
+                    <DataTable theme={theme} rows={dormantReactivated} columns={[{ key: 'name', label: 'Customer' }]} />
+                  </div>
+                )}
+              </div>
+            </Panel>
+          )}
         </div>
       </ErrorBoundary>
     );
@@ -843,24 +628,19 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
 
   const renderTransactionsTab = () => {
     const transactionAnalysis = safeData.transactionAnalysis;
-    const patternDetection = safeGet(
-      transactionAnalysis,
-      'pattern_detection',
-      {}
-    );
+    const patternDetection = safeGet(transactionAnalysis, 'pattern_detection', {});
     const highFrequency = safeGet(patternDetection, 'high_frequency', []) || [];
     const highValue = safeGet(patternDetection, 'high_value', []) || [];
     const unusualTiming = safeGet(patternDetection, 'unusual_timing', {});
-    const offHour =
-      Number(safeGet(unusualTiming, 'off_hour_transactions', 0)) || 0;
-    const weekend =
-      Number(safeGet(unusualTiming, 'weekend_transactions', 0)) || 0;
+    const offHour = Number(safeGet(unusualTiming, 'off_hour_transactions', 0)) || 0;
+    const weekend = Number(safeGet(unusualTiming, 'weekend_transactions', 0)) || 0;
 
-    const hasData =
-      highFrequency.length > 0 ||
-      highValue.length > 0 ||
-      offHour > 0 ||
-      weekend > 0;
+    const anomalyDetection = safeGet(transactionAnalysis, 'amount_analysis.anomaly_detection', {});
+    const topAnomalies = safeGet(anomalyDetection, 'top_amount_anomalies', []) || [];
+    const totalAnomalies = safeGet(anomalyDetection, 'total_anomalies', 0);
+    const roundNumbers = safeGet(transactionAnalysis, 'amount_analysis.round_number_transactions', {});
+
+    const hasData = highFrequency.length > 0 || highValue.length > 0 || offHour > 0 || weekend > 0 || topAnomalies.length > 0;
 
     if (!hasData) {
       return (
@@ -880,63 +660,77 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
     const freqChartData = highFrequency.map((p: any, i: number) => ({
       id: safeGet(p, 'customer_id', i),
       label: `${safeGet(p, 'customer_id', 'Unknown')}`,
-      count: Number(safeGet(p, 'characteristics.count', 0)) || 0,
+      count: Number(safeGet(p, 'characteristics.count', 0)) || 0
     }));
 
     const valueChartData = highValue.map((t: any, i: number) => ({
       id: i,
       label: safeGet(t, 'customer_name', 'Unknown'),
-      amount: Number(safeGet(t, 'characteristics.amount', 0)) || 0,
+      amount: Number(safeGet(t, 'characteristics.amount', 0)) || 0
     }));
 
     const timingPie = [
       { name: 'Off-Hour', value: offHour, color: CHART.network },
-      { name: 'Weekend', value: weekend, color: '#6366F1' },
+      { name: 'Weekend', value: weekend, color: '#6366F1' }
     ].filter((d) => d.value > 0);
 
     return (
       <ErrorBoundary>
         <div className="space-y-6">
-          {highFrequency.length > 0 && (
+          {topAnomalies.length > 0 && (
             <Panel
               theme={theme}
-              icon={Zap}
-              iconColor={CHART.frequency}
-              title="High-Frequency Transaction Patterns"
+              icon={Sparkles}
+              iconColor="#DC2626"
+              title={`Amount Anomalies (${formatNumber(totalAnomalies)} flagged)`}
+              subtitle="Transactions with the most unusual amount patterns, scored by an isolation model"
+              meta={
+                roundNumbers && safeGet(roundNumbers, 'count', 0) > 0 ? (
+                  <MetricChip
+                    theme={theme}
+                    label="Round-number transactions"
+                    value={`${formatNumber(safeGet(roundNumbers, 'count', 0))} (${safeGet(roundNumbers, 'percentage_of_total', 0)}%)`}
+                  />
+                ) : undefined
+              }
             >
+              <DataTable
+                theme={theme}
+                rows={topAnomalies.slice(0, 10).map((a: any, i: number) => ({
+                  id: i,
+                  customer: safeGet(a, 'customer', 'Unknown'),
+                  amount: safeGet(a, 'amount', 0),
+                  context: safeGet(a, 'context', ''),
+                  score: safeGet(a, 'anomaly_score', 0)
+                }))}
+                columns={[
+                  {
+                    key: 'customer',
+                    label: 'Customer',
+                    render: (r) => (
+                      <div>
+                        <div className="font-medium">{r.customer}</div>
+                        <div className={`text-xs mt-0.5 ${tk.textTertiary}`}>{r.context}</div>
+                      </div>
+                    )
+                  },
+                  { key: 'amount', label: 'Amount', align: 'right', render: (r) => <span className="tabular-nums font-medium">AED {formatNumber(r.amount)}</span> },
+                  { key: 'score', label: 'Anomaly Score', align: 'right', render: (r) => <span className="tabular-nums text-red-500 font-medium">{Number(r.score).toFixed(3)}</span> }
+                ]}
+              />
+            </Panel>
+          )}
+
+          {highFrequency.length > 0 && (
+            <Panel theme={theme} icon={Zap} iconColor={CHART.frequency} title="High-Frequency Transaction Patterns" delay={0.05}>
               <div className="h-64 mb-4">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={freqChartData}
-                    layout="vertical"
-                    margin={{ left: 8, right: 16 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke={ct.grid}
-                      horizontal={false}
-                    />
-                    <XAxis
-                      type="number"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      tickFormatter={(v) => formatNumber(v)}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="label"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      width={110}
-                    />
-                    <Tooltip
-                      {...ct.tooltip}
-                      formatter={(v: any) => [formatNumber(v), 'Transactions']}
-                    />
-                    <Bar
-                      dataKey="count"
-                      fill={CHART.frequency}
-                      radius={[0, 4, 4, 0]}
-                      barSize={16}
-                    />
+                  <BarChart data={freqChartData} layout="vertical" margin={{ left: 8, right: 16 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} horizontal={false} />
+                    <XAxis type="number" tick={{ fill: ct.tick, fontSize: 12 }} tickFormatter={(v) => formatNumber(v)} />
+                    <YAxis type="category" dataKey="label" tick={{ fill: ct.tick, fontSize: 12 }} width={110} />
+                    <Tooltip {...ct.tooltip} formatter={(v: any) => [formatNumber(v), 'Transactions']} />
+                    <Bar dataKey="count" fill={CHART.frequency} radius={[0, 4, 4, 0]} barSize={16} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -948,86 +742,32 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
                   customer: safeGet(p, 'customer_id', 'Unknown'),
                   pattern: safeGet(p, 'pattern_type', 'Unknown'),
                   count: safeGet(p, 'characteristics.count', 0),
+                  avgAmount: safeGet(p, 'characteristics.avg_amount', 0),
                   amount: safeGet(p, 'characteristics.total_amount', 0),
-                  service: safeGet(
-                    p,
-                    'characteristics.service_type',
-                    'Unknown'
-                  ),
+                  service: safeGet(p, 'characteristics.service_type', 'Unknown')
                 }))}
                 columns={[
                   { key: 'customer', label: 'Customer ID' },
                   { key: 'pattern', label: 'Pattern' },
                   { key: 'service', label: 'Service Type' },
-                  {
-                    key: 'count',
-                    label: 'Transactions',
-                    align: 'right',
-                    render: (r) => (
-                      <span className="tabular-nums font-medium">
-                        {formatNumber(r.count)}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'amount',
-                    label: 'Total Amount',
-                    align: 'right',
-                    render: (r) => (
-                      <span className="tabular-nums font-medium">
-                        AED {formatNumber(r.amount)}
-                      </span>
-                    ),
-                  },
+                  { key: 'count', label: 'Transactions', align: 'right', render: (r) => <span className="tabular-nums font-medium">{formatNumber(r.count)}</span> },
+                  { key: 'avgAmount', label: 'Avg. Amount', align: 'right', render: (r) => <span className="tabular-nums">AED {formatNumber(r.avgAmount)}</span> },
+                  { key: 'amount', label: 'Total Amount', align: 'right', render: (r) => <span className="tabular-nums font-medium">AED {formatNumber(r.amount)}</span> }
                 ]}
               />
             </Panel>
           )}
 
           {highValue.length > 0 && (
-            <Panel
-              theme={theme}
-              icon={DollarSign}
-              iconColor={CHART.amount}
-              title="High-Value Transactions"
-              delay={0.05}
-            >
+            <Panel theme={theme} icon={DollarSign} iconColor={CHART.amount} title="High-Value Transactions" delay={0.1}>
               <div className="h-64 mb-4">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={valueChartData}
-                    layout="vertical"
-                    margin={{ left: 8, right: 16 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke={ct.grid}
-                      horizontal={false}
-                    />
-                    <XAxis
-                      type="number"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      tickFormatter={(v) => formatNumber(v)}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="label"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      width={110}
-                    />
-                    <Tooltip
-                      {...ct.tooltip}
-                      formatter={(v: any) => [
-                        `AED ${formatNumber(v)}`,
-                        'Amount',
-                      ]}
-                    />
-                    <Bar
-                      dataKey="amount"
-                      fill={CHART.amount}
-                      radius={[0, 4, 4, 0]}
-                      barSize={16}
-                    />
+                  <BarChart data={valueChartData} layout="vertical" margin={{ left: 8, right: 16 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} horizontal={false} />
+                    <XAxis type="number" tick={{ fill: ct.tick, fontSize: 12 }} tickFormatter={(v) => formatNumber(v)} />
+                    <YAxis type="category" dataKey="label" tick={{ fill: ct.tick, fontSize: 12 }} width={110} />
+                    <Tooltip {...ct.tooltip} formatter={(v: any) => [`AED ${formatNumber(v)}`, 'Amount']} />
+                    <Bar dataKey="amount" fill={CHART.amount} radius={[0, 4, 4, 0]} barSize={16} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -1037,86 +777,52 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
                   id: i,
                   customer: safeGet(t, 'customer_name', 'Unknown Customer'),
                   type: safeGet(t, 'transaction_type', 'Unknown'),
-                  service: safeGet(
-                    t,
-                    'characteristics.service_type',
-                    'Unknown'
-                  ),
-                  amount: safeGet(t, 'characteristics.amount', 0),
+                  service: safeGet(t, 'characteristics.service_type', 'Unknown'),
+                  counterparties: (safeGet(t, 'characteristics.counterparties', []) || []).join(', ') || 'N/A',
+                  amount: safeGet(t, 'characteristics.amount', 0)
                 }))}
                 columns={[
-                  { key: 'customer', label: 'Customer' },
+                  {
+                    key: 'customer',
+                    label: 'Customer',
+                    render: (r) => (
+                      <div>
+                        <div className="font-medium">{r.customer}</div>
+                        <div className={`text-xs mt-0.5 ${tk.textTertiary}`}>&rarr; {r.counterparties}</div>
+                      </div>
+                    )
+                  },
                   { key: 'type', label: 'Transaction Type' },
                   { key: 'service', label: 'Service Type' },
-                  {
-                    key: 'amount',
-                    label: 'Amount',
-                    align: 'right',
-                    render: (r) => (
-                      <span
-                        className="tabular-nums font-semibold"
-                        style={{ color: CHART.amount }}
-                      >
-                        AED {formatNumber(r.amount)}
-                      </span>
-                    ),
-                  },
+                  { key: 'amount', label: 'Amount', align: 'right', render: (r) => <span className="tabular-nums font-semibold" style={{ color: CHART.amount }}>AED {formatNumber(r.amount)}</span> }
                 ]}
               />
             </Panel>
           )}
 
           {(offHour > 0 || weekend > 0) && (
-            <Panel
-              theme={theme}
-              icon={Clock}
-              iconColor={CHART.network}
-              title="Unusual Timing Patterns"
-              delay={0.1}
-            >
+            <Panel theme={theme} icon={Clock} iconColor={CHART.network} title="Unusual Timing Patterns" delay={0.15}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
                 <div className="h-56">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie
-                        data={timingPie}
-                        dataKey="value"
-                        nameKey="name"
-                        innerRadius={55}
-                        outerRadius={80}
-                        paddingAngle={3}
-                      >
+                      <Pie data={timingPie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={80} paddingAngle={3}>
                         {timingPie.map((entry, i) => (
                           <Cell key={i} fill={entry.color} />
                         ))}
                       </Pie>
-                      <Tooltip
-                        {...ct.tooltip}
-                        formatter={(v: any) => formatNumber(v)}
-                      />
+                      <Tooltip {...ct.tooltip} formatter={(v: any) => formatNumber(v)} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
                 <div className="space-y-3">
                   {timingPie.map((entry, i) => (
-                    <div
-                      key={i}
-                      className={`flex items-center justify-between p-3 rounded-lg border ${tk.chip}`}
-                    >
+                    <div key={i} className={`flex items-center justify-between p-3 rounded-lg border ${tk.chip}`}>
                       <div className="flex items-center gap-2">
-                        <span
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ backgroundColor: entry.color }}
-                        />
-                        <span className={`text-sm ${tk.textSecondary}`}>
-                          {entry.name} Transactions
-                        </span>
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
+                        <span className={`text-sm ${tk.textSecondary}`}>{entry.name} Transactions</span>
                       </div>
-                      <span
-                        className={`text-lg font-bold tabular-nums ${tk.textPrimary}`}
-                      >
-                        {formatNumber(entry.value)}
-                      </span>
+                      <span className={`text-lg font-bold tabular-nums ${tk.textPrimary}`}>{formatNumber(entry.value)}</span>
                     </div>
                   ))}
                 </div>
@@ -1132,9 +838,11 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
 
   const renderNetworkTab = () => {
     const networkAnalysis = safeData.networkAnalysis;
-    const clusterAnalysis =
-      safeGet(networkAnalysis, 'cluster_analysis', []) || [];
+    const keyRiskIndicators = safeData.keyRiskIndicators;
+    const clusterAnalysis = safeGet(networkAnalysis, 'cluster_analysis', []) || [];
     const centralActors = safeGet(networkAnalysis, 'central_actors', []) || [];
+    const detailedRelationships = safeGet(networkAnalysis, 'detailed_relationships', []) || [];
+    const topBranch = safeGet(keyRiskIndicators, 'branch_risk.top_branch_by_anomalies', null);
     const hasData = clusterAnalysis.length > 0 || centralActors.length > 0;
 
     if (!hasData) {
@@ -1154,20 +862,21 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
 
     const clusterBubbles = clusterAnalysis.map((c: any, i: number) => ({
       id: safeGet(c, 'cluster_id', i),
-      transactions:
-        Number(safeGet(c, 'characteristics.total_transactions', 0)) || 0,
+      transactions: Number(safeGet(c, 'characteristics.total_transactions', 0)) || 0,
       amount: Number(safeGet(c, 'characteristics.total_amount', 0)) || 0,
-      customers: Number(safeGet(c, 'characteristics.customer_count', 0)) || 0,
+      customers: Number(safeGet(c, 'characteristics.customer_count', 0)) || 0
     }));
 
-    const actorChartData = centralActors
-      .slice(0, 8)
-      .map((a: any, i: number) => ({
-        id: safeGet(a, 'customer_code', i),
-        label: safeGet(a, 'customer_name', 'Unknown'),
-        transactions:
-          Number(safeGet(a, 'transaction_summary.total_transactions', 0)) || 0,
-      }));
+    const actorChartData = centralActors.slice(0, 8).map((a: any, i: number) => ({
+      id: safeGet(a, 'customer_code', i),
+      label: safeGet(a, 'customer_name', 'Unknown'),
+      transactions: Number(safeGet(a, 'transaction_summary.total_transactions', 0)) || 0
+    }));
+
+    const activeCluster = clusterAnalysis.find((c: any) => safeGet(c, 'cluster_id', null) === selectedCluster) || null;
+    const activeClusterRelationships = selectedCluster
+      ? detailedRelationships.filter((r: any) => safeGet(r, 'cluster_id', null) === selectedCluster)
+      : [];
 
     return (
       <ErrorBoundary>
@@ -1178,30 +887,19 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
               icon={Network}
               iconColor={CHART.network}
               title={`Suspicious Network Clusters (${clusterAnalysis.length})`}
-              meta={
-                <span className={`text-xs ${tk.textTertiary}`}>
-                  Bubble size = customers
-                </span>
-              }
+              subtitle={topBranch ? `Highest anomaly volume at ${topBranch}` : undefined}
+              meta={<span className={`text-xs ${tk.textTertiary}`}>Bubble size = customers &middot; click a row to inspect</span>}
             >
               <div className="h-64 mb-4">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart
-                    margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
-                  >
+                  <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
                     <XAxis
                       type="number"
                       dataKey="transactions"
                       name="Transactions"
                       tick={{ fill: ct.tick, fontSize: 12 }}
-                      label={{
-                        value: 'Total Transactions',
-                        position: 'insideBottom',
-                        offset: -4,
-                        fill: ct.tick,
-                        fontSize: 11,
-                      }}
+                      label={{ value: 'Total Transactions', position: 'insideBottom', offset: -4, fill: ct.tick, fontSize: 11 }}
                     />
                     <YAxis
                       type="number"
@@ -1211,26 +909,19 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
                       tickFormatter={(v) => formatNumber(v)}
                       width={70}
                     />
-                    <ZAxis
-                      type="number"
-                      dataKey="customers"
-                      range={[60, 400]}
-                      name="Customers"
-                    />
+                    <ZAxis type="number" dataKey="customers" range={[60, 400]} name="Customers" />
                     <Tooltip
                       {...ct.tooltip}
                       cursor={{ strokeDasharray: '3 3' }}
-                      formatter={(value: any, name: string) =>
-                        name === 'Total Amount'
-                          ? [`AED ${formatNumber(value)}`, name]
-                          : [formatNumber(value), name]
-                      }
+                      formatter={(value: any, name: any) => (name === 'Total Amount' ? [`AED ${formatNumber(value)}`, name] : [formatNumber(value), name])}
                       labelFormatter={() => ''}
                     />
                     <Scatter
                       data={clusterBubbles}
                       fill={CHART.network}
                       fillOpacity={0.75}
+                      onClick={(point: any) => setSelectedCluster((prev) => (prev === point.id ? null : point.id))}
+                      cursor="pointer"
                     />
                   </ScatterChart>
                 </ResponsiveContainer>
@@ -1238,132 +929,158 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
               <DataTable
                 theme={theme}
                 keyField="id"
-                rows={clusterAnalysis.slice(0, 5).map((c: any, i: number) => ({
+                onRowClick={(row) => setSelectedCluster((prev) => (prev === row.id ? null : row.id))}
+                selectedKey={selectedCluster}
+                rows={clusterAnalysis.map((c: any, i: number) => ({
                   id: safeGet(c, 'cluster_id', i),
+                  riskScore: safeGet(c, 'risk_score', 0),
                   customers: safeGet(c, 'characteristics.customer_count', 0),
-                  transactions: safeGet(
-                    c,
-                    'characteristics.total_transactions',
-                    0
-                  ),
+                  transactions: safeGet(c, 'characteristics.total_transactions', 0),
                   amount: safeGet(c, 'characteristics.total_amount', 0),
-                  branches:
-                    (
-                      safeGet(
-                        c,
-                        'characteristics.common_attributes.branches',
-                        []
-                      ) || []
-                    ).join(', ') || 'N/A',
-                  countries:
-                    (
-                      safeGet(
-                        c,
-                        'characteristics.common_attributes.countries',
-                        []
-                      ) || []
-                    ).join(', ') || 'N/A',
+                  span: safeGet(c, 'characteristics.time_span_days', 0),
+                  pattern: safeGet(c, 'characteristics.transaction_pattern', null),
+                  branches: (safeGet(c, 'characteristics.common_attributes.branches', []) || []).join(', ') || 'N/A',
+                  countries: (safeGet(c, 'characteristics.common_attributes.countries', []) || []).join(', ') || 'N/A'
                 }))}
                 columns={[
                   {
-                    key: 'customers',
-                    label: 'Customers',
-                    align: 'right',
+                    key: 'id',
+                    label: 'Cluster',
                     render: (r) => (
-                      <span className="tabular-nums font-medium">
-                        {r.customers}
-                      </span>
-                    ),
+                      <div className="flex items-center gap-1.5">
+                        <ChevronRight className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${selectedCluster === r.id ? 'rotate-90' : ''} ${tk.textTertiary}`} />
+                        <div>
+                          <div className="font-medium">{r.id}</div>
+                          {r.pattern && <div className={`text-[11px] ${tk.textTertiary}`}>{String(r.pattern).replace(/_/g, ' ')}</div>}
+                        </div>
+                      </div>
+                    )
                   },
                   {
-                    key: 'transactions',
-                    label: 'Transactions',
+                    key: 'riskScore',
+                    label: 'Risk Score',
                     align: 'right',
-                    render: (r) => (
-                      <span className="tabular-nums">
-                        {formatNumber(r.transactions)}
-                      </span>
-                    ),
+                    render: (r) => <span className="tabular-nums font-semibold" style={{ color: scoreHex(r.riskScore) }}>{r.riskScore}</span>
                   },
-                  {
-                    key: 'amount',
-                    label: 'Total Value',
-                    align: 'right',
-                    render: (r) => (
-                      <span className="tabular-nums font-medium">
-                        AED {formatNumber(r.amount)}
-                      </span>
-                    ),
-                  },
+                  { key: 'customers', label: 'Customers', align: 'right', render: (r) => <span className="tabular-nums font-medium">{r.customers}</span> },
+                  { key: 'transactions', label: 'Transactions', align: 'right', render: (r) => <span className="tabular-nums">{formatNumber(r.transactions)}</span> },
+                  { key: 'amount', label: 'Total Value', align: 'right', render: (r) => <span className="tabular-nums font-medium">AED {formatNumber(r.amount)}</span> },
+                  { key: 'span', label: 'Span (days)', align: 'right' },
                   { key: 'branches', label: 'Branches' },
-                  { key: 'countries', label: 'Countries' },
+                  { key: 'countries', label: 'Countries' }
                 ]}
               />
+
+              <AnimatePresence>
+                {activeCluster && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <div className={`mt-4 rounded-lg border ${tk.border} ${tk.surfaceAlt} p-4`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className={`text-sm font-semibold ${tk.textPrimary}`}>Cluster Detail &middot; {selectedCluster}</h4>
+                        <button onClick={() => setSelectedCluster(null)} className={`p-1 rounded hover:bg-slate-500/10 ${tk.textTertiary}`}>
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {(safeGet(activeCluster, 'fraud_indications', []) || []).length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {activeCluster.fraud_indications.map((f: string, i: number) => (
+                            <Tag key={i} label={f} theme={theme} />
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <h5 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${tk.textTertiary}`}>Customers in Cluster</h5>
+                          <DataTable
+                            theme={theme}
+                            keyField="customer_code"
+                            rows={safeGet(activeCluster, 'participants.customers', []) || []}
+                            columns={[
+                              { key: 'customer_name', label: 'Customer' },
+                              { key: 'transaction_count', label: 'Tx', align: 'right' },
+                              { key: 'total_amount', label: 'Amount', align: 'right', render: (r: any) => <span className="tabular-nums">AED {formatNumber(r.total_amount)}</span> }
+                            ]}
+                          />
+                        </div>
+                        <div>
+                          <h5 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${tk.textTertiary}`}>Beneficiaries</h5>
+                          <DataTable
+                            theme={theme}
+                            keyField="beneficiary_name"
+                            rows={(safeGet(activeCluster, 'participants.beneficiaries', []) || []).slice(0, 6)}
+                            columns={[
+                              { key: 'beneficiary_name', label: 'Beneficiary', render: (r: any) => <span>{r.beneficiary_name}<span className={`ml-1.5 text-[11px] ${tk.textTertiary}`}>{r.country}</span></span> },
+                              { key: 'transaction_count', label: 'Tx', align: 'right' },
+                              { key: 'total_amount', label: 'Amount', align: 'right', render: (r: any) => <span className="tabular-nums">AED {formatNumber(r.total_amount)}</span> }
+                            ]}
+                          />
+                        </div>
+                      </div>
+
+                      {activeClusterRelationships.length > 0 && (
+                        <div className="mt-4">
+                          <h5 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${tk.textTertiary}`}>Customer &rarr; Beneficiary Relationships</h5>
+                          <DataTable
+                            theme={theme}
+                            rows={activeClusterRelationships.slice(0, 8).map((r: any, i: number) => ({
+                              id: i,
+                              from: r.customer_name,
+                              to: r.beneficiary_name,
+                              count: r.transaction_count,
+                              amount: r.total_amount,
+                              window: `${formatDateShort(r.first_transaction)} – ${formatDateShort(r.last_transaction)}`
+                            }))}
+                            columns={[
+                              { key: 'from', label: 'Customer' },
+                              { key: 'to', label: 'Beneficiary' },
+                              { key: 'window', label: 'Window' },
+                              { key: 'count', label: 'Tx', align: 'right' },
+                              { key: 'amount', label: 'Amount', align: 'right', render: (r) => <span className="tabular-nums">AED {formatNumber(r.amount)}</span> }
+                            ]}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </Panel>
           )}
 
           {centralActors.length > 0 && (
-            <Panel
-              theme={theme}
-              icon={Users}
-              iconColor="#EA580C"
-              title={`Central Network Actors (${centralActors.length})`}
-              delay={0.05}
-            >
+            <Panel theme={theme} icon={Users} iconColor="#EA580C" title={`Central Network Actors (${centralActors.length})`} delay={0.05}>
               <div className="h-56 mb-4">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={actorChartData}
-                    layout="vertical"
-                    margin={{ left: 8, right: 16 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke={ct.grid}
-                      horizontal={false}
-                    />
-                    <XAxis
-                      type="number"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      tickFormatter={(v) => formatNumber(v)}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="label"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      width={110}
-                    />
-                    <Tooltip
-                      {...ct.tooltip}
-                      formatter={(v: any) => [formatNumber(v), 'Transactions']}
-                    />
-                    <Bar
-                      dataKey="transactions"
-                      fill="#EA580C"
-                      radius={[0, 4, 4, 0]}
-                      barSize={14}
-                    />
+                  <BarChart data={actorChartData} layout="vertical" margin={{ left: 8, right: 16 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} horizontal={false} />
+                    <XAxis type="number" tick={{ fill: ct.tick, fontSize: 12 }} tickFormatter={(v) => formatNumber(v)} />
+                    <YAxis type="category" dataKey="label" tick={{ fill: ct.tick, fontSize: 12 }} width={110} />
+                    <Tooltip {...ct.tooltip} formatter={(v: any) => [formatNumber(v), 'Transactions']} />
+                    <Bar dataKey="transactions" fill="#EA580C" radius={[0, 4, 4, 0]} barSize={14} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
               <DataTable
                 theme={theme}
                 keyField="id"
-                rows={centralActors.slice(0, 5).map((a: any, i: number) => ({
+                rows={centralActors.map((a: any, i: number) => ({
                   id: safeGet(a, 'customer_code', i),
                   name: safeGet(a, 'customer_name', 'Unknown Customer'),
+                  centrality: safeGet(a, 'centrality_score', 0),
+                  connections: safeGet(a, 'connection_types', []) || [],
                   risk: safeGet(a, 'risk_implications', 'Unknown'),
-                  transactions: safeGet(
-                    a,
-                    'transaction_summary.total_transactions',
-                    0
-                  ),
-                  beneficiaries: safeGet(
-                    a,
-                    'transaction_summary.beneficiary_count',
-                    0
-                  ),
+                  transactions: safeGet(a, 'transaction_summary.total_transactions', 0),
+                  beneficiaries: safeGet(a, 'transaction_summary.beneficiary_count', 0),
                   amount: safeGet(a, 'transaction_summary.total_amount', 0),
+                  topBeneficiary: safeGet(a, 'transaction_summary.top_beneficiaries.0.name', null)
                 }))}
                 columns={[
                   {
@@ -1372,42 +1089,21 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
                     render: (r) => (
                       <div>
                         <div className="font-medium">{r.name}</div>
-                        <div className={`text-xs mt-0.5 ${tk.textTertiary}`}>
-                          {r.risk}
-                        </div>
+                        <div className={`text-xs mt-0.5 ${tk.textTertiary}`}>{r.risk}</div>
+                        {r.connections.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {r.connections.map((c: string, i: number) => (
+                              <Tag key={i} label={c} theme={theme} />
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    ),
+                    )
                   },
-                  {
-                    key: 'transactions',
-                    label: 'Transactions',
-                    align: 'right',
-                    render: (r) => (
-                      <span className="tabular-nums font-medium">
-                        {formatNumber(r.transactions)}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'beneficiaries',
-                    label: 'Beneficiaries',
-                    align: 'right',
-                    render: (r) => (
-                      <span className="tabular-nums">
-                        {formatNumber(r.beneficiaries)}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'amount',
-                    label: 'Total Amount',
-                    align: 'right',
-                    render: (r) => (
-                      <span className="tabular-nums font-medium">
-                        AED {formatNumber(r.amount)}
-                      </span>
-                    ),
-                  },
+                  { key: 'centrality', label: 'Centrality', align: 'right', render: (r) => <span className="tabular-nums">{Number(r.centrality).toFixed(3)}</span> },
+                  { key: 'transactions', label: 'Transactions', align: 'right', render: (r) => <span className="tabular-nums font-medium">{formatNumber(r.transactions)}</span> },
+                  { key: 'beneficiaries', label: 'Beneficiaries', align: 'right', render: (r) => <span className="tabular-nums">{formatNumber(r.beneficiaries)}</span> },
+                  { key: 'amount', label: 'Total Amount', align: 'right', render: (r) => <span className="tabular-nums font-medium">AED {formatNumber(r.amount)}</span> }
                 ]}
               />
             </Panel>
@@ -1423,8 +1119,9 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
     const temporalAnalysis = safeData.temporalAnalysis;
     const alertTrends = safeGet(temporalAnalysis, 'alert_trends', {});
     const dailyPattern = safeGet(alertTrends, 'daily_pattern', []) || [];
-    const hourlyPattern = safeGet(alertTrends, 'hourly_pattern', []) || [];
-    const hasData = dailyPattern.length > 0 || hourlyPattern.length > 0;
+    const hourlyPatternRaw = safeGet(alertTrends, 'hourly_pattern', []) || [];
+    const anomalousSpikes = safeGet(alertTrends, 'anomalous_spikes', []) || [];
+    const hasData = dailyPattern.length > 0 || hourlyPatternRaw.length > 0;
 
     if (!hasData) {
       return (
@@ -1441,58 +1138,50 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
       );
     }
 
+    // Fill every hour 0–23 so gaps read as "zero activity", not missing data.
+    const hourlyByHour = new Map(hourlyPatternRaw.map((h: any) => [Number(h.hour), Number(h.count) || 0]));
+    const hourlyPattern = HOURS_24.map((h) => ({ hour: h, count: hourlyByHour.get(h) || 0 }));
+
     return (
       <ErrorBoundary>
         <div className="space-y-6">
+          {anomalousSpikes.length > 0 && (
+            <Panel theme={theme} icon={Activity} iconColor="#D97706" title="Anomalous Spikes" subtitle="Periods with alert volume well outside the normal range">
+              <div className="space-y-3">
+                {anomalousSpikes.map((s: any, i: number) => (
+                  <div key={i} className={`p-4 rounded-lg border ${tk.chip}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <span className={`text-sm font-semibold ${tk.textPrimary}`}>{s.date}</span>
+                      <span className="text-sm font-bold" style={{ color: '#D97706' }}>{formatNumber(s.count)} alerts &middot; {s.deviation_from_normal}</span>
+                    </div>
+                    {(s.primary_contributors || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {s.primary_contributors.map((c: string, ci: number) => (
+                          <Tag key={ci} label={c} theme={theme} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
           {dailyPattern.length > 0 && (
-            <Panel
-              theme={theme}
-              icon={Calendar}
-              iconColor={CHART.trend}
-              title="Daily Alert Patterns"
-            >
+            <Panel theme={theme} icon={Calendar} iconColor={CHART.trend} title="Daily Alert Patterns" delay={0.05}>
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart
-                    data={dailyPattern}
-                    margin={{ left: -8, right: 16 }}
-                  >
+                  <AreaChart data={dailyPattern} margin={{ left: -8, right: 16 }}>
                     <defs>
-                      <linearGradient
-                        id="dailyFill"
-                        x1="0"
-                        y1="0"
-                        x2="0"
-                        y2="1"
-                      >
-                        <stop
-                          offset="0%"
-                          stopColor={CHART.trend}
-                          stopOpacity={0.25}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor={CHART.trend}
-                          stopOpacity={0}
-                        />
+                      <linearGradient id="dailyFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={CHART.trend} stopOpacity={0.25} />
+                        <stop offset="100%" stopColor={CHART.trend} stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      tickFormatter={(value) =>
-                        new Date(value).toLocaleDateString()
-                      }
-                    />
+                    <XAxis dataKey="date" tick={{ fill: ct.tick, fontSize: 12 }} tickFormatter={formatDateShort} />
                     <YAxis tick={{ fill: ct.tick, fontSize: 12 }} />
-                    <Tooltip
-                      {...ct.tooltip}
-                      labelFormatter={(value) =>
-                        new Date(value).toLocaleDateString()
-                      }
-                      formatter={(v: any) => [formatNumber(v), 'Alerts']}
-                    />
+                    <Tooltip {...ct.tooltip} labelFormatter={(value) => formatDateShort(value as string)} formatter={(v: any) => [formatNumber(v), 'Alerts']} />
                     <Area
                       type="monotone"
                       dataKey="alert_count"
@@ -1500,12 +1189,7 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
                       strokeWidth={2}
                       fill="url(#dailyFill)"
                       dot={{ fill: CHART.trend, strokeWidth: 0, r: 3 }}
-                      activeDot={{
-                        r: 5,
-                        stroke: CHART.trend,
-                        strokeWidth: 2,
-                        fill: theme === 'dark' ? '#0F172A' : '#fff',
-                      }}
+                      activeDot={{ r: 5, stroke: CHART.trend, strokeWidth: 2, fill: theme === 'dark' ? '#0F172A' : '#fff' }}
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -1513,37 +1197,16 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
             </Panel>
           )}
 
-          {hourlyPattern.length > 0 && (
-            <Panel
-              theme={theme}
-              icon={Clock}
-              iconColor={CHART.frequency}
-              title="Hourly Alert Distribution"
-              delay={0.05}
-            >
+          {hourlyPatternRaw.length > 0 && (
+            <Panel theme={theme} icon={Clock} iconColor={CHART.frequency} title="Hourly Alert Distribution" delay={0.1}>
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={hourlyPattern}
-                    margin={{ left: -8, right: 16 }}
-                  >
+                  <BarChart data={hourlyPattern} margin={{ left: -8, right: 16 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
-                    <XAxis
-                      dataKey="hour"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      tickFormatter={(value) => `${value}:00`}
-                    />
+                    <XAxis dataKey="hour" tick={{ fill: ct.tick, fontSize: 12 }} tickFormatter={(value) => `${value}:00`} interval={1} />
                     <YAxis tick={{ fill: ct.tick, fontSize: 12 }} />
-                    <Tooltip
-                      {...ct.tooltip}
-                      labelFormatter={(value) => `${value}:00`}
-                      formatter={(v: any) => [formatNumber(v), 'Alerts']}
-                    />
-                    <Bar
-                      dataKey="count"
-                      fill={CHART.frequency}
-                      radius={[4, 4, 0, 0]}
-                    />
+                    <Tooltip {...ct.tooltip} labelFormatter={(value) => `${value}:00`} formatter={(v: any) => [formatNumber(v), 'Alerts']} />
+                    <Bar dataKey="count" fill={CHART.frequency} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -1582,49 +1245,20 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
     const order = ['critical', 'high', 'medium', 'low'];
     const priorityChartData = order
       .filter((p) => priorityCounts[p])
-      .map((p) => ({
-        name: p.charAt(0).toUpperCase() + p.slice(1),
-        value: priorityCounts[p],
-        color: severityHex(p),
-      }));
+      .map((p) => ({ name: p.charAt(0).toUpperCase() + p.slice(1), value: priorityCounts[p], color: severityHex(p) }));
 
     return (
       <ErrorBoundary>
         <div className="space-y-6">
-          <Panel
-            theme={theme}
-            icon={Zap}
-            iconColor={CHART.trend}
-            title={`Executive Recommendations (${recommendations.length})`}
-          >
+          <Panel theme={theme} icon={Zap} iconColor={CHART.trend} title={`Executive Recommendations (${recommendations.length})`}>
             {priorityChartData.length > 1 && (
               <div className="h-40 mb-6">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={priorityChartData}
-                    layout="vertical"
-                    margin={{ left: 8, right: 24 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke={ct.grid}
-                      horizontal={false}
-                    />
-                    <XAxis
-                      type="number"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      allowDecimals={false}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      tick={{ fill: ct.tick, fontSize: 12 }}
-                      width={70}
-                    />
-                    <Tooltip
-                      {...ct.tooltip}
-                      formatter={(v: any) => [v, 'Items']}
-                    />
+                  <BarChart data={priorityChartData} layout="vertical" margin={{ left: 8, right: 24 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} horizontal={false} />
+                    <XAxis type="number" tick={{ fill: ct.tick, fontSize: 12 }} allowDecimals={false} />
+                    <YAxis type="category" dataKey="name" tick={{ fill: ct.tick, fontSize: 12 }} width={70} />
+                    <Tooltip {...ct.tooltip} formatter={(v: any) => [v, 'Items']} />
                     <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={16}>
                       {priorityChartData.map((entry, i) => (
                         <Cell key={i} fill={entry.color} />
@@ -1637,49 +1271,17 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {recommendations.map((recommendation: any, index: number) => (
-                <div
-                  key={index}
-                  className={`p-4 rounded-lg border flex items-start gap-3 ${tk.chip}`}
-                >
-                  <div
-                    className="p-1.5 rounded-md mt-0.5"
-                    style={{
-                      backgroundColor: `${severityHex(safeGet(recommendation, 'priority', 'low'))}1A`,
-                    }}
-                  >
-                    <ArrowUpRight
-                      className="w-3.5 h-3.5"
-                      style={{
-                        color: severityHex(
-                          safeGet(recommendation, 'priority', 'low')
-                        ),
-                      }}
-                    />
+                <div key={index} className={`p-4 rounded-lg border flex items-start gap-3 ${tk.chip}`}>
+                  <div className="p-1.5 rounded-md mt-0.5" style={{ backgroundColor: `${severityHex(safeGet(recommendation, 'priority', 'low'))}1A` }}>
+                    <Target className="w-3.5 h-3.5" style={{ color: severityHex(safeGet(recommendation, 'priority', 'low')) }} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
-                      <SeverityBadge
-                        label={safeGet(recommendation, 'priority', 'Unknown')}
-                        theme={theme}
-                      />
-                      <span className={`text-xs ${tk.textTertiary}`}>
-                        {safeGet(
-                          recommendation,
-                          'timeframe',
-                          'Unknown timeframe'
-                        )}
-                      </span>
+                      <SeverityBadge label={safeGet(recommendation, 'priority', 'Unknown')} theme={theme} />
+                      <span className={`text-xs ${tk.textTertiary}`}>{safeGet(recommendation, 'timeframe', 'Unknown timeframe')}</span>
                     </div>
-                    <p className={`text-sm font-medium mb-1 ${tk.textPrimary}`}>
-                      {safeGet(recommendation, 'action', 'No action specified')}
-                    </p>
-                    <p className={`text-xs ${tk.textSecondary}`}>
-                      {safeGet(
-                        recommendation,
-                        'rationale',
-                        'No rationale provided'
-                      )}
-                    </p>
+                    <p className={`text-sm font-medium mb-1 ${tk.textPrimary}`}>{safeGet(recommendation, 'action', 'No action specified')}</p>
+                    <p className={`text-xs ${tk.textSecondary}`}>{safeGet(recommendation, 'rationale', 'No rationale provided')}</p>
                   </div>
                 </div>
               ))}
@@ -1693,20 +1295,13 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
   const renderTabContent = () => {
     try {
       switch (activeTab) {
-        case 'overview':
-          return renderOverviewTab();
-        case 'customers':
-          return renderCustomersTab();
-        case 'transactions':
-          return renderTransactionsTab();
-        case 'network':
-          return renderNetworkTab();
-        case 'temporal':
-          return renderTemporalTab();
-        case 'actions':
-          return renderActionsTab();
-        default:
-          return renderOverviewTab();
+        case 'overview': return renderOverviewTab();
+        case 'customers': return renderCustomersTab();
+        case 'transactions': return renderTransactionsTab();
+        case 'network': return renderNetworkTab();
+        case 'temporal': return renderTemporalTab();
+        case 'actions': return renderActionsTab();
+        default: return renderOverviewTab();
       }
     } catch (err) {
       console.error('Error rendering tab content:', err);
@@ -1734,16 +1329,15 @@ const RiskAnalyticsDashboard: React.FC<RiskAnalyticsDashboardProps> = ({
               return (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    setSelectedCluster(null);
+                  }}
                   className={`flex items-center gap-2 px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
-                    active
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : `${tk.textSecondary} hover:bg-slate-500/10`
+                    active ? 'bg-blue-600 text-white shadow-sm' : `${tk.textSecondary} hover:bg-slate-500/10`
                   }`}
                 >
-                  <tab.icon
-                    className={`w-4 h-4 ${active ? 'text-white' : ''}`}
-                  />
+                  <tab.icon className={`w-4 h-4 ${active ? 'text-white' : ''}`} />
                   <span className="hidden sm:inline truncate">{tab.label}</span>
                 </button>
               );

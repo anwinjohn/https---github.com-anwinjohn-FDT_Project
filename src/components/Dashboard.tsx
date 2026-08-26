@@ -913,7 +913,8 @@ const Dashboard: React.FC = () => {
         );
       case 'trends':
         return (
-          <TrendAnalysisPanel data={alertsSummary} isLoading={isLoading} />
+          <TrendAnalysisPanel 
+           isLoading={isLoading} />
         );
       case 'admin':
         return <SecureAdminDashboard initialTab="users" />;
