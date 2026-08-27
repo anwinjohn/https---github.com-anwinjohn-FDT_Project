@@ -477,7 +477,7 @@ function statusStyles(status: string, dark: boolean) {
     return dark
       ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
       : 'bg-amber-50 text-amber-700 border-amber-200';
-  if (s.includes('ESCALAT'))
+  if (s.includes('OPEN'))
     return dark
       ? 'bg-rose-600/20 text-rose-300 border-rose-500/40'
       : 'bg-rose-50 text-rose-700 border-rose-300';
