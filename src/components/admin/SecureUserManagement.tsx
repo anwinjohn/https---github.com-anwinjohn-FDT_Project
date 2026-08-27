@@ -51,14 +51,17 @@ import { add } from 'date-fns';
 import { update } from 'three/examples/jsm/libs/tween.module.js';
 import { log } from 'console';
 import apiClient from '../../utils/apiClient';
+import { appConfig as config } from '../../config/runtime-config';
 
 interface UserOnboardingProps {
   apiEndpoint?: string;
   fullWidth?: boolean;
 }
 
+const apiBaseUrl = config.api.baseUrl;
+
 const UserManagement: React.FC<UserOnboardingProps> = ({
-  apiEndpoint = 'http://127.0.0.1:8000/admin/users',
+  apiEndpoint = `${apiBaseUrl}/admin/users`,
   fullWidth = false,
 }) => {
   const { theme } = useTheme();
@@ -239,7 +242,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
         ...(filters.user_roles && { user_roles: filters.user_roles }),
       });
 
-      const response = await fetch(`${apiEndpoint}?${params}`);
+      const response = await fetch(`${apiBaseUrl}/admin/users?${params}`);
 
       if (!response.ok) {
         throw new Error('Failed to fetch users for export');
@@ -436,7 +439,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
   };
 
   const handleUserAction = (action, user) => {
-    console.log(`Action: ${action} for user:`, user.username);
+    // console.log(`Action: ${action} for user:`, user.username);
     setOpenDropdown(null);
 
     // Handle different actions
@@ -626,8 +629,8 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                         ? 'bg-gray-500/30 text-gray-400 cursor-not-allowed'
                         : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : theme === 'dark'
-                      ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'
-                      : 'bg-green-100 hover:bg-green-200 text-green-800 border border-green-300'
+                        ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'
+                        : 'bg-green-100 hover:bg-green-200 text-green-800 border border-green-300'
                   }`}
                 >
                   {exportLoading ? (
@@ -647,8 +650,8 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
               showFilters
                 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                 : theme === 'dark'
-                ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+                  ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
             }`}
           >
             <Filter className="w-4 h-4" />
@@ -810,7 +813,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                             const [newSortBy, newSortOrder] =
                               e.target.value.split('-') as [
                                 typeof sortBy,
-                                'asc' | 'desc'
+                                'asc' | 'desc',
                               ];
                             setSortBy(newSortBy);
                             setSortOrder(newSortOrder);
@@ -1507,8 +1510,8 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                               ? 'bg-white/5 text-white/30 cursor-not-allowed'
                               : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                             : theme === 'dark'
-                            ? 'bg-white/10 hover:bg-white/20 text-white'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                              ? 'bg-white/10 hover:bg-white/20 text-white'
+                              : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                         }`}
                       >
                         <ChevronLeft className="w-4 h-4" />
@@ -1547,8 +1550,8 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                                       ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
                                       : 'bg-blue-100 text-blue-700 border border-blue-300'
                                     : theme === 'dark'
-                                    ? 'bg-white/10 hover:bg-white/20 text-white'
-                                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                                      ? 'bg-white/10 hover:bg-white/20 text-white'
+                                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                                 }`}
                               >
                                 {pageToShow}
@@ -1605,8 +1608,8 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                               ? 'bg-white/5 text-white/30 cursor-not-allowed'
                               : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                             : theme === 'dark'
-                            ? 'bg-white/10 hover:bg-white/20 text-white'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                              ? 'bg-white/10 hover:bg-white/20 text-white'
+                              : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                         }`}
                       >
                         <ChevronRight className="w-4 h-4" />

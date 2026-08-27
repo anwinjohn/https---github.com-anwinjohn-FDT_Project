@@ -1,4 +1,10 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
@@ -22,7 +28,16 @@ import SecureAdminDashboard from './admin/SecureAdminDashboard';
 import AlertsManagement from './alerts/AlertsManagement';
 import SecureSidebar from './SecureSidebar';
 import PermissionGuard from './PermissionGuard';
-import AlertAuditLogComponent from './alerts/AlertAuditLog';
+import SystemLogMonitor from './alerts/AlertAuditLog';
+import RulesManagement from './admin/RulesManagement';
+import ManagementFraudDashboard from './admin/Managementfrauddashboard';
+import AlertListing from './alerts/AlertListing';
+
+import {
+  FraudVolumeOverTimeCard,
+  FraudCategoryMixCard,
+} from './admin/Fraudtrendwidgets'; // NEW — compact fraud trend charts for the main overview
+import { exportDashboardToPdf } from '../utils/exportDashboardToPdf'; // NEW — Download to PDF
 import {
   RefreshCw,
   AlertTriangle,
@@ -54,9 +69,12 @@ import {
   Sun,
   Moon,
   Power,
+  Loader2,
 } from 'lucide-react';
 import { logger } from '../utils/logger';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
+import { Axios } from 'axios';
+import apiClient from '../utils/apiClient';
 
 const Dashboard: React.FC = () => {
   const { viewId } = useParams<{ viewId: string }>();
@@ -70,20 +88,18 @@ const Dashboard: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [masterLiveEnabled, setMasterLiveEnabled] = useState(true);
+  // NEW — sidebarOpen now doubles as the "pinned open" flag (toggled by the
+  // menu button); sidebarHovering drives the auto show/hide-on-hover behavior.
+  const [sidebarHovering, setSidebarHovering] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const mainContentRef = useRef<HTMLDivElement>(null);
 
   const { user, logout, resetSessionTimer } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { getSetting } = useSystemSettings();
 
-  const {
-    alertsSummary,
-    userAlertsSummary,
-    branchAlertsSummary,
-    isLoading,
-    error,
-    lastUpdated,
-    refreshData,
-  } = useApi(dateRange, autoRefresh && masterLiveEnabled ? 30000 : 0);
+  const [rules, setRules] = useState<AlertRule[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
 
   // Update activeView when URL parameter changes
   useEffect(() => {
@@ -93,6 +109,64 @@ const Dashboard: React.FC = () => {
       setActiveView('dashboard');
     }
   }, [viewId, location.pathname]);
+
+  const ApiRefreshInteval = config.dashboard.autoRefresh?.interval || 6000;
+  const ApiRefreshEnbaled = config.dashboard.autoRefresh?.enabled;
+  const shouldAutoRefresh =
+    activeView === 'dashboard' &&
+    autoRefresh &&
+    masterLiveEnabled &&
+    ApiRefreshEnbaled;
+
+  const {
+    alertsSummary,
+    userAlertsSummary,
+    branchAlertsSummary,
+    branchAlertDetails,
+    isLoading,
+    error,
+    lastUpdated,
+    violationType,
+    refreshData,
+    useFraudVolume,
+  } = useApi(dateRange, shouldAutoRefresh ? ApiRefreshInteval : 0);
+
+  interface AlertRule {
+    rule_id: string;
+    scenario: string;
+    scenario_logic: string;
+    rule_priority: RulePriority;
+    active_status: boolean;
+    configs: RuleConfig[];
+  }
+  interface RuleConfig {
+    config_key: string;
+    config_value: string;
+    is_active: boolean;
+  }
+  const apiBaseUrl = config.api.baseUrl;
+
+  useEffect(() => {
+    if (activeView !== 'rule-management') return;
+
+    const loadRules = async () => {
+      try {
+        setRulesLoading(true);
+
+        const response = await apiClient.get(`${apiBaseUrl}/rules-config`);
+        // console.log('rules config', response);
+        setRules(response.data);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setRulesLoading(false);
+      }
+    };
+
+    loadRules();
+  }, [activeView]);
+
+  type RulePriority = 'High' | 'Medium' | 'Low';
 
   const appName = config.app.name;
   const appShortName = config.app.shortName;
@@ -124,11 +198,21 @@ const Dashboard: React.FC = () => {
     },
     [resetSessionTimer]
   );
-
+  // console.log(dateRange);
   const handleRefresh = useCallback(() => {
     refreshData();
     resetSessionTimer();
   }, [refreshData, resetSessionTimer]);
+
+  const handleExportPdf = useCallback(async () => {
+    await exportDashboardToPdf(mainContentRef.current, {
+      fileName: `${activeView}-report-${new Date().toISOString().slice(0, 10)}.pdf`,
+      title: getViewTitle(activeView),
+      subtitle: `Generated ${new Date().toLocaleString()}`,
+      onProgress: setIsExportingPdf,
+    });
+    resetSessionTimer();
+  }, [activeView, resetSessionTimer]);
 
   const handleLogout = () => {
     logger.info('User logged out', user?.full_name);
@@ -159,7 +243,7 @@ const Dashboard: React.FC = () => {
 
   const totalAlerts = alertsSummary.reduce((sum, item) => sum + item.count, 0);
   const totalUsers = userAlertsSummary.length;
-  const totalBranches = branchAlertsSummary.length;
+  const totalBranches = branchAlertDetails.length;
 
   // Calculate alert counts by risk category
   const getAlertCountsByRiskCategory = () => {
@@ -215,9 +299,33 @@ const Dashboard: React.FC = () => {
     return { id: topRule.rule_id, count: topRule.count };
   }, [alertsSummary]);
 
+  // Cross-domain "at a glance" values for the Executive Insights section on
+  // the landing dashboard. Reuse the same alertsSummary / userAlertsSummary /
+  // branchAlertDetails already fetched above — no additional API calls.
+  const topRiskRule = useMemo(() => {
+    if (alertsSummary.length === 0) return null;
+    return [...alertsSummary].sort((a, b) => b.count - a.count)[0];
+  }, [alertsSummary]);
+
+  const topRiskCashier = useMemo(() => {
+    const cashiers = userAlertsSummary?.cashiers || [];
+    if (cashiers.length === 0) return null;
+    return cashiers.reduce((prev, current) =>
+      prev.count > current.count ? prev : current
+    );
+  }, [userAlertsSummary]);
+
+  const topRiskBranchInsight = useMemo(() => {
+    if (branchAlertDetails.length === 0) return null;
+    return [...branchAlertDetails].sort(
+      (a, b) => b.total_alerts - a.total_alerts
+    )[0];
+  }, [branchAlertDetails]);
+
   const getViewTitle = (view: string) => {
     const titles: Record<string, string> = {
       dashboard: 'Fraud Detection & Analytics Dashboard',
+      'management-dashboard': 'Management Dashboard — Fraud Trend', // NEW
       'risk-analytics': 'Fraud & Risk Analytics',
       rules: 'Alert Rules Management',
       users: 'User Activity Analytics',
@@ -240,41 +348,98 @@ const Dashboard: React.FC = () => {
       case 'overview':
         return (
           <div className="space-y-8">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div></div>
+
+              <div className="flex items-center gap-2">
+                <div
+                  className={`flex items-center rounded-xl border p-0.5 ${
+                    theme
+                      ? 'border-white/10 bg-white/[0.03]'
+                      : 'border-slate-200 bg-slate-50'
+                  }`}
+                ></div>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleExportPdf}
+                  disabled={isExportingPdf}
+                  title="Download this view as PDF"
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all duration-200 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed ${
+                    theme === 'dark'
+                      ? 'bg-gradient-to-r from-slate-500/30 to-slate-600/30 hover:from-slate-500/40 hover:to-slate-600/40 text-white border-slate-500/40'
+                      : 'bg-gradient-to-r from-slate-100 to-slate-200 hover:from-slate-200 hover:to-slate-300 text-slate-700 border-slate-300'
+                  }`}
+                >
+                  {isExportingPdf ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  <span className="hidden sm:inline text-sm font-medium">
+                    {isExportingPdf ? 'Exporting…' : 'Export PDF'}
+                  </span>
+                </motion.button>
+              </div>
+            </div>
+
+            {/* <div className="grid grid-cols-10 items-center gap-3"> */}
+            {/* Export to PDF */}
+            {/* <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={handleExportPdf}
+                disabled={isExportingPdf}
+                title="Download this view as PDF"
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all duration-200 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed ${
+                  theme === 'dark'
+                    ? 'bg-gradient-to-r from-slate-500/30 to-slate-600/30 hover:from-slate-500/40 hover:to-slate-600/40 text-white border-slate-500/40'
+                    : 'bg-gradient-to-r from-slate-100 to-slate-200 hover:from-slate-200 hover:to-slate-300 text-slate-700 border-slate-300'
+                }`}
+              >
+                {isExportingPdf ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span className="hidden sm:inline text-sm font-medium">
+                  {isExportingPdf ? 'Exporting…' : 'Export PDF'}
+                </span>
+              </motion.button> */}
+            {/* </div> */}
             {/* Quick Navigation Cards */}
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
               <motion.div
                 whileHover={{ y: -4, scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => handleViewChange('risk-analytics')}
-                className={`group relative p-6 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
+                className={`group relative p-4 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
                   theme === 'dark'
                     ? 'bg-gradient-to-br from-red-500/15 via-red-500/10 to-red-500/5 border-red-500/20 hover:border-red-500/40 hover:shadow-red-500/20'
                     : 'bg-gradient-to-br from-red-50 to-red-25 border-red-200 hover:border-red-300 hover:shadow-red-100'
                 }`}
               >
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-3 bg-gradient-to-br from-red-500 to-red-600 rounded-xl shadow-lg group-hover:shadow-red-500/25 transition-all duration-300">
-                    <AlertTriangle className="w-6 h-6 text-white" />
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 bg-gradient-to-br from-red-500 to-red-600 rounded-xl shadow-lg group-hover:shadow-red-500/25 transition-all duration-300">
+                    <AlertTriangle className="w-5 h-5 text-white" />
                   </div>
-                  <ArrowUpRight className="w-5 h-5 text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <ArrowUpRight className="w-4 h-4 text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
                 <h3
-                  className={`text-lg font-bold mb-2 ${
+                  className={`text-base font-bold mb-1 ${
                     theme === 'dark' ? 'text-white' : 'text-gray-900'
                   }`}
                 >
-                  Fraud & Risk Analytics
+                  Fraud & Risk Analytics Dashboard
                 </h3>
                 <p
-                  className={`text-sm mb-3 ${
+                  className={`text-xs mb-1 ${
                     theme === 'dark' ? 'text-red-200/80' : 'text-red-700'
                   }`}
                 >
                   Risk intelligence dashboard
                 </p>
                 <div className="flex items-center gap-2">
-                  {/* <span className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}>24</span> */}
                   <span
                     className={`text-sm ${
                       theme === 'dark' ? 'text-red-300' : 'text-red-700'
@@ -283,37 +448,61 @@ const Dashboard: React.FC = () => {
                     View more details
                   </span>
                 </div>
+                {totalAlerts > 0 && (
+                  <div
+                    className={`flex h-1.5 rounded-full overflow-hidden mt-3 ${
+                      theme === 'dark' ? 'bg-white/10' : 'bg-white/70'
+                    }`}
+                    title="High / Medium / Low risk mix"
+                  >
+                    {riskDistributionData.map((segment) => (
+                      <div
+                        key={segment.name}
+                        className="h-full"
+                        style={{
+                          width: `${(segment.value / totalAlerts) * 100}%`,
+                          backgroundColor: segment.color,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
               </motion.div>
 
               <motion.div
                 whileHover={{ y: -4, scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => handleViewChange('rules')}
-                className={`group relative p-6 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
+                className={`group relative p-4 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
                   theme === 'dark'
                     ? 'bg-gradient-to-br from-blue-500/15 via-blue-500/10 to-blue-500/5 border-blue-500/20 hover:border-blue-500/40 hover:shadow-blue-500/20'
                     : 'bg-gradient-to-br from-blue-50 to-blue-25 border-blue-200 hover:border-blue-300 hover:shadow-blue-100'
                 }`}
               >
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-3 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg group-hover:shadow-blue-500/25 transition-all duration-300">
-                    <AlertTriangle className="w-6 h-6 text-white" />
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg group-hover:shadow-blue-500/25 transition-all duration-300">
+                    <Shield className="w-5 h-5 text-white" />
                   </div>
-                  <ArrowUpRight className="w-5 h-5 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <ArrowUpRight className="w-4 h-4 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
                 <h3
-                  className={`text-lg font-bold mb-2 ${
+                  className={`text-base font-bold mb-1 ${
                     theme === 'dark' ? 'text-white' : 'text-gray-900'
                   }`}
                 >
                   Top Alert Rules
                 </h3>
-                {/* <p className={`text-sm mb-3 ${theme === 'dark' ? 'text-blue-200/80' : 'text-blue-700'
-                  }`}>Most triggered security rules</p> */}
+                <p
+                  className={`text-xs mb-1 ${
+                    theme === 'dark' ? 'text-blue-200/80' : 'text-blue-700'
+                  }`}
+                >
+                  Most triggered security rules
+                </p>
                 <div className="flex flex-col">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`text-2xl font-bold ${
+                      className={`text-xl font-bold ${
                         theme === 'dark' ? 'text-white' : 'text-gray-900'
                       }`}
                     >
@@ -341,27 +530,27 @@ const Dashboard: React.FC = () => {
                 whileHover={{ y: -4, scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => handleViewChange('users')}
-                className={`group relative p-6 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
+                className={`group relative p-4 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
                   theme === 'dark'
                     ? 'bg-gradient-to-br from-green-500/15 via-green-500/10 to-green-500/5 border-green-500/20 hover:border-green-500/40 hover:shadow-green-500/20'
                     : 'bg-gradient-to-br from-green-50 to-green-25 border-green-200 hover:border-green-300 hover:shadow-green-100'
                 }`}
               >
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-3 bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg group-hover:shadow-green-500/25 transition-all duration-300">
-                    <Users className="w-6 h-6 text-white" />
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg group-hover:shadow-green-500/25 transition-all duration-300">
+                    <Users className="w-5 h-5 text-white" />
                   </div>
-                  <ArrowUpRight className="w-5 h-5 text-green-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <ArrowUpRight className="w-4 h-4 text-green-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
                 <h3
-                  className={`text-lg font-bold mb-2 ${
+                  className={`text-base font-bold mb-1 ${
                     theme === 'dark' ? 'text-white' : 'text-gray-900'
                   }`}
                 >
                   User Analytics
                 </h3>
                 <p
-                  className={`text-sm mb-3 ${
+                  className={`text-xs mb-1 ${
                     theme === 'dark' ? 'text-green-200/80' : 'text-green-700'
                   }`}
                 >
@@ -369,7 +558,7 @@ const Dashboard: React.FC = () => {
                 </p>
                 <div className="flex items-center gap-2">
                   <span
-                    className={`text-2xl font-bold ${
+                    className={`text-xl font-bold ${
                       theme === 'dark' ? 'text-white' : 'text-gray-900'
                     }`}
                   >
@@ -389,27 +578,27 @@ const Dashboard: React.FC = () => {
                 whileHover={{ y: -4, scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => handleViewChange('branches')}
-                className={`group relative p-6 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
+                className={`group relative p-4 rounded-2xl border cursor-pointer transition-all duration-300 backdrop-blur-xl shadow-lg ${
                   theme === 'dark'
                     ? 'bg-gradient-to-br from-orange-500/15 via-orange-500/10 to-orange-500/5 border-orange-500/20 hover:border-orange-500/40 hover:shadow-orange-500/20'
                     : 'bg-gradient-to-br from-orange-50 to-orange-25 border-orange-200 hover:border-orange-300 hover:shadow-orange-100'
                 }`}
               >
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-3 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl shadow-lg group-hover:shadow-orange-500/25 transition-all duration-300">
-                    <Building className="w-6 h-6 text-white" />
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl shadow-lg group-hover:shadow-orange-500/25 transition-all duration-300">
+                    <Building className="w-5 h-5 text-white" />
                   </div>
-                  <ArrowUpRight className="w-5 h-5 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <ArrowUpRight className="w-4 h-4 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
                 <h3
-                  className={`text-lg font-bold mb-2 ${
+                  className={`text-base font-bold mb-1 ${
                     theme === 'dark' ? 'text-white' : 'text-gray-900'
                   }`}
                 >
                   Branch Analytics
                 </h3>
                 <p
-                  className={`text-sm mb-3 ${
+                  className={`text-xs mb-1 ${
                     theme === 'dark' ? 'text-orange-200/80' : 'text-orange-700'
                   }`}
                 >
@@ -417,7 +606,7 @@ const Dashboard: React.FC = () => {
                 </p>
                 <div className="flex items-center gap-2">
                   <span
-                    className={`text-2xl font-bold ${
+                    className={`text-xl font-bold ${
                       theme === 'dark' ? 'text-white' : 'text-gray-900'
                     }`}
                   >
@@ -434,6 +623,18 @@ const Dashboard: React.FC = () => {
               </motion.div>
             </div>
 
+            {/* Fraud Trend — BRD: Management Dashboards (Fraud Trend) */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <FraudVolumeOverTimeCard
+                data={useFraudVolume}
+                isLoading={isLoading}
+              />
+              <FraudCategoryMixCard
+                data={violationType}
+                isLoading={isLoading}
+              />
+            </div>
+
             {/* Main Analytics Grid */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
               <RiskDistributionPanel
@@ -445,209 +646,250 @@ const Dashboard: React.FC = () => {
 
             {/* Secondary Analytics Grid */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-              <UsersPanel data={userAlertsSummary} isLoading={isLoading} />
-              <BranchesPanel data={branchAlertsSummary} isLoading={isLoading} />
+              <UsersPanel
+                data={userAlertsSummary}
+                isLoading={isLoading}
+                dateRange={dateRange}
+              />
+              <BranchesPanel data={branchAlertDetails} isLoading={isLoading} />
             </div>
 
-            {/* Enhanced System Insights */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 }}
-                className={`p-6 rounded-2xl border backdrop-blur-xl shadow-lg ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-purple-500/15 via-purple-500/10 to-purple-500/5 border-purple-500/20'
-                    : 'bg-gradient-to-br from-purple-50 to-purple-25 border-purple-200'
-                }`}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg">
-                    <Zap className="w-5 h-5 text-white" />
-                  </div>
-                  <h3
-                    className={`text-lg font-semibold ${
-                      theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}
-                  >
-                    System Performance
-                  </h3>
-                </div>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+            {/* Executive Insights — cross-domain "at a glance" synthesis.
+                Replaces a previously dead, fully hardcoded block (System
+                Performance / Detection Accuracy / Global Coverage — fake
+                uptime %, fake accuracy %, fake region counts unrelated to
+                any fetched data). Everything below is derived from
+                alertsSummary / userAlertsSummary / branchAlertDetails,
+                which are already fetched for this view — no new API calls,
+                with explicit "No data" fallbacks when arrays are empty. */}
+            {(topRiskRule || topRiskCashier || topRiskBranchInsight) && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1 }}
+                  className={`p-6 rounded-2xl border backdrop-blur-xl shadow-lg ${
+                    theme === 'dark'
+                      ? 'bg-gradient-to-br from-blue-500/15 via-blue-500/10 to-blue-500/5 border-blue-500/20'
+                      : 'bg-gradient-to-br from-blue-50 to-blue-25 border-blue-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="p-2 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg">
+                      <Shield className="w-5 h-5 text-white" />
+                    </div>
+                    <h3
+                      className={`text-lg font-semibold ${
+                        theme === 'dark' ? 'text-white' : 'text-gray-900'
                       }`}
                     >
-                      Response Time
-                    </span>
-                    <span
-                      className={`font-medium ${
-                        theme === 'dark' ? 'text-purple-300' : 'text-purple-700'
-                      }`}
-                    >
-                      {'< 100ms'}
-                    </span>
+                      Highest-Triggered Rule
+                    </h3>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                      }`}
+                  {topRiskRule ? (
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Rule ID
+                        </span>
+                        <span
+                          className={`font-medium ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'}`}
+                        >
+                          {topRiskRule.rule_id}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Priority
+                        </span>
+                        <span className="font-medium text-red-400">
+                          {topRiskRule.rule_priority}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Triggers
+                        </span>
+                        <span className="font-medium text-blue-400">
+                          {topRiskRule.count}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p
+                      className={`text-sm ${theme === 'dark' ? 'text-white/50' : 'text-gray-500'}`}
                     >
-                      Uptime
-                    </span>
-                    <span className="font-medium text-green-400">99.9%</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                      }`}
-                    >
-                      Active Sessions
-                    </span>
-                    <span className="font-medium text-blue-400">
-                      {totalUsers * 3}
-                    </span>
-                  </div>
-                </div>
-              </motion.div>
+                      No rule activity for this period.
+                    </p>
+                  )}
+                </motion.div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
-                className={`p-6 rounded-2xl border backdrop-blur-xl shadow-lg ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-cyan-500/15 via-cyan-500/10 to-cyan-500/5 border-cyan-500/20'
-                    : 'bg-gradient-to-br from-cyan-50 to-cyan-25 border-cyan-200'
-                }`}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-lg">
-                    <Target className="w-5 h-5 text-white" />
-                  </div>
-                  <h3
-                    className={`text-lg font-semibold ${
-                      theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}
-                  >
-                    Detection Accuracy
-                  </h3>
-                </div>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2 }}
+                  className={`p-6 rounded-2xl border backdrop-blur-xl shadow-lg ${
+                    theme === 'dark'
+                      ? 'bg-gradient-to-br from-red-500/15 via-red-500/10 to-red-500/5 border-red-500/20'
+                      : 'bg-gradient-to-br from-red-50 to-red-25 border-red-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="p-2 bg-gradient-to-br from-red-500 to-red-600 rounded-lg">
+                      <Users className="w-5 h-5 text-white" />
+                    </div>
+                    <h3
+                      className={`text-lg font-semibold ${
+                        theme === 'dark' ? 'text-white' : 'text-gray-900'
                       }`}
                     >
-                      True Positives
-                    </span>
-                    <span className="font-medium text-green-400">94.2%</span>
+                      Highest-violated Cashier
+                    </h3>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                      }`}
+                  {topRiskCashier ? (
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Cashier ID
+                        </span>
+                        <span
+                          className={`font-medium ${theme === 'dark' ? 'text-red-300' : 'text-red-700'}`}
+                        >
+                          {topRiskCashier.emp_id}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Violations
+                        </span>
+                        <span className="font-medium text-red-400">
+                          {topRiskCashier.count}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Last Violation
+                        </span>
+                        <span
+                          className={`font-medium ${theme === 'dark' ? 'text-white/80' : 'text-gray-700'}`}
+                        >
+                          {topRiskCashier.last_violation}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p
+                      className={`text-sm ${theme === 'dark' ? 'text-white/50' : 'text-gray-500'}`}
                     >
-                      False Positives
-                    </span>
-                    <span className="font-medium text-yellow-400">5.8%</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                      }`}
-                    >
-                      Confidence Score
-                    </span>
-                    <span
-                      className={`font-medium ${
-                        theme === 'dark' ? 'text-cyan-300' : 'text-cyan-700'
-                      }`}
-                    >
-                      High
-                    </span>
-                  </div>
-                </div>
-              </motion.div>
+                      No cashier activity for this period.
+                    </p>
+                  )}
+                </motion.div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-                className={`p-6 rounded-2xl border backdrop-blur-xl shadow-lg ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-indigo-500/15 via-indigo-500/10 to-indigo-500/5 border-indigo-500/20'
-                    : 'bg-gradient-to-br from-indigo-50 to-indigo-25 border-indigo-200'
-                }`}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-lg">
-                    <Globe className="w-5 h-5 text-white" />
-                  </div>
-                  <h3
-                    className={`text-lg font-semibold ${
-                      theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}
-                  >
-                    Global Coverage
-                  </h3>
-                </div>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.3 }}
+                  className={`p-6 rounded-2xl border backdrop-blur-xl shadow-lg ${
+                    theme === 'dark'
+                      ? 'bg-gradient-to-br from-orange-500/15 via-orange-500/10 to-orange-500/5 border-orange-500/20'
+                      : 'bg-gradient-to-br from-orange-50 to-orange-25 border-orange-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="p-2 bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg">
+                      <Building className="w-5 h-5 text-white" />
+                    </div>
+                    <h3
+                      className={`text-lg font-semibold ${
+                        theme === 'dark' ? 'text-white' : 'text-gray-900'
                       }`}
                     >
-                      Regions Monitored
-                    </span>
-                    <span
-                      className={`font-medium ${
-                        theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'
-                      }`}
-                    >
-                      12
-                    </span>
+                      Riskiest Branch
+                    </h3>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                      }`}
+                  {topRiskBranchInsight ? (
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Branch
+                        </span>
+                        <span
+                          className={`font-medium truncate max-w-[140px] ${
+                            theme === 'dark'
+                              ? 'text-orange-300'
+                              : 'text-orange-700'
+                          }`}
+                        >
+                          {topRiskBranchInsight.branch_name}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Alerts
+                        </span>
+                        <span className="font-medium text-orange-400">
+                          {topRiskBranchInsight.total_alerts}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span
+                          className={`text-sm ${theme === 'dark' ? 'text-white/70' : 'text-gray-700'}`}
+                        >
+                          Risk Level
+                        </span>
+                        <span
+                          className={`text-xs px-2 py-1 rounded-full ${
+                            theme === 'dark'
+                              ? 'bg-red-500/20 text-red-300'
+                              : 'bg-red-100 text-red-700'
+                          }`}
+                        >
+                          {topRiskBranchInsight.risk_level}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p
+                      className={`text-sm ${theme === 'dark' ? 'text-white/50' : 'text-gray-500'}`}
                     >
-                      Data Centers
-                    </span>
-                    <span className="font-medium text-blue-400">3</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                      }`}
-                    >
-                      Compliance
-                    </span>
-                    <span className="font-medium text-green-400">100%</span>
-                  </div>
-                </div>
-              </motion.div>
-            </div>
+                      No branch activity for this period.
+                    </p>
+                  )}
+                </motion.div>
+              </div>
+            )}
           </div>
         );
+      case 'management-dashboard': // NEW — BRD: Management Dashboards (Fraud Trend)
+        return <ManagementFraudDashboard dateRange={dateRange} />;
       case 'alerts-management':
         return <AlertsManagement />;
+      case 'rule-management':
+        return <RulesManagement data={rules} isLoading={isLoading} />;
       case 'risk-analytics':
         return <RiskAnalyticsDashboard dateRange={dateRange} />;
+      case 'alert-lists':
+        return <AlertListing />;
       case 'audit-logs':
       case 'logs':
-        return <AlertAuditLogComponent />;
+        return <SystemLogMonitor />;
       case 'rules':
         return (
           <DetailedRulesPanel data={alertsSummary} isLoading={isLoading} />
@@ -658,19 +900,21 @@ const Dashboard: React.FC = () => {
             data={userAlertsSummary}
             isLoading={isLoading}
             fullWidth
+            dateRange={dateRange}
           />
         );
       case 'branches':
         return (
           <BranchesPanel
-            data={branchAlertsSummary}
+            data={branchAlertDetails}
             isLoading={isLoading}
             fullWidth
           />
         );
       case 'trends':
         return (
-          <TrendAnalysisPanel data={alertsSummary} isLoading={isLoading} />
+          <TrendAnalysisPanel 
+           isLoading={isLoading} />
         );
       case 'admin':
         return <SecureAdminDashboard initialTab="users" />;
@@ -788,13 +1032,23 @@ const Dashboard: React.FC = () => {
           : 'bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-50'
       }`}
     >
-      {/* Enhanced Secure Sidebar */}
-      <SecureSidebar
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
-        activeView={activeView}
-        onViewChange={handleViewChange}
-      />
+      {/* Enhanced Secure Sidebar — hover-to-reveal, like VS Code / Notion's
+          collapsed sidebar. A slim edge strip catches the mouse approaching
+          from the left; leaving the strip+sidebar area closes it again unless
+          the user has pinned it open via the menu button (sidebarOpen). */}
+      <div onMouseLeave={() => setSidebarHovering(false)}>
+        <div
+          onMouseEnter={() => setSidebarHovering(true)}
+          className="fixed left-0 top-0 h-full w-3 z-40"
+          aria-hidden="true"
+        />
+        <SecureSidebar
+          isOpen={sidebarOpen || sidebarHovering}
+          onToggle={() => setSidebarOpen(!sidebarOpen)}
+          activeView={activeView}
+          onViewChange={handleViewChange}
+        />
+      </div>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -813,10 +1067,15 @@ const Dashboard: React.FC = () => {
                 <button
                   id="menu-button"
                   onClick={() => setSidebarOpen(!sidebarOpen)}
+                  title={sidebarOpen ? 'Unpin sidebar' : 'Pin sidebar open'}
                   className={`p-2 rounded-xl transition-all duration-200 group ${
-                    theme === 'dark'
-                      ? 'hover:bg-white/10 text-white group-hover:text-blue-300'
-                      : 'hover:bg-gray-100 text-gray-700 group-hover:text-blue-600'
+                    sidebarOpen
+                      ? theme === 'dark'
+                        ? 'bg-blue-500/20 text-blue-300'
+                        : 'bg-blue-100 text-blue-700'
+                      : theme === 'dark'
+                        ? 'hover:bg-white/10 text-white group-hover:text-blue-300'
+                        : 'hover:bg-gray-100 text-gray-700 group-hover:text-blue-600'
                   }`}
                 >
                   <Menu className="w-5 h-5" />
@@ -865,12 +1124,12 @@ const Dashboard: React.FC = () => {
                               ? 'bg-gray-500/20 text-gray-400 border-gray-500/30 cursor-not-allowed'
                               : 'bg-gray-200 text-gray-500 border-gray-300 cursor-not-allowed'
                             : autoRefresh
-                            ? theme === 'dark'
-                              ? 'bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-200 border-green-500/40 shadow-green-500/20'
-                              : 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 border-green-300 shadow-green-200'
-                            : theme === 'dark'
-                            ? 'bg-gradient-to-r from-gray-500/20 to-slate-500/20 text-gray-300 border-gray-500/30 hover:from-gray-500/30 hover:to-slate-500/30'
-                            : 'bg-gradient-to-r from-gray-100 to-slate-100 text-gray-600 border-gray-300 hover:from-gray-200 hover:to-slate-200'
+                              ? theme === 'dark'
+                                ? 'bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-200 border-green-500/40 shadow-green-500/20'
+                                : 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 border-green-300 shadow-green-200'
+                              : theme === 'dark'
+                                ? 'bg-gradient-to-r from-gray-500/20 to-slate-500/20 text-gray-300 border-gray-500/30 hover:from-gray-500/30 hover:to-slate-500/30'
+                                : 'bg-gradient-to-r from-gray-100 to-slate-100 text-gray-600 border-gray-300 hover:from-gray-200 hover:to-slate-200'
                         }`}
                       >
                         {autoRefresh && masterLiveEnabled ? (
@@ -882,8 +1141,8 @@ const Dashboard: React.FC = () => {
                           {!masterLiveEnabled
                             ? 'Live Disabled'
                             : autoRefresh
-                            ? 'Live'
-                            : 'Manual'}
+                              ? 'Live'
+                              : 'Manual'}
                         </span>
                       </motion.button>
 
@@ -906,6 +1165,29 @@ const Dashboard: React.FC = () => {
                       </motion.button>
                     </>
                   )}
+
+                {/* Export to PDF */}
+                {/* <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleExportPdf}
+                  disabled={isExportingPdf}
+                  title="Download this view as PDF"
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all duration-200 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed ${
+                    theme === 'dark'
+                      ? 'bg-gradient-to-r from-slate-500/30 to-slate-600/30 hover:from-slate-500/40 hover:to-slate-600/40 text-white border-slate-500/40'
+                      : 'bg-gradient-to-r from-slate-100 to-slate-200 hover:from-slate-200 hover:to-slate-300 text-slate-700 border-slate-300'
+                  }`}
+                >
+                  {isExportingPdf ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  <span className="hidden sm:inline text-sm font-medium">
+                    {isExportingPdf ? 'Exporting…' : 'Export PDF'}
+                  </span>
+                </motion.button> */}
 
                 {/* Professional VitePress-style Theme Toggle */}
                 <motion.div
@@ -1060,7 +1342,7 @@ const Dashboard: React.FC = () => {
           </div>
         </header>
 
-        <main className="flex-1 p-6 overflow-y-auto">
+        <main ref={mainContentRef} className="flex-1 p-6 overflow-y-auto">
           {/* Statistics Cards - Only show for non-admin views */}
           {/* {(activeView === 'dashboard' || activeView === 'overview') && (
             <motion.div

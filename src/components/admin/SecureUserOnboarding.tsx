@@ -22,11 +22,14 @@ import {
   Users,
   Briefcase,
   Lock,
+  KeyRound,
+  Vault,
 } from 'lucide-react';
 import { useNotifications } from '../notifications';
 import { useTheme } from '../../context/ThemeContext';
 import PermissionGuard from '../PermissionGuard';
 import apiClient from '../../utils/apiClient';
+import { useLocalMachine } from '../../context/DeviceInfoContext';
 
 // Menu ID for User Onboarding (should match database)
 const USER_ONBOARDING_MENU_ID = 15;
@@ -36,6 +39,8 @@ interface UserData {
   full_name: string;
   email_id: string;
   phone_number: string;
+  title: string;
+  department: string;
 }
 
 interface Role {
@@ -54,6 +59,16 @@ const SecureUserOnboarding: React.FC = () => {
     full_name: '',
     email_id: '',
     phone_number: '',
+    title: '',
+    department: '',
+  });
+  const [readonlyFields, setReadonlyFields] = useState({
+    username: false,
+    full_name: false,
+    email_id: false,
+    phone_number: false,
+    title: false,
+    department: false,
   });
   const [selectedRole, setSelectedRole] = useState<number | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -66,6 +81,7 @@ const SecureUserOnboarding: React.FC = () => {
   const [roleSearchQuery, setRoleSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
+  const { machineInfo, loading, available } = useLocalMachine();
 
   const { addNotification } = useNotifications();
   const { theme } = useTheme();
@@ -141,6 +157,15 @@ const SecureUserOnboarding: React.FC = () => {
   }, []);
 
   const fetchUserData = async () => {
+    setUserData({
+      username: '',
+      full_name: '',
+      email_id: '',
+      phone_number: '',
+      title: '',
+      department: '',
+    });
+
     if (!userId.trim()) {
       addNotification('Please enter a User ID', 'warning');
       return;
@@ -150,18 +175,44 @@ const SecureUserOnboarding: React.FC = () => {
       setIsFetching(true);
       setFetchSuccess(false);
 
-      const response = await apiClient.get(`/api/admin/fetch-user/${userId}`);
+      const request = { user_id: userId.trim() };
+      const response = await apiClient.post<any>('/admin/fetch-user', request);
 
-      if (response.success && response.data) {
-        setUserData({
-          username: response.data.username || '',
-          full_name: response.data.full_name || '',
-          email_id: response.data.email_id || '',
-          phone_number: response.data.phone_number || '',
+      //const response = await apiClient.post<any>("/admin/fetch-user", request);
+      if (response?.success && response.data?.user) {
+        const user = response.data?.user;
+
+        const mappedData = {
+          username: user.UserLoginId || '',
+          full_name: user.FullName || '',
+          email_id: user.EmailId || '',
+          phone_number: (user.Phone || '').replace(/[^\d+]/g, ''),
+          title: user.Title || '',
+          department: user.Department || '',
+        };
+        setUserData(mappedData);
+
+        setReadonlyFields({
+          username: !!mappedData.username,
+          full_name: !!mappedData.full_name,
+          email_id: !!mappedData.email_id,
+          phone_number: !!mappedData.phone_number,
+          title: !!mappedData.title,
+          department: !!mappedData.department,
         });
+
         setFetchSuccess(true);
         addNotification('User data fetched successfully', 'success');
       } else {
+        setReadonlyFields({
+          username: false,
+          full_name: false,
+          email_id: false,
+          phone_number: false,
+          title: false,
+          department: false,
+        });
+
         addNotification('User not found or error fetching data', 'error');
         setFetchSuccess(false);
       }
@@ -216,31 +267,44 @@ const SecureUserOnboarding: React.FC = () => {
     try {
       setIsSubmitting(true);
 
+      const authToken = localStorage.getItem('authToken');
+
       const onboardingData = {
         ...userData,
         role_id: selectedRole,
         source_user_id: userId || null,
         manual_entry: manualEntry,
+        machineInfo,
       };
-
       const response = await apiClient.post(
-        '/api/admin/onboard-user',
+        '/admin/onboard-user',
         onboardingData
       );
 
-      if (response.success) {
-        addNotification('User onboarded successfully!', 'success');
-        // Reset form
-        setUserId('');
-        setUserData({
-          username: '',
-          full_name: '',
-          email_id: '',
-          phone_number: '',
-        });
-        setSelectedRole(null);
-        setFetchSuccess(false);
-        setManualEntry(false);
+      const resp_data = response.data;
+
+      if (response.success && resp_data) {
+        const status_code = resp_data.status_code;
+
+        if (status_code != 200) {
+          addNotification(resp_data.detail, 'warning');
+        }
+        if (status_code == 200) {
+          addNotification('User onboarded successfully!', 'success');
+          // Reset form
+          setUserId('');
+          setUserData({
+            username: '',
+            full_name: '',
+            email_id: '',
+            phone_number: '',
+            title: '',
+            department: '',
+          });
+          setSelectedRole(null);
+          setFetchSuccess(false);
+          setManualEntry(false);
+        }
       } else {
         addNotification(response.error || 'Failed to onboard user', 'error');
       }
@@ -259,6 +323,8 @@ const SecureUserOnboarding: React.FC = () => {
       full_name: '',
       email_id: '',
       phone_number: '',
+      title: '',
+      department: '',
     });
     setSelectedRole(null);
     setFetchSuccess(false);
@@ -313,7 +379,7 @@ const SecureUserOnboarding: React.FC = () => {
                   theme === 'dark' ? 'text-white' : 'text-gray-900'
                 }`}
               >
-                Secure User Onboarding
+                New User Onboarding
               </h1>
               <p
                 className={`${
@@ -336,8 +402,8 @@ const SecureUserOnboarding: React.FC = () => {
                     ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 text-blue-300 border-blue-500/30'
                     : 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700 border-blue-300'
                   : theme === 'dark'
-                  ? 'bg-white/10 hover:bg-white/20 text-white border-white/20'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+                    ? 'bg-white/10 hover:bg-white/20 text-white border-white/20'
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
               }`}
             >
               {manualEntry ? (
@@ -438,104 +504,163 @@ const SecureUserOnboarding: React.FC = () => {
 
             {/* User Data Form */}
             <div className="space-y-4">
-              <div>
-                <label
-                  className={`block text-sm font-medium mb-2 ${
-                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}
-                >
-                  Username *
-                </label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
+                  >
+                    Username *
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="text"
+                      value={userData.username}
+                      onChange={(e) =>
+                        handleInputChange('username', e.target.value)
+                      }
+                      placeholder="Enter username"
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
+                      readOnly={readonlyFields.username}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
+                  >
+                    Full Name *
+                  </label>
                   <input
                     type="text"
-                    value={userData.username}
+                    value={userData.full_name}
                     onChange={(e) =>
-                      handleInputChange('username', e.target.value)
+                      handleInputChange('full_name', e.target.value)
                     }
-                    placeholder="Enter username"
-                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                    placeholder="Enter full name"
+                    className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
                       theme === 'dark'
                         ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                         : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
                     }`}
+                    readOnly={readonlyFields.full_name}
                   />
                 </div>
               </div>
-
-              <div>
-                <label
-                  className={`block text-sm font-medium mb-2 ${
-                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}
-                >
-                  Full Name *
-                </label>
-                <input
-                  type="text"
-                  value={userData.full_name}
-                  onChange={(e) =>
-                    handleInputChange('full_name', e.target.value)
-                  }
-                  placeholder="Enter full name"
-                  className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
-                    theme === 'dark'
-                      ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                      : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                  }`}
-                />
-              </div>
-
-              <div>
-                <label
-                  className={`block text-sm font-medium mb-2 ${
-                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}
-                >
-                  Email Address *
-                </label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="email"
-                    value={userData.email_id}
-                    onChange={(e) =>
-                      handleInputChange('email_id', e.target.value)
-                    }
-                    placeholder="Enter email address"
-                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
-                      theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
                     }`}
-                  />
+                  >
+                    Email Address *
+                  </label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="email"
+                      value={userData.email_id}
+                      onChange={(e) =>
+                        handleInputChange('email_id', e.target.value)
+                      }
+                      placeholder="Enter email address"
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
+                      readOnly={readonlyFields.email_id}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
+                  >
+                    Phone Number
+                  </label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="tel"
+                      value={userData.phone_number}
+                      onChange={(e) =>
+                        handleInputChange('phone_number', e.target.value)
+                      }
+                      placeholder="Enter phone number"
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
+                      readOnly={readonlyFields.phone_number}
+                    />
+                  </div>
                 </div>
               </div>
-
-              <div>
-                <label
-                  className={`block text-sm font-medium mb-2 ${
-                    theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                  }`}
-                >
-                  Phone Number
-                </label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="tel"
-                    value={userData.phone_number}
-                    onChange={(e) =>
-                      handleInputChange('phone_number', e.target.value)
-                    }
-                    placeholder="Enter phone number"
-                    className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
-                      theme === 'dark'
-                        ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
-                        : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
                     }`}
-                  />
+                  >
+                    Title
+                  </label>
+                  <div className="relative">
+                    <KeyRound className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="text"
+                      value={userData.title}
+                      onChange={(e) =>
+                        handleInputChange('title', e.target.value)
+                      }
+                      placeholder="Enter role title"
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
+                      readOnly={readonlyFields.phone_number}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      theme === 'dark' ? 'text-white/80' : 'text-gray-700'
+                    }`}
+                  >
+                    Department
+                  </label>
+                  <div className="relative">
+                    <Vault className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="text"
+                      value={userData.department}
+                      onChange={(e) =>
+                        handleInputChange('department', e.target.value)
+                      }
+                      placeholder="Enter department"
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
+                        theme === 'dark'
+                          ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
+                          : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
+                      }`}
+                      readOnly={readonlyFields.department}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -573,10 +698,10 @@ const SecureUserOnboarding: React.FC = () => {
                       ? 'bg-white/10 border border-white/20 text-white placeholder-white/50'
                       : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
                   } ${
-                  selectedRole
-                    ? 'border-purple-500/50 ring-2 ring-purple-500/20'
-                    : 'border-gray-50 hover:border-white/30'
-                }`}
+                    selectedRole
+                      ? 'border-purple-500/50 ring-2 ring-purple-500/20'
+                      : 'border-gray-50 hover:border-white/30'
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <Shield className="w-5 h-5 text-purple-400" />

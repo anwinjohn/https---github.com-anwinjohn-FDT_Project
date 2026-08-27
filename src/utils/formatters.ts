@@ -1,6 +1,20 @@
 // Format number with commas
-export const formatNumber = (num: number): string => {
-  return num.toLocaleString();
+// export const formatNumber = (num: number): string => {
+//   return num.toLocaleString();
+// };
+
+export const formatNumber = (
+  num: number | null | undefined,
+  decimals: number = 0
+): string => {
+  if (num === null || num === undefined || isNaN(Number(num))) {
+    return '0';
+  }
+
+  return Number(num).toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 };
 
 // Get color based on risk category from API data
@@ -38,7 +52,9 @@ const calculatePercentChange = (current: number, previous: number): number => {
 };
 
 // Get trend indicator (up, down, or neutral)
-const getTrendIndicator = (percentChange: number): 'up' | 'down' | 'neutral' => {
+const getTrendIndicator = (
+  percentChange: number
+): 'up' | 'down' | 'neutral' => {
   if (percentChange > 0) return 'up';
   if (percentChange < 0) return 'down';
   return 'neutral';

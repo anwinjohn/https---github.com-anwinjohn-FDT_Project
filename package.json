@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:vite": "vite build",
+    "build:with-version": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fingerprintjs/fingerprintjs": "^5.2.0",
     "@types/d3": "^7.4.3",
     "@types/three": "^0.177.0",
     "axios": "^1.6.2",
@@ -20,6 +23,8 @@
     "echarts": "^5.6.0",
     "echarts-for-react": "^3.0.2",
     "framer-motion": "^10.16.4",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.344.0",
     "plotly.js": "^3.0.1",

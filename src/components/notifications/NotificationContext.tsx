@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect } from 'react';
+import { appConfig as config } from '../../config/runtime-config';
 
 export interface Notification {
   id: string;
@@ -43,11 +44,13 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
   const addNotification = useCallback((
     message: string, 
     type: Notification['type'] = 'info', 
-    duration: number = 5000,
+    duration: number = 10000,
     title?: string,
     onClick?: () => void
   ) => {
     const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    title = config.app.name;
     const notification: Notification = { 
       id, 
       message, 

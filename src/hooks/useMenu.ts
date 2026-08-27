@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { MenuItem, MenuPermission, MenuWithPermissions, UserMenuAccess } from '../types/menu';
 import { useAuth } from '../context/AuthContext';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 
 export const useMenu = () => {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);

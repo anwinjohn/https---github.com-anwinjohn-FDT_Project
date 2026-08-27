@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
+import apiClient from '../utils/apiClient';
 
 interface SystemSetting {
   id: string;
@@ -20,31 +21,35 @@ export const useSystemSettings = () => {
     'Authorization': `Bearer ${localStorage.getItem('authToken')}`
   });
 
-  const fetchSettings = useCallback(async () => {
+  const fetchSettings = useCallback(async (settingKey?: string) => {
     try {
       setLoading(true);
       setError(null);
-      
-      const response = await fetch(`${config.api.baseUrl}/api/admin/system-settings`, {
-        headers: getAuthHeaders()
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch settings: ${response.status}`);
+      const request = { setting_key: settingKey };
+      const sysSettings = await apiClient.post<any>("/getSystemSettings", request);
+      if (!sysSettings.success || !sysSettings.data) {
+        throw new Error(sysSettings.message || 'Failed to fetch settings');
       }
-      
-      const settingsData: SystemSetting[] = await response.json();
-      const settingsMap = new Map();
-      
-      settingsData.forEach(setting => {
-        // Parse JSON values
-        try {
-          settingsMap.set(setting.setting_key, JSON.parse(setting.setting_value));
-        } catch {
-          settingsMap.set(setting.setting_key, setting.setting_value);
-        }
-      });
-      
+      const settingsMap = new Map<string, any>();
+      const responseData = sysSettings.data;
+
+      if (settingKey) {
+        const key = responseData.request_id || settingKey;
+        const value = responseData.value;
+        settingsMap.set(key, value);
+      } else {
+        Object.entries(responseData).forEach(([key, value]) => {
+          try {
+            if (typeof value === 'object' && value !== null && 'value' in value) {
+              settingsMap.set(key, (value as any).value);
+            } else {
+              settingsMap.set(key, JSON.parse(value as string));
+            }
+          } catch {
+            settingsMap.set(key, value);
+          }
+        });
+      }
       setSettings(settingsMap);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch settings';
@@ -59,21 +64,21 @@ export const useSystemSettings = () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const response = await fetch(`${config.api.baseUrl}/api/admin/system-settings/${key}`, {
         method: 'PUT',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           setting_value: typeof value === 'string' ? value : JSON.stringify(value)
         })
       });
-      
+
       if (!response.ok) {
         throw new Error(`Failed to update setting: ${response.status}`);
       }
-      
+
       const result = await response.json();
-      
+
       if (result.success) {
         // Update local state
         setSettings(prev => new Map(prev.set(key, value)));
