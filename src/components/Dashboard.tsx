@@ -129,6 +129,7 @@ const Dashboard: React.FC = () => {
     violationType,
     refreshData,
     useFraudVolume,
+    trendAnalysisData,
   } = useApi(dateRange, shouldAutoRefresh ? ApiRefreshInteval : 0);
 
   interface AlertRule {
@@ -913,8 +914,10 @@ const Dashboard: React.FC = () => {
         );
       case 'trends':
         return (
-          <TrendAnalysisPanel 
-           isLoading={isLoading} />
+          <TrendAnalysisPanel
+            data={trendAnalysisData}
+            isLoading={isLoading}
+          />
         );
       case 'admin':
         return <SecureAdminDashboard initialTab="users" />;

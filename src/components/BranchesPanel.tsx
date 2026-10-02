@@ -28,35 +28,6 @@ interface BranchesPanelProps {
   fullWidth?: boolean;
 }
 
-/**
- * NOTE ON DESIGN:
- * Same `data` / `isLoading` / `fullWidth` props as before; no changes to how
- * or what the parent passes in.
- *
- * Two things were deliberately NOT preserved, and are called out here rather
- * than silently kept, because they were fabricated content rather than
- * business logic:
- *
- * 1. The "Trend" column in the old Top Risk Branches table generated a new
- *    random percentage (`Math.floor(Math.random() * 30) + 5`) on every
- *    render — it didn't reflect anything in `data`. Displaying a
- *    fluctuating, meaningless number as a "trend" to the people this panel
- *    is built for (senior management making audit-priority calls) does the
- *    opposite of "better insight," so it's removed rather than restyled.
- * 2. The "Trend Analysis" and "Geographic Insights" cards under Additional
- *    Insights were fully hardcoded (+12%, +8%, "Uneven", "Dubai (42%)",
- *    "Abu Dhabi (8%)" — city names unrelated to whatever `branch_name`
- *    values are actually in `data`). These are replaced with the same two
- *    cards, same slot in the layout, but now populated from real fields
- *    already on `data` (branch_name, total_alerts, risk_percentage,
- *    risk_level). If real trend/geo data becomes available from the API
- *    later, this is the place to wire it in.
- *
- * Also fixed: the table row hover used a dynamically interpolated Tailwind
- * class (`hover:bg-${riskLevel.color}-500/10`), which the Tailwind compiler
- * can't statically extract, so it never rendered. Replaced with an explicit
- * per-level class map.
- */
 
 const RISK_DOT_CLASS: Record<string, string> = {
   High: 'bg-red-500',

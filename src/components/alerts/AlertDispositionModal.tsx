@@ -809,7 +809,7 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
     // If AI suggestion was used with low confidence, confirm
     if (aiSuggestionUsed && aiSuggestion && aiSuggestion.confidence < 0.7) {
       const confirmed = window.confirm(
-        'You are using AI suggestions with low confidence. Are you sure you want to continue?'
+        'You are using Suggestions with low confidence. Are you sure you want to continue?'
       );
       if (!confirmed) return;
     }
@@ -935,25 +935,25 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
       });
 
       // Show notification
-      addNotification('AI suggestions generated successfully', 'success');
+      addNotification('Suggestions generated successfully', 'success');
 
       // Show warning if confidence is low
       if (data.confidence < 0.7) {
         addNotification(
-          'AI suggestions have low confidence. Please review carefully before using.',
+          'Suggestions have low confidence. Please review carefully before using.',
           'warning'
         );
       }
     } catch (error) {
-      console.error('Error generating AI suggestions:', error);
-      addNotification('Failed to generate AI suggestions', 'error');
+      console.error('Error generating Suggestions:', error);
+      addNotification('Failed to generate Suggestions', 'error');
 
       // Log the error
       logger.error(
-        'AI suggestion generation failed',
+        'Suggestion generation failed',
         user?.full_name,
         { alertId: alert.alert_id, error },
-        error instanceof Error ? error : new Error('AI suggestion failed')
+        error instanceof Error ? error : new Error('Suggestion failed')
       );
     } finally {
       setIsGeneratingAI(false);
@@ -1269,7 +1269,7 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
                           <SectionCard
                             icon={Bot}
                             iconClass="bg-gradient-to-br from-purple-500 to-fuchsia-600"
-                            title="AI Suggestions"
+                            title="Suggestions"
                             theme={theme}
                             right={
                               <motion.button
@@ -1561,11 +1561,11 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
                               >
                                 <BotMessageSquare className="w-10 h-10 mx-auto mb-3 opacity-30" />
                                 <p className="text-sm font-medium">
-                                  Generate AI suggestions to help with alert
+                                  Generate suggestions to help with alert
                                   disposition
                                 </p>
                                 <p className="text-xs mt-1.5">
-                                  AI will analyze the alert and recommend
+                                  Analyze the alert and recommend
                                   findings, actions and a disposition
                                 </p>
                               </div>

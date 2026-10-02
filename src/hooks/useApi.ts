@@ -10,6 +10,11 @@ import {
   FraudVolume,
 } from '../types/types';
 import { appConfig as config } from '../config/runtime-config';
+import {
+  fetchTrendAnalysis,
+  FALLBACK_TREND_ANALYSIS_DATA,
+  TrendAnalysisData,
+} from '../services/trendAnalysisService';
 
 const API_BASE_URL = config.api?.baseUrl;
 
@@ -24,6 +29,7 @@ interface UseApiReturn {
   lastUpdated: Date | null;
   refreshData: () => Promise<void>;
   useFraudVolume: FraudVolume[];
+  trendAnalysisData: TrendAnalysisData;
 }
 
 export const useApi = (
@@ -46,6 +52,9 @@ export const useApi = (
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const intervalRef = useRef<number>();
   const [useFraudVolume, setUseFraudVolume] = useState<FraudVolume[]>([]);
+  const [trendAnalysisData, setTrendAnalysisData] = useState<TrendAnalysisData>(
+    FALLBACK_TREND_ANALYSIS_DATA
+  );
 
   const fetchAlertsSummary = useCallback(async () => {
     try {
@@ -136,6 +145,18 @@ export const useApi = (
     }
   }, [dateRange]);
 
+  const fetchTrendAnalysisData = useCallback(async () => {
+    try {
+      const data = await fetchTrendAnalysis(dateRange);
+      setTrendAnalysisData(data);
+      return true;
+    } catch (err) {
+      console.error('Error fetching trend analysis:', err);
+      setTrendAnalysisData(FALLBACK_TREND_ANALYSIS_DATA);
+      return false;
+    }
+  }, [dateRange]);
+
   const refreshData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -146,6 +167,7 @@ export const useApi = (
       fetchBranchAlertsSummary(),
       fetchViolationTypes(),
       fetchFraudVolume(),
+      fetchTrendAnalysisData(),
     ]);
 
     setIsLoading(false);
@@ -159,6 +181,7 @@ export const useApi = (
     fetchBranchAlertsSummary,
     fetchViolationTypes,
     fetchFraudVolume,
+    fetchTrendAnalysisData,
   ]);
 
   // Initial data fetch
@@ -192,5 +215,6 @@ export const useApi = (
     lastUpdated,
     refreshData,
     useFraudVolume,
+    trendAnalysisData,
   };
 };
