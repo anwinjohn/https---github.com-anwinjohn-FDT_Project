@@ -32,6 +32,7 @@ import SystemLogMonitor from './alerts/AlertAuditLog';
 import RulesManagement from './admin/RulesManagement';
 import ManagementFraudDashboard from './admin/Managementfrauddashboard';
 import AlertListing from './alerts/AlertListing';
+import ReportsPage from './ReportsPage';
 
 import {
   FraudVolumeOverTimeCard,
@@ -888,6 +889,9 @@ const Dashboard: React.FC = () => {
         return <RiskAnalyticsDashboard dateRange={dateRange} />;
       case 'alert-lists':
         return <AlertListing />;
+      case 'reports':
+      case 'report-builder':
+        return <ReportsPage />;
       case 'audit-logs':
       case 'logs':
         return <SystemLogMonitor />;
@@ -914,10 +918,7 @@ const Dashboard: React.FC = () => {
         );
       case 'trends':
         return (
-          <TrendAnalysisPanel
-            data={trendAnalysisData}
-            isLoading={isLoading}
-          />
+          <TrendAnalysisPanel data={trendAnalysisData} isLoading={isLoading} />
         );
       case 'admin':
         return <SecureAdminDashboard initialTab="users" />;
