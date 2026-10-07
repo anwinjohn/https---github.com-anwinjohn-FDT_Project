@@ -76,8 +76,9 @@ const ReportsPage: React.FC = () => {
       sources={sources}
       templateStore={reportTemplateStore as ReportTemplateStore}
       onGenerate={generateReportFile}
-      currentUser={user?.full_name || 'Current user'}
+      currentUser={user?.username || 'Current user'}
       theme={theme}
+      canViewSensitive={user?.canViewSensitive || false}
     />
   );
 };

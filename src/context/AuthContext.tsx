@@ -33,6 +33,7 @@ interface UserInfo {
   role_id: number;
   mfa_enabled: boolean;
   request_username: string;
+  canViewSensitive?: boolean;
 }
 
 // Mock admin user for development

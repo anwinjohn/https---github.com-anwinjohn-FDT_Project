@@ -12,7 +12,6 @@
  *   POST   {baseUrl}/reports/templates                -> ReportTemplate
  *   DELETE {baseUrl}/reports/templates/:id            -> {}
  */
-import axios from 'axios';
 import * as XLSX from 'xlsx';
 import { AlertTriangle, Building, CreditCard, Users } from 'lucide-react';
 import type {
@@ -22,8 +21,10 @@ import type {
   ReportTemplate,
   ReportTemplateStore,
   Row,
+  RowLoadResult,
 } from '../components/reports/ReportBuilder';
 import { appConfig as config } from '../config/runtime-config';
+import apiClient from '../utils/apiClient';
 import { logger } from '../utils/logger';
 
 /* ==========================================================================
@@ -71,54 +72,62 @@ function mockRows(
   return Array.from({ length: n }, (_, i) => build(r, i));
 }
 
+const w = (r: () => number) => (pairs: [string, number][]) => {
+  let x = r() * pairs.reduce((s, p) => s + p[1], 0);
+  for (const [v, wt] of pairs) if ((x -= wt) <= 0) return v;
+  return pairs[0][0];
+};
+
+const pick =
+  (r: () => number) =>
+  <T>(a: T[]) =>
+    a[Math.floor(r() * a.length)];
+
+const money = (r: () => number) => (min: number, max: number) =>
+  Math.round(min + r() ** 3 * (max - min));
+
 const ALERT_MOCK = () =>
   mockRows(11, 480, (r, i) => {
-    const pick = <T>(a: T[]) => a[Math.floor(r() * a.length)];
-    const w = (pairs: [string, number][]) => {
-      let x = r() * pairs.reduce((s, p) => s + p[1], 0);
-      for (const [v, wt] of pairs) if ((x -= wt) <= 0) return v;
-      return pairs[0][0];
-    };
+    const p = pick(r);
+    const wt = w(r);
+    const amt = money(r);
     return {
       alert_id: `AL-${50000 + i}`,
-      rule_id: pick(['R-001', 'R-014', 'R-027', 'R-044', 'R-052']),
-      scenario: pick([
+      rule_id: p(['R-001', 'R-014', 'R-027', 'R-044', 'R-052']),
+      scenario: p([
         'Velocity breach',
         'Impossible travel',
         'New device high value',
         'Dormant account reactivated',
         'Card-not-present spike',
       ]),
-      rule_priority: w([
+      rule_priority: wt([
         ['High', 3],
         ['Medium', 4],
         ['Low', 4],
       ]),
-      status: w([
+      status: wt([
         ['New', 2],
         ['In review', 2],
         ['False positive', 5],
         ['Confirmed', 2],
       ]),
-      channel: pick(CHANNELS),
+      channel: p(CHANNELS),
       risk_score: Math.round(30 + r() * 70),
-      amount: money(20, 25000),
-      analyst: pick(ANALYSTS),
+      amount: amt(20, 25000),
+      analyst: p(ANALYSTS),
       triggered: daysAgo(Math.floor(r() ** 1.25 * 365)),
     };
   });
 
 const USER_MOCK = () =>
   mockRows(23, 140, (r, i) => {
-    const pick = <T>(a: T[]) => a[Math.floor(r() * a.length)];
-    const w = (pairs: [string, number][]) => {
-      let x = r() * pairs.reduce((s, p) => s + p[1], 0);
-      for (const [v, wt] of pairs) if ((x -= wt) <= 0) return v;
-      return pairs[0][0];
-    };
+    const p = pick(r);
+    const wt = w(r);
+    const amt = money(r);
     return {
       emp_id: `EMP-${1000 + i}`,
-      full_name: pick([
+      full_name: p([
         'A. Hassan',
         'M. Rossi',
         'J. Okafor',
@@ -128,36 +137,27 @@ const USER_MOCK = () =>
         'K. Novak',
         'T. Weber',
       ]),
-      role: pick(['Cashier', 'Teller', 'Supervisor']),
-      branch: pick([
-        'City Centre',
-        'Marina Mall',
-        'Airport',
-        'Al Ain',
-        'Deira',
-      ]),
+      role: p(['Cashier', 'Teller', 'Supervisor']),
+      branch: p(['City Centre', 'Marina Mall', 'Airport', 'Al Ain', 'Deira']),
       violations: Math.floor(r() ** 2 * 40),
-      risk_level: w([
+      risk_level: wt([
         ['High', 2],
         ['Medium', 3],
         ['Low', 5],
       ]),
-      amount: money(100, 40000),
+      amount: amt(100, 40000),
       last_violation: daysAgo(Math.floor(r() ** 1.5 * 60)),
     };
   });
 
 const BRANCH_MOCK = () =>
   mockRows(37, 90, (r, i) => {
-    const pick = <T>(a: T[]) => a[Math.floor(r() * a.length)];
-    const w = (pairs: [string, number][]) => {
-      let x = r() * pairs.reduce((s, p) => s + p[1], 0);
-      for (const [v, wt] of pairs) if ((x -= wt) <= 0) return v;
-      return pairs[0][0];
-    };
+    const p = pick(r);
+    const wt = w(r);
+    const amt = money(r);
     return {
       branch_id: `BR-${100 + i}`,
-      branch_name: pick([
+      branch_name: p([
         'City Centre',
         'Marina Mall',
         'Airport',
@@ -166,30 +166,27 @@ const BRANCH_MOCK = () =>
         'Sharjah',
         'Abu Dhabi Mall',
       ]),
-      region: pick(REGIONS),
+      region: p(REGIONS),
       total_alerts: Math.floor(r() ** 1.5 * 200) + 5,
       high_risk: Math.floor(r() ** 2 * 60),
-      risk_level: w([
+      risk_level: wt([
         ['High', 2],
         ['Medium', 3],
         ['Low', 5],
       ]),
-      amount: money(500, 120000),
+      amount: amt(500, 120000),
       report_date: daysAgo(Math.floor(r() ** 1.25 * 365)),
     };
   });
 
 const TXN_MOCK = () =>
   mockRows(53, 620, (r, i) => {
-    const pick = <T>(a: T[]) => a[Math.floor(r() * a.length)];
-    const w = (pairs: [string, number][]) => {
-      let x = r() * pairs.reduce((s, p) => s + p[1], 0);
-      for (const [v, wt] of pairs) if ((x -= wt) <= 0) return v;
-      return pairs[0][0];
-    };
+    const p = pick(r);
+    const wt = w(r);
+    const amt = money(r);
     return {
       txn_id: `TX-${900000 + i}`,
-      merchant: pick([
+      merchant: p([
         'TechMart',
         'AeroTickets',
         'QuickFuel',
@@ -197,11 +194,11 @@ const TXN_MOCK = () =>
         'GameVault',
         'FreshGrocer',
       ]),
-      channel: pick(CHANNELS),
-      country: pick(['US', 'GB', 'AE', 'SG', 'DE', 'IN']),
-      amount: money(5, 12000),
+      channel: p(CHANNELS),
+      country: p(['US', 'GB', 'AE', 'SG', 'DE', 'IN']),
+      amount: amt(5, 12000),
       risk_score: Math.round(r() ** 1.6 * 100),
-      decision: w([
+      decision: wt([
         ['Approved', 8],
         ['Manual review', 2],
         ['Declined', 2],
@@ -349,38 +346,39 @@ const MOCK_ROW_FACTORIES: Record<string, () => Row[]> = {
   transactions: TXN_MOCK,
 };
 
-const rowCache = new Map<string, Row[]>();
+const rowCache = new Map<string, RowLoadResult>();
 
-async function fetchRows(meta: ReportSourceMeta): Promise<Row[]> {
-  const cached = rowCache.get(meta.id);
+async function fetchRows(meta: ReportSourceMeta): Promise<RowLoadResult> {
+  const cacheKey = meta.id;
+  const cached = rowCache.get(cacheKey);
   if (cached) return cached;
   try {
-    const response = await axios.post<{ rows: Row[] }>(
+    const response = await apiClient.post<RowLoadResult>(
       `${config.api.baseUrl}/reports/data`,
-      { source_id: meta.id },
-      { timeout: config.api.timeout || 30000 }
+      { source_id: meta.id, limit: 100 }
     );
-    const rows = response.data?.rows;
-    if (!Array.isArray(rows)) throw new Error('Unexpected rows payload');
-    rowCache.set(meta.id, rows);
-    return rows;
+    const result = response.data;
+    if (!Array.isArray(result?.rows)) throw new Error('Unexpected rows payload');
+    if (rowCache.size > 20) rowCache.clear();
+    rowCache.set(cacheKey, result);
+    return result;
   } catch (err) {
     logger.info(
       'reportBuilderService',
       'fetchRows',
       `API unavailable for ${meta.id}, using mock data`
     );
-    const rows = (MOCK_ROW_FACTORIES[meta.id] ?? ALERT_MOCK)();
-    rowCache.set(meta.id, rows);
-    return rows;
+    const result = { rows: (MOCK_ROW_FACTORIES[meta.id] ?? ALERT_MOCK)(), truncated: false };
+    if (rowCache.size > 20) rowCache.clear();
+    rowCache.set(cacheKey, result);
+    return result;
   }
 }
 
 export async function fetchReportSources(): Promise<ReportSource[]> {
   try {
-    const response = await axios.get<ReportSourceMeta[]>(
-      `${config.api.baseUrl}/reports/sources`,
-      { timeout: config.api.timeout || 30000 }
+    const response = await apiClient.get<ReportSourceMeta[]>(
+      `${config.api.baseUrl}/reports/sources`
     );
     if (!Array.isArray(response.data) || response.data.length === 0) {
       throw new Error('Empty source catalogue');
@@ -405,7 +403,7 @@ export async function fetchReportSources(): Promise<ReportSource[]> {
 }
 
 /* ==========================================================================
- * Template storage: API-first, localStorage fallback
+ * Template storage: API-first, mock/localStorage fallback
  * ======================================================================== */
 const LS_KEY = 'fdt-report-templates:v1';
 
@@ -420,25 +418,363 @@ const readLocalTemplates = (): ReportTemplate[] => {
 const writeLocalTemplates = (templates: ReportTemplate[]) =>
   localStorage.setItem(LS_KEY, JSON.stringify(templates));
 
+/**
+ * Mock GET /reports/templates response so the Templates drawer, Run and Edit
+ * flows can be reviewed before the endpoint is live. Mirrors the documented
+ * response shape exactly.
+ */
+const MOCK_TEMPLATES: ReportTemplate[] = [
+  {
+    id: 'tpl-mock-001',
+    name: 'Weekly alert triage pack',
+    description:
+      'Alert volume, priority mix and analyst workload for the weekly fraud operations meeting.',
+    definition: {
+      name: 'Weekly alert triage pack',
+      description:
+        'Alert volume, priority mix and analyst workload for the weekly fraud operations meeting.',
+      sourceId: 'alerts',
+      fields: [
+        'alert_id',
+        'scenario',
+        'rule_priority',
+        'status',
+        'channel',
+        'risk_score',
+        'amount',
+        'analyst',
+        'triggered',
+      ],
+      widgets: [
+        {
+          id: 'w-001',
+          kind: 'kpi',
+          title: 'Alerts',
+          span: 3,
+          filters: [],
+          agg: 'count',
+          tone: 'blue',
+          showTrend: true,
+          lowerIsBetter: true,
+        },
+        {
+          id: 'w-002',
+          kind: 'kpi',
+          title: 'Value at stake',
+          span: 3,
+          filters: [],
+          agg: 'sum',
+          field: 'amount',
+          tone: 'red',
+          showTrend: true,
+          lowerIsBetter: true,
+        },
+        {
+          id: 'w-003',
+          kind: 'kpi',
+          title: 'Avg risk score',
+          span: 3,
+          filters: [],
+          agg: 'avg',
+          field: 'risk_score',
+          tone: 'amber',
+          showTrend: true,
+          lowerIsBetter: false,
+        },
+        {
+          id: 'w-004',
+          kind: 'kpi',
+          title: 'Analysts involved',
+          span: 3,
+          filters: [],
+          agg: 'distinct',
+          field: 'analyst',
+          tone: 'violet',
+          showTrend: false,
+          lowerIsBetter: false,
+        },
+        {
+          id: 'w-005',
+          kind: 'chart',
+          title: 'Alerts by priority',
+          span: 6,
+          filters: [],
+          chartType: 'doughnut',
+          groupBy: 'rule_priority',
+          bucket: 'month',
+          agg: 'count',
+          topN: 6,
+          showLegend: true,
+          showLabels: true,
+          showPercentage: true,
+        },
+        {
+          id: 'w-006',
+          kind: 'chart',
+          title: 'Alert volume trend',
+          span: 6,
+          filters: [],
+          chartType: 'line',
+          groupBy: 'triggered',
+          bucket: 'week',
+          agg: 'count',
+          topN: 6,
+          showLegend: true,
+          showLabels: true,
+          showPercentage: true,
+        },
+        {
+          id: 'w-007',
+          kind: 'chart',
+          title: 'Exposure by channel',
+          span: 12,
+          filters: [],
+          chartType: 'hbar',
+          groupBy: 'channel',
+          bucket: 'month',
+          agg: 'sum',
+          field: 'amount',
+          topN: 6,
+          showLegend: true,
+          showLabels: true,
+          showPercentage: true,
+        },
+        {
+          id: 'w-008',
+          kind: 'table',
+          title: 'Highest scoring alerts',
+          span: 12,
+          filters: [],
+          columns: [
+            'alert_id',
+            'scenario',
+            'rule_priority',
+            'status',
+            'risk_score',
+            'analyst',
+          ],
+          sortBy: 'risk_score',
+          sortDir: 'desc',
+          limit: 10,
+        },
+      ],
+      filters: [],
+      dateRange: '30d',
+      createdAt: '2026-09-28T09:00:00.000Z',
+    },
+    isDraft: false,
+    visibility: 'team',
+    createdBy: 'System Administrator',
+    createdAt: '2026-09-28T09:00:00.000Z',
+    updatedAt: '2026-10-02T16:45:00.000Z',
+  },
+  {
+    id: 'tpl-mock-002',
+    name: 'Executive exposure summary',
+    description:
+      'One-page view of exposure and risk scores by scenario, for management review.',
+    definition: {
+      name: 'Executive exposure summary',
+      description:
+        'One-page view of exposure and risk scores by scenario, for management review.',
+      sourceId: 'alerts',
+      fields: [
+        'scenario',
+        'rule_priority',
+        'status',
+        'amount',
+        'risk_score',
+        'triggered',
+      ],
+      widgets: [
+        {
+          id: 'w-101',
+          kind: 'kpi',
+          title: 'Total exposure',
+          span: 4,
+          filters: [],
+          agg: 'sum',
+          field: 'amount',
+          tone: 'red',
+          showTrend: true,
+          lowerIsBetter: true,
+        },
+        {
+          id: 'w-102',
+          kind: 'kpi',
+          title: 'Average exposure',
+          span: 4,
+          filters: [],
+          agg: 'avg',
+          field: 'amount',
+          tone: 'amber',
+          showTrend: true,
+          lowerIsBetter: true,
+        },
+        {
+          id: 'w-103',
+          kind: 'kpi',
+          title: 'Peak risk score',
+          span: 4,
+          filters: [],
+          agg: 'max',
+          field: 'risk_score',
+          tone: 'blue',
+          showTrend: false,
+          lowerIsBetter: false,
+        },
+        {
+          id: 'w-104',
+          kind: 'chart',
+          title: 'Exposure by scenario',
+          span: 12,
+          filters: [],
+          chartType: 'bar',
+          groupBy: 'scenario',
+          bucket: 'month',
+          agg: 'sum',
+          field: 'amount',
+          topN: 8,
+          showLegend: true,
+          showLabels: true,
+          showPercentage: true,
+        },
+      ],
+      filters: [],
+      dateRange: '90d',
+      createdAt: '2026-10-01T11:30:00.000Z',
+    },
+    isDraft: false,
+    visibility: 'org',
+    createdBy: 'System Administrator',
+    createdAt: '2026-10-01T11:30:00.000Z',
+    updatedAt: '2026-10-03T08:20:00.000Z',
+  },
+  {
+    id: 'tpl-mock-003',
+    name: 'Draft: branch deep dive',
+    description:
+      'Work in progress — branch-level alert distribution and high-risk concentration.',
+    definition: {
+      name: 'Draft: branch deep dive',
+      description:
+        'Work in progress — branch-level alert distribution and high-risk concentration.',
+      sourceId: 'branches',
+      fields: [
+        'branch_name',
+        'region',
+        'risk_level',
+        'total_alerts',
+        'high_risk',
+        'amount',
+        'report_date',
+      ],
+      widgets: [
+        {
+          id: 'w-201',
+          kind: 'kpi',
+          title: 'Branches reporting',
+          span: 4,
+          filters: [],
+          agg: 'count',
+          tone: 'blue',
+          showTrend: false,
+          lowerIsBetter: false,
+        },
+        {
+          id: 'w-202',
+          kind: 'kpi',
+          title: 'Total exposure',
+          span: 4,
+          filters: [],
+          agg: 'sum',
+          field: 'amount',
+          tone: 'red',
+          showTrend: true,
+          lowerIsBetter: true,
+        },
+        {
+          id: 'w-203',
+          kind: 'kpi',
+          title: 'High-risk alerts',
+          span: 4,
+          filters: [],
+          agg: 'sum',
+          field: 'high_risk',
+          tone: 'amber',
+          showTrend: true,
+          lowerIsBetter: true,
+        },
+        {
+          id: 'w-204',
+          kind: 'chart',
+          title: 'Alerts by region',
+          span: 6,
+          filters: [],
+          chartType: 'doughnut',
+          groupBy: 'region',
+          bucket: 'month',
+          agg: 'sum',
+          field: 'total_alerts',
+          topN: 6,
+          showLegend: true,
+          showLabels: true,
+          showPercentage: true,
+        },
+        {
+          id: 'w-205',
+          kind: 'table',
+          title: 'Branches by exposure',
+          span: 6,
+          filters: [],
+          columns: [
+            'branch_name',
+            'region',
+            'risk_level',
+            'total_alerts',
+            'amount',
+          ],
+          sortBy: 'amount',
+          sortDir: 'desc',
+          limit: 10,
+        },
+      ],
+      filters: [],
+      dateRange: 'custom',
+      customFrom: '2026-07-01',
+      customTo: '2026-09-30',
+      createdAt: '2026-10-04T14:10:00.000Z',
+    },
+    isDraft: true,
+    visibility: 'private',
+    createdBy: 'System Administrator',
+    createdAt: '2026-10-04T14:10:00.000Z',
+    updatedAt: '2026-10-04T17:55:00.000Z',
+  },
+];
+
 export const reportTemplateStore: ReportTemplateStore = {
   list: async () => {
     try {
-      const response = await axios.get<ReportTemplate[]>(
-        `${config.api.baseUrl}/reports/templates`,
-        { timeout: config.api.timeout || 30000 }
+      const response = await apiClient.get<ReportTemplate[]>(
+        `${config.api.baseUrl}/reports/templates`
       );
       if (Array.isArray(response.data)) return response.data;
       throw new Error('Unexpected templates payload');
     } catch {
-      return readLocalTemplates();
+      logger.info(
+        'reportBuilderService',
+        'reportTemplateStore.list',
+        'API unavailable, using mock templates'
+      );
+      return [...MOCK_TEMPLATES, ...readLocalTemplates()];
     }
   },
   save: async (template) => {
     try {
-      const response = await axios.post<ReportTemplate>(
+      const response = await apiClient.post<ReportTemplate>(
         `${config.api.baseUrl}/reports/templates`,
-        template,
-        { timeout: config.api.timeout || 30000 }
+        template
       );
       return response.data ?? template;
     } catch {
@@ -452,9 +788,7 @@ export const reportTemplateStore: ReportTemplateStore = {
   },
   remove: async (id) => {
     try {
-      await axios.delete(`${config.api.baseUrl}/reports/templates/${id}`, {
-        timeout: config.api.timeout || 30000,
-      });
+      await apiClient.delete(`${config.api.baseUrl}/reports/templates/${id}`);
     } catch {
       writeLocalTemplates(readLocalTemplates().filter((x) => x.id !== id));
     }
@@ -483,6 +817,16 @@ export async function generateReportFile(
   payload: GeneratePayload
 ): Promise<void> {
   const { definition, rows, columns, format } = payload;
+  await apiClient.post(`${config.api.baseUrl}/reports/runs`, {
+    template_id: payload.templateId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.templateId)
+      ? payload.templateId
+      : null,
+    source_id: definition.sourceId,
+    format,
+    row_count: rows.length,
+    filters: definition.filters,
+    definition,
+  });
   const base = `${slug(definition.name)}-${new Date().toISOString().slice(0, 10)}`;
 
   if (format === 'pdf') {
