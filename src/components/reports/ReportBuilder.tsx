@@ -34,6 +34,25 @@
  *   - canViewSensitive  show fields flagged `sensitive` unmasked (default false).
  *
  * Dependencies: react, lucide-react, Tailwind CSS. No chart library: charts are SVG.
+ *
+ * v3 changes (from the enterprise review)
+ *   Correctness:  PaletteKey/props typing fixed; invalid custom date range now blocks (was silently "All time");
+ *                 report time zone (default: browser) drives "today", datetime day-bucketing, hour/weekday parts;
+ *                 charts disclose truncation ("Top N of M", hidden series, sampling); donut centre says "Shown" when partial;
+ *                 share-of-total only for additive measures; cross-filter no longer collapses the source chart;
+ *                 scatter uses even-stride sampling instead of the first 400 rows.
+ *   Analytics:    calculated metrics (ratio of aggregates, e.g. FP ratio, recovery rate, bps) + certified metrics per source;
+ *                 KPI warning threshold (Target / Warning / Breach, text + colour); report metadata (audience, tags).
+ *   Security:     sensitive fields are masked at load time when !canViewSensitive (all charts/filters/groups see masked values);
+ *                 CSV formula-injection neutralised; strict template-import validation; no localStorage autosave for
+ *                 'restricted' reports; export capability guard + onAudit hook.
+ *                 NOTE: these are UI-side mitigations. Authorization, masking, tenant isolation, row security and export
+ *                 control MUST be enforced by the backend (see assessment document).
+ *   Data:         loadRows receives { signal, maxRows }; client row cap; data-freshness + Refresh; status bar.
+ *   Schema:       schemaVersion, timezone, metrics, audience, tags added to ReportDefinition (v2 definitions are upgraded).
+ *   A11y:         focus trap + focus return in dialogs; keyboard-operable chart drill; widget wrapper no longer role=button.
+ *   Output:       print footer with classification and page x of y.
+ *   UX:           Save as copy; Delete key only (Backspace no longer deletes a widget).
  */
 import React, {
   createContext,
@@ -91,6 +110,7 @@ import {
   Play,
   Plus,
   Redo2,
+  RefreshCw,
   Save,
   ScatterChart,
   Search,
@@ -105,7 +125,82 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-
+import { v4 as uuidv4 } from 'uuid';
+import {
+  DARK,
+  FOCUS,
+  LIGHT,
+  PRIMARY_BTN,
+  ThemeCtx,
+  useT,
+  type Tokens,
+} from './report-builder/theme';
+import {
+  getWidget,
+  hasWidget,
+  type FieldInfo,
+  type QuerySpec,
+  type RegistryWidget,
+  type ResultStatus,
+  type SourceInfo,
+  type WidgetEnv,
+  type ExtKind,
+} from './report-builder/registry';
+import { resultKey } from './report-builder/compiler';
+import { evalFormula, parseFormula } from './report-builder/formula';
+import {
+  PRESET_LABEL,
+  describePeriod,
+  legacyRangeToPeriod,
+  periodError,
+  resolveComparison,
+  resolvePeriod,
+  todayIn,
+} from './report-builder/dateRanges';
+import { useReportRun } from './report-builder/runEngine';
+import {
+  RECORDS_QUERY_ID,
+  applySectionFilters,
+  compileReport,
+  definitionHash,
+  type CompilableDefinition,
+} from './report-builder/compiler';
+import { hasErrors, validateReport } from './report-builder/validation';
+import { Calendar } from 'lucide-react';
+import './report-builder/widgets';
+import { SchemaInspector } from './report-builder/components/SchemaInspector';
+import {
+  CATEGORY_LABEL,
+  listWidgets,
+  type WidgetCategory,
+} from './report-builder/registry';
+import { registerLegacyWidgets } from './report-builder/legacyDescriptors';
+import {
+  ActualBanner,
+  IssuesPanel,
+  PreviewBanner,
+  RunDialog,
+} from './report-builder/components/RunPanel';
+import { PeriodPicker } from './report-builder/components/PeriodPicker';
+import type {
+  CompareMode,
+  DatePreset,
+  GroupedResult,
+  HistogramResult,
+  PointsResult,
+  QuantilesResult,
+  QueryFilter,
+  QueryResult,
+  RecordsResult,
+  ReportDataProvider,
+  ReportPeriod,
+  ReportQuery,
+  ReportRunMetadata,
+  ReportRunRequest,
+  ResolvedPeriod,
+  ScalarResult,
+} from './report-builder/contracts';
+import { cellKeyOf } from './report-builder/contracts';
 /* ==========================================================================
  * Types
  * ======================================================================== */
@@ -154,11 +249,22 @@ export interface FieldDef {
   values?: string[];
   /** True for user-defined custom fields. */
   derived?: boolean;
+  /** Set on calculated-metric pseudo fields (ratio of aggregates). Never selectable as a column. */
+  metric?: CalculatedMetric;
+  /** More distinct values than the picker cap: use a typed search instead of a dropdown. */
+  valuesTruncated?: boolean;
 }
 
 export interface RowLoadResult {
   rows: Row[];
   truncated: boolean;
+}
+
+export interface LoadContext {
+  /** Aborted when the source changes, the view unmounts or the user refreshes. */
+  signal: AbortSignal;
+  /** The client will not use more than this many rows. Return the MOST RECENT rows first. */
+  maxRows: number;
 }
 
 export interface ReportSource {
@@ -172,7 +278,11 @@ export interface ReportSource {
   fields: FieldDef[];
   defaultFields: string[];
   /** Dates must be ISO strings (YYYY-MM-DD). */
-  loadRows: () => Promise<RowLoadResult | Row[]> | RowLoadResult | Row[];
+  loadRows: (
+    ctx?: LoadContext
+  ) => Promise<RowLoadResult | Row[]> | RowLoadResult | Row[];
+  /** Certified metric catalogue (ratio-of-aggregates measures owned by the data team). */
+  metrics?: CalculatedMetric[];
 }
 
 type Agg =
@@ -183,10 +293,41 @@ type Agg =
   | 'max'
   | 'distinct'
   | 'yes'
-  | 'rate';
+  | 'rate'
+  | 'metric';
+type SimpleAgg = Exclude<Agg, 'metric'>;
+interface MetricSide {
+  agg: SimpleAgg;
+  field?: string;
+  /** All rules must match (AND). */
+  where: FilterRule[];
+}
+/**
+ * Ratio of aggregates: numerator / denominator, each with its own aggregation and conditions.
+ * e.g. False-positive ratio = count(status = False positive) / count(all)
+ * Correct at any grouping level (unlike averaging a row-level percentage).
+ */
+export interface CalculatedMetric {
+  id: string;
+  key: string;
+  label: string;
+  description?: string;
+  unit: 'pct' | 'bps' | 'ratio';
+  numerator: MetricSide;
+  denominator: MetricSide;
+  certified?: boolean;
+  /**
+   * Formula metric (e.g. growth %, weighted score). When present it takes precedence over numerator/denominator:
+   * each named term is aggregated, then the expression is evaluated on the aggregates (correct at any grouping).
+   */
+  formula?: { expression: string; terms: Record<string, MetricSide> };
+}
+const METRIC_PREFIX = 'mt_';
 type FilterOp =
   | 'eq'
   | 'neq'
+  | 'in'
+  | 'between'
   | 'contains'
   | 'gt'
   | 'lt'
@@ -211,7 +352,28 @@ type Bucket = 'day' | 'week' | 'month';
 type BucketPref = Bucket | 'auto';
 type Span = 3 | 4 | 6 | 8 | 12;
 type Height = 'sm' | 'md' | 'lg';
-type PaletteKey = 'forest' | 'berry' | 'earth' | 'slate' | 'royal'| 'pastel' | 'citrus' | 'nordic' | 'ember' | 'aurora' | 'desert' | 'teal' | 'plum' | 'arctic' | 'candy' | 'contrast' ;
+type PaletteKey =
+  | 'corporate'
+  | 'vivid'
+  | 'ocean'
+  | 'sunset'
+  | 'mono'
+  | 'forest'
+  | 'berry'
+  | 'earth'
+  | 'slate'
+  | 'royal'
+  | 'pastel'
+  | 'citrus'
+  | 'nordic'
+  | 'ember'
+  | 'aurora'
+  | 'desert'
+  | 'teal'
+  | 'plum'
+  | 'arctic'
+  | 'candy'
+  | 'contrast';
 type Classification = 'none' | 'internal' | 'confidential' | 'restricted';
 
 interface FilterRule {
@@ -231,6 +393,8 @@ interface BaseWidget {
   /** Start this widget on a new page when printing / exporting to PDF. */
   pageBreak?: boolean;
   filters: FilterRule[];
+  /** Drill-down hierarchy (see ReportDefinition.drillPaths) that a click on this widget walks down. */
+  drillPathId?: string;
 }
 interface KpiWidget extends BaseWidget {
   kind: 'kpi';
@@ -241,6 +405,8 @@ interface KpiWidget extends BaseWidget {
   showSparkline: boolean;
   lowerIsBetter: boolean;
   target?: number;
+  /** Warning threshold: between target and this value shows Warning, beyond it Breach. */
+  warn?: number;
   /** compact = AED 1.2M, full = AED 1,234,567.89 (uses the field's scale). */
   format?: 'compact' | 'full';
 }
@@ -293,12 +459,21 @@ interface InsightWidget extends BaseWidget {
   /** Noun used in generated sentences, e.g. "cases". */
   subject: string;
 }
+/**
+ * Widgets provided through the widget registry (see ./report-builder/registry). Their configuration is
+ * kind-specific, validated by their descriptor, and rendered from query results rather than raw rows.
+ */
+interface ExtWidget extends BaseWidget {
+  kind: ExtKind;
+  [config: string]: unknown;
+}
 type Widget =
   | KpiWidget
   | ChartWidget
   | TableWidget
   | TextWidget
-  | InsightWidget;
+  | InsightWidget
+  | ExtWidget;
 
 type DerivedBase = { id: string; key: string; label: string };
 /** Numeric field → ordered ranges, e.g. < 1,000 | 1,000 – 4,999 | ≥ 5,000. */
@@ -350,6 +525,31 @@ type DerivedField =
   | RulesDerived;
 type DerivedKind = DerivedField['kind'];
 
+interface DrillLevel {
+  field: string;
+  label?: string;
+}
+interface DrillPath {
+  id: string;
+  name: string;
+  levels: DrillLevel[];
+}
+interface FilterPreset {
+  id: string;
+  name: string;
+  rules: FilterRule[];
+}
+interface Presentation {
+  subtitle?: string;
+  brandName?: string;
+  /** Hex accent for the report masthead. */
+  accent?: string;
+  headerText?: string;
+  footerText?: string;
+  showPageNumbers: boolean;
+  coverPage: boolean;
+  preparedFor?: string;
+}
 type ScheduleFrequency = 'none' | 'daily' | 'weekly' | 'monthly';
 interface Schedule {
   frequency: ScheduleFrequency;
@@ -363,9 +563,22 @@ export interface ReportDefinition {
   fields: string[];
   widgets: Widget[];
   filters: FilterRule[];
-  dateRange: DateRangeKey;
+  /** Reporting period for the ACTUAL report (never applied to the design-time preview sample). */
+  period: ReportPeriod;
+  /** @deprecated v3 range keys; read only by normalizeDefinition to migrate to `period`. */
+  dateRange?: DateRangeKey;
+  /** @deprecated see dateRange. */
   customFrom?: string;
+  /** @deprecated see dateRange. */
   customTo?: string;
+  /** Rows loaded for design-time preview (latest N). Default: the `previewLimit` prop (100). */
+  previewLimit?: number;
+  /** Data-driven drill hierarchies, e.g. Channel > Region > Branch. Widgets opt in via `drillPathId`. */
+  drillPaths?: DrillPath[];
+  /** Saved filter sets that can be re-applied in one click. */
+  filterPresets?: FilterPreset[];
+  /** Cover / header / footer / branding of the generated report. */
+  presentation?: Presentation;
   palette: PaletteKey;
   classification: Classification;
   /** Compare KPI cards with the previous period. */
@@ -374,6 +587,15 @@ export interface ReportDefinition {
   /** Custom fields (bands, groups, date parts, calculations, rule segments). */
   derived: DerivedField[];
   createdAt: string;
+  /** Definition format version (see SCHEMA_VERSION / normalizeDefinition). */
+  schemaVersion?: number;
+  /** IANA time zone used for relative dates, day bucketing and hour/weekday parts. */
+  timezone?: string;
+  /** Report-level calculated metrics (ratio of aggregates). */
+  metrics?: CalculatedMetric[];
+  audience?: 'executive' | 'management' | 'analytical';
+  tags?: string;
+  businessUnit?: string;
 }
 
 export type TemplateVisibility = 'private' | 'team' | 'org';
@@ -407,11 +629,26 @@ interface OutputOptions {
 export interface GeneratePayload {
   definition: ReportDefinition;
   templateId?: string;
-  rows: Row[];
+  /**
+   * The ACTUAL generated report. Aggregated results only: raw records are never sent from the browser.
+   * Prefer re-rendering server-side from `run.meta.runId` (the server holds the full results).
+   */
+  run: {
+    meta: ReportRunMetadata;
+    request: ReportRunRequest;
+    results: Record<string, QueryResult>;
+  };
   columns: FieldDef[];
   format: OutputFormat;
   options: OutputOptions;
   schedule: Schedule;
+}
+
+export interface AuditEvent {
+  type: 'report.save' | 'report.export' | 'report.delete' | 'report.import';
+  reportName: string;
+  detail?: string;
+  at: string;
 }
 
 export interface ReportBuilderProps {
@@ -426,12 +663,34 @@ export interface ReportBuilderProps {
   height?: string;
   /** Show fields flagged `sensitive` unmasked (preview, tables, exports). Default: masked. */
   canViewSensitive?: boolean;
+  /**
+   * UI hints only (hide/disable controls). The backend must re-check every action.
+   * Default: everything allowed.
+   */
+  capabilities?: { canExport?: boolean };
+  /** Receives client-side audit events; forward them to your audit service. */
+  onAudit?: (event: AuditEvent) => void;
+  /**
+   * Data backend. `loadPreview` feeds design mode (latest N rows); `execute` (or submit/poll/fetchResult for
+   * background jobs) produces the ACTUAL report from the full dataset with server-side filtering + aggregation.
+   * Default: an in-browser demo provider over each source's `loadRows` (do not use with large data).
+   */
+  provider?: ReportDataProvider;
+  /** Rows loaded for design-time preview. Default 100 (max 1000). */
+  previewLimit?: number;
+  /** Tenant id forwarded with every report run (multi-tenant backends). */
+  tenantId?: string;
+  /** First month of the fiscal year (1-12), used by "Year to date". Default 1. */
+  fiscalYearStartMonth?: number;
 }
+
+/* Register the widget catalogue (original five + executive / analytical / fraud-risk widgets). */
+registerLegacyWidgets();
 
 /* ==========================================================================
  * Small utilities
  * ======================================================================== */
-const uid = () => Math.random().toString(36).slice(2, 10);
+const uid = () => uuidv4();
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const parseIso = (s: string) => new Date(`${s}T00:00:00Z`);
 const addDays = (d: Date, n: number) => {
@@ -453,6 +712,101 @@ const MONTHS = [
   'Nov',
   'Dec',
 ];
+
+/* ---- report time zone -------------------------------------------------------
+ * Dates are plain ISO strings; datetimes carry an instant. "Which day is it" must be answered in the
+ * report's time zone (a UAE bank at UTC+4 otherwise gets day boundaries wrong). The active zone is a
+ * module variable set once per render by the page (setReportTimezone) so the pure helpers stay simple. */
+const DEFAULT_TZ = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+})();
+let REPORT_TZ = DEFAULT_TZ;
+const setReportTimezone = (tz: string) => {
+  REPORT_TZ = tz || DEFAULT_TZ;
+};
+const TIMEZONES = [
+  ...new Set([
+    DEFAULT_TZ,
+    'Asia/Dubai',
+    'UTC',
+    'Europe/London',
+    'Europe/Paris',
+    'Asia/Riyadh',
+    'Asia/Kolkata',
+    'Asia/Singapore',
+    'America/New_York',
+  ]),
+];
+const tzFormatters = new Map<string, Intl.DateTimeFormat>();
+const tzFormatter = (kind: 'day' | 'parts' | 'time') => {
+  const key = `${kind}|${REPORT_TZ}`;
+  let f = tzFormatters.get(key);
+  if (!f) {
+    f =
+      kind === 'day'
+        ? new Intl.DateTimeFormat('en-CA', {
+            timeZone: REPORT_TZ,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          })
+        : kind === 'time'
+          ? new Intl.DateTimeFormat('en-GB', {
+              timeZone: REPORT_TZ,
+              hour: '2-digit',
+              minute: '2-digit',
+              hourCycle: 'h23',
+            })
+          : new Intl.DateTimeFormat('en-US', {
+              timeZone: REPORT_TZ,
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              hourCycle: 'h23',
+              weekday: 'short',
+            });
+    tzFormatters.set(key, f);
+  }
+  return f;
+};
+const hasZone = (s: string) => /[zZ]|[+-]\d\d:?\d\d$/.test(s);
+/** YYYY-MM-DD of a date or datetime *in the report time zone*. Date-only values pass through unchanged. */
+const dayOf = (s: string): string => {
+  if (!s) return '';
+  if (s.length <= 10) return s;
+  const d = new Date(
+    hasZone(s) ? s.replace(' ', 'T') : `${s.replace(' ', 'T')}Z`
+  );
+  if (Number.isNaN(d.getTime())) return s.slice(0, 10);
+  return tzFormatter('day').format(d);
+};
+const WD_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const zonedParts = (dt: Date) => {
+  const p = Object.fromEntries(
+    tzFormatter('parts')
+      .formatToParts(dt)
+      .map((x) => [x.type, x.value])
+  );
+  return {
+    y: Number(p.year),
+    m: Number(p.month) - 1,
+    h: Number(p.hour) % 24,
+    wd: Math.max(0, WD_SHORT.indexOf(p.weekday)),
+  };
+};
+/** Never hold more rows than this in the browser. Real sources must aggregate server-side. */
+/** Design-time sample: the browser never holds more than this many rows (the real report runs server-side). */
+const DEFAULT_PREVIEW_LIMIT = 100;
+const MAX_PREVIEW_LIMIT = 1000;
+const PREVIEW_LIMIT_OPTIONS = [50, 100, 250, 500, 1000];
+/** Max distinct values offered in pickers (above it, filters become typed search). */
+const MAX_FIELD_VALUES = 200;
+const SCHEMA_VERSION = 4;
 
 function rng(seed: number) {
   return () => {
@@ -486,7 +840,7 @@ const fmtDateTime = (s: string) => {
   const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : `${t}Z`);
   return Number.isNaN(d.getTime())
     ? s
-    : `${fmtDate(s)} ${d.toISOString().slice(11, 16)}`;
+    : `${fmtDate(dayOf(s))} ${tzFormatter('time').format(d)}`;
 };
 
 /* ==========================================================================
@@ -562,6 +916,39 @@ const aed = (key: string, label: string, group = 'Financial'): FieldDef =>
     scale: 2,
     currency: 'AED',
   });
+
+type SideSpec = {
+  agg?: SimpleAgg;
+  field?: string;
+  where?: [string, FilterOp, string][];
+};
+const mside = (s: SideSpec = {}): MetricSide => ({
+  agg: s.agg ?? 'count',
+  field: s.field,
+  where: (s.where ?? []).map(([field, op, value]) => ({
+    id: uid(),
+    field,
+    op,
+    value,
+  })),
+});
+const certMetric = (
+  key: string,
+  label: string,
+  unit: CalculatedMetric['unit'],
+  numerator: SideSpec,
+  denominator: SideSpec,
+  description: string
+): CalculatedMetric => ({
+  id: key,
+  key,
+  label,
+  unit,
+  description,
+  certified: true,
+  numerator: mside(numerator),
+  denominator: mside(denominator),
+});
 
 const CHANNELS = [
   'Online',
@@ -651,6 +1038,32 @@ const SOURCES: ReportSource[] = [
       'investigator',
       'opened',
     ],
+    metrics: [
+      certMetric(
+        'mt_recovery_rate',
+        'Recovery rate',
+        'pct',
+        { agg: 'sum', field: 'recovered_aed' },
+        { agg: 'sum', field: 'amt_aed' },
+        'Recovered amount ÷ amount at risk.'
+      ),
+      certMetric(
+        'mt_confirmed_rate',
+        'Confirmed fraud rate',
+        'pct',
+        { where: [['status', 'eq', 'Confirmed fraud']] },
+        {},
+        'Cases confirmed as fraud ÷ all cases.'
+      ),
+      certMetric(
+        'mt_critical_share',
+        'Critical case share',
+        'pct',
+        { where: [['severity', 'eq', 'Critical']] },
+        {},
+        'Critical severity cases ÷ all cases.'
+      ),
+    ],
     loadRows: () =>
       makeRows(11, 320, (g, i) => {
         const type = g.pick(FRAUD_TYPES);
@@ -729,6 +1142,49 @@ const SOURCES: ReportSource[] = [
       'analyst',
       'triggered',
     ],
+    metrics: [
+      certMetric(
+        'mt_fp_ratio',
+        'False-positive ratio',
+        'pct',
+        { where: [['status', 'eq', 'False positive']] },
+        {},
+        'Alerts closed as false positive ÷ all alerts.'
+      ),
+      certMetric(
+        'mt_precision',
+        'Alert precision',
+        'pct',
+        { where: [['status', 'eq', 'Confirmed']] },
+        {
+          where: [
+            ['status', 'neq', 'New'],
+            ['status', 'neq', 'In review'],
+          ],
+        },
+        'Confirmed alerts ÷ alerts already reviewed (excludes New and In review).'
+      ),
+      certMetric(
+        'mt_escalation_rate',
+        'Escalation rate',
+        'pct',
+        { where: [['is_escalated', 'eq', 'Yes']] },
+        {},
+        'Escalated alerts ÷ all alerts.'
+      ),
+      certMetric(
+        'mt_escalated_value_share',
+        'Escalated value share',
+        'pct',
+        {
+          agg: 'sum',
+          field: 'amt_aed',
+          where: [['is_escalated', 'eq', 'Yes']],
+        },
+        { agg: 'sum', field: 'amt_aed' },
+        'Value of escalated alerts ÷ value of all alerts.'
+      ),
+    ],
     loadRows: () =>
       makeRows(23, 520, (g, i) => {
         const priority = g.w([
@@ -800,6 +1256,48 @@ const SOURCES: ReportSource[] = [
       'decision',
       'txn_date',
     ],
+    metrics: [
+      certMetric(
+        'mt_decline_rate',
+        'Decline rate',
+        'pct',
+        { where: [['decision', 'eq', 'Declined']] },
+        {},
+        'Declined transactions ÷ all transactions.'
+      ),
+      certMetric(
+        'mt_review_rate',
+        'Manual review rate',
+        'pct',
+        { where: [['decision', 'eq', 'Manual review']] },
+        {},
+        'Transactions sent to manual review ÷ all transactions.'
+      ),
+      certMetric(
+        'mt_declined_value_bps',
+        'Declined value (bps)',
+        'bps',
+        {
+          agg: 'sum',
+          field: 'amt_aed',
+          where: [['decision', 'eq', 'Declined']],
+        },
+        { agg: 'sum', field: 'amt_aed' },
+        'Declined value ÷ total value, in basis points.'
+      ),
+      certMetric(
+        'mt_intl_value_share',
+        'International value share',
+        'pct',
+        {
+          agg: 'sum',
+          field: 'amt_aed',
+          where: [['is_international', 'eq', 'Yes']],
+        },
+        { agg: 'sum', field: 'amt_aed' },
+        'Value of international transactions ÷ total value.'
+      ),
+    ],
     loadRows: () =>
       makeRows(37, 640, (g, i) => ({
         txn_id: `TX-${900000 + i}`,
@@ -842,6 +1340,29 @@ const SOURCES: ReportSource[] = [
       'status',
       'amt_aed',
       'filed',
+    ],
+    metrics: [
+      certMetric(
+        'mt_representment_rate',
+        'Representment rate',
+        'pct',
+        { where: [['is_represented', 'eq', 'Yes']] },
+        {},
+        'Disputes represented ÷ all disputes.'
+      ),
+      certMetric(
+        'mt_win_rate',
+        'Representment win rate',
+        'pct',
+        { where: [['status', 'eq', 'Won']] },
+        {
+          where: [
+            ['status', 'neq', 'Open'],
+            ['status', 'neq', 'Pending'],
+          ],
+        },
+        'Disputes won ÷ disputes decided (excludes Open and Pending).'
+      ),
     ],
     loadRows: () =>
       makeRows(53, 260, (g, i) => ({
@@ -1010,7 +1531,12 @@ function enrichFields(fields: FieldDef[], rows: Row[]): FieldDef[] {
           ...distinct.filter((d) => !order!.includes(d)).sort(),
         ]
       : distinct.sort();
-    return { ...fd, order, values };
+    return {
+      ...fd,
+      order,
+      values: values.slice(0, MAX_FIELD_VALUES),
+      valuesTruncated: values.length > MAX_FIELD_VALUES,
+    };
   });
 }
 
@@ -1020,16 +1546,18 @@ const opsFor = (fd: FieldDef): FilterOp[] =>
     ? ['eq', 'neq']
     : fd.type === 'category'
       ? fd.order
-        ? ['eq', 'neq', 'atleast', 'atmost']
-        : ['eq', 'neq']
+        ? ['eq', 'in', 'neq', 'atleast', 'atmost']
+        : ['eq', 'in', 'neq']
       : fd.type === 'text'
         ? ['contains', 'eq']
         : isNumeric(fd.type)
-          ? ['gt', 'lt', 'eq']
-          : ['after', 'before'];
+          ? ['between', 'gt', 'lt', 'eq']
+          : ['between', 'after', 'before'];
 
 const OP_LABEL: Record<FilterOp, string> = {
   eq: 'is',
+  in: 'is any of',
+  between: 'is between',
   neq: 'is not',
   contains: 'contains',
   gt: 'greater than',
@@ -1038,6 +1566,23 @@ const OP_LABEL: Record<FilterOp, string> = {
   before: 'before',
   atleast: 'is at least',
   atmost: 'is at most',
+};
+
+/** Multi-select values are stored as a JSON array string; parsed once per distinct value. */
+const IN_CACHE = new Map<string, string[]>();
+const inValues = (raw: string): string[] => {
+  let v = IN_CACHE.get(raw);
+  if (!v) {
+    try {
+      const a = JSON.parse(raw);
+      v = Array.isArray(a) ? a.map(String) : [];
+    } catch {
+      v = [];
+    }
+    if (IN_CACHE.size > 500) IN_CACHE.clear();
+    IN_CACHE.set(raw, v);
+  }
+  return v;
 };
 
 function matches(row: Row, rule: FilterRule, fd?: FieldDef): boolean {
@@ -1056,14 +1601,38 @@ function matches(row: Row, rule: FilterRule, fd?: FieldDef): boolean {
         : s.toLowerCase() !== want.toLowerCase();
     case 'contains':
       return s.toLowerCase().includes(want.toLowerCase());
+    case 'in': {
+      const vs = inValues(want);
+      return numeric
+        ? raw !== null &&
+            raw !== '' &&
+            vs.some((v) => Number(v) === Number(raw))
+        : vs.some((v) => v.toLowerCase() === s.toLowerCase());
+    }
+    case 'between': {
+      const [lo = '', hi = ''] = want.split('|');
+      if (numeric)
+        return (
+          raw !== null &&
+          raw !== '' &&
+          (lo === '' || Number(raw) >= Number(lo)) &&
+          (hi === '' || Number(raw) <= Number(hi))
+        );
+      const d = dayOf(s);
+      return (
+        s !== 'Unknown' &&
+        (lo === '' || d >= lo.slice(0, 10)) &&
+        (hi === '' || d <= hi.slice(0, 10))
+      );
+    }
     case 'gt':
       return raw !== null && raw !== '' && Number(raw) > Number(want);
     case 'lt':
       return raw !== null && raw !== '' && Number(raw) < Number(want);
     case 'after':
-      return s !== 'Unknown' && s.slice(0, 10) > want.slice(0, 10);
+      return s !== 'Unknown' && dayOf(s) > want.slice(0, 10);
     case 'before':
-      return s !== 'Unknown' && s.slice(0, 10) < want.slice(0, 10);
+      return s !== 'Unknown' && dayOf(s) < want.slice(0, 10);
     case 'atleast': {
       const a = rankOf(fd, s),
         b = rankOf(fd, want);
@@ -1075,6 +1644,7 @@ function matches(row: Row, rule: FilterRule, fd?: FieldDef): boolean {
       return a >= 0 && b >= 0 && a >= b;
     }
   }
+  return false;
 }
 
 const activeRules = (rules: FilterRule[]) =>
@@ -1130,8 +1700,20 @@ function windowFor(
     return { from, to, days };
   }
   const days = RANGE_DAYS[range];
-  const end = new Date();
+  const end = parseIso(dayOf(new Date().toISOString()));
   return { from: iso(addDays(end, -(days - 1))), to: iso(end), days };
+}
+/** A custom range must be complete and ordered; otherwise the report must not run (never fall back to "all time"). */
+function customRangeError(
+  range: DateRangeKey,
+  from?: string,
+  to?: string
+): string | null {
+  if (range !== 'custom') return null;
+  if (!from || !to)
+    return 'Select both a start and an end date for the custom range.';
+  if (from > to) return 'The custom range starts after it ends.';
+  return null;
 }
 function prevWindow(w: Win): Win {
   const end = addDays(parseIso(w.from), -1);
@@ -1139,7 +1721,7 @@ function prevWindow(w: Win): Win {
 }
 const inWindow = (row: Row, field: string, w: Win | null) => {
   if (!w) return true;
-  const d = String(row[field] ?? '').slice(0, 10);
+  const d = dayOf(String(row[field] ?? ''));
   return d >= w.from && d <= w.to;
 };
 
@@ -1148,8 +1730,33 @@ function aggregate(
   rows: Row[],
   agg: Agg,
   field: string | undefined,
-  fm: Map<string, FieldDef>
+  fm: Map<string, FieldDef>,
+  /** Previous-period rows: only needed by formula metrics that use PREV(). */
+  prevRows?: Row[] | null
 ): number {
+  if (agg === 'metric') {
+    const m = field ? fm.get(field)?.metric : undefined;
+    if (!m) return 0;
+    const side = (x: MetricSide, rs: Row[] = rows) =>
+      aggregate(applyFilters(rs, x.where, fm), x.agg, x.field, fm);
+    if (m.formula) {
+      const parsed = parseFormula(m.formula.expression);
+      if (!parsed.ok) return 0;
+      const cur: Record<string, number> = {};
+      const prev: Record<string, number> = {};
+      for (const [k, s] of Object.entries(m.formula.terms)) {
+        cur[k] = side(s);
+        if (prevRows) prev[k] = side(s, prevRows);
+      }
+      return (
+        evalFormula(parsed.ast, { cur, prev: prevRows ? prev : null }) ?? 0
+      );
+    }
+    const den = side(m.denominator);
+    if (!den) return 0;
+    const v = side(m.numerator) / den;
+    return m.unit === 'pct' ? v * 100 : m.unit === 'bps' ? v * 10000 : v;
+  }
   if (agg === 'count' || !field) return rows.length;
   const fd = fm.get(field);
   const present = (r: Row) =>
@@ -1211,7 +1818,7 @@ function groupRows(rows: Row[], field: FieldDef, bucket: Bucket) {
   const date = isDateType(field.type);
   for (const r of rows) {
     const k = date
-      ? bucketKey(String(r[field.key] ?? '').slice(0, 10), bucket)
+      ? bucketKey(dayOf(String(r[field.key] ?? '')), bucket)
       : cellKey(field, r);
     const list = map.get(k);
     if (list) list.push(r);
@@ -1254,6 +1861,14 @@ function fmtMeasure(
   currency: string,
   mode: 'compact' | 'full' = 'compact'
 ): string {
+  if (agg === 'metric') {
+    const u = fd?.metric?.unit;
+    return u === 'pct'
+      ? `${v.toFixed(1)}%`
+      : u === 'bps'
+        ? `${v.toFixed(0)} bps`
+        : v.toFixed(2);
+  }
   if (agg === 'rate') return `${v.toFixed(1)}%`;
   const plainCount = agg === 'count' || agg === 'distinct' || agg === 'yes';
   const sc = scaleOf(fd);
@@ -1300,6 +1915,7 @@ function aggLabel(agg: Agg) {
     distinct: 'Distinct count',
     yes: 'Count of Yes',
     rate: 'Rate of Yes (%)',
+    metric: 'Calculated metric',
   }[agg];
 }
 
@@ -1328,6 +1944,18 @@ function exportCell(
   if (fd.type === 'boolean')
     return v === true ? 'Yes' : v === false ? 'No' : '';
   return v as string | number;
+}
+
+/** Replace sensitive values with a mask. UI-side defence in depth only: the server must never send them. */
+function maskSensitive(rows: Row[], fields: FieldDef[]): Row[] {
+  const keys = fields.filter((x) => x.sensitive).map((x) => x.key);
+  if (keys.length === 0) return rows;
+  return rows.map((r) => {
+    const c: Row = { ...r };
+    for (const k of keys)
+      c[k] = r[k] === null || r[k] === undefined ? null : MASK;
+    return c;
+  });
 }
 
 /* ---- field profile (data-quality summary) ---- */
@@ -1509,8 +2137,9 @@ function derivedValue(
       if (!/[zZ]|[+-]\d\d:?\d\d$/.test(t)) t += 'Z';
       const dt = new Date(t);
       if (Number.isNaN(dt.getTime())) return null;
-      const y = dt.getUTCFullYear(),
-        m = dt.getUTCMonth(),
+      const zp = s.length > 10 ? zonedParts(dt) : null; // datetimes follow the report time zone
+      const y = zp ? zp.y : dt.getUTCFullYear(),
+        m = zp ? zp.m : dt.getUTCMonth(),
         q = Math.floor(m / 3) + 1;
       switch (d.part) {
         case 'year':
@@ -1522,9 +2151,9 @@ function derivedValue(
         case 'month':
           return MONTHS[m];
         case 'weekday':
-          return WEEKDAYS[(dt.getUTCDay() + 6) % 7];
+          return zp ? WEEKDAYS[zp.wd] : WEEKDAYS[(dt.getUTCDay() + 6) % 7];
         case 'hour':
-          return String(dt.getUTCHours()).padStart(2, '0');
+          return String(zp ? zp.h : dt.getUTCHours()).padStart(2, '0');
       }
       return null;
     }
@@ -1660,7 +2289,32 @@ interface DataCtx {
   /** Enables click-to-drill (Preview / Generate). */
   onPick?: (field: string, value: string) => void;
   onExpand?: (id: string) => void;
+  /** Rows before the drill-down cross-filter (lets the source widget keep its full data). */
+  fullRows: Row[];
+  xf?: { field: string; value: string } | null;
   vars: Record<string, string>;
+  /** 'preview' = design-time sample rows; 'final' = actual report rendered from server aggregates. */
+  mode: 'preview' | 'final';
+  /** FINAL only: server results keyed by query id (widget id, or `${id}#suffix`). */
+  results?: Record<string, QueryResult>;
+  /** FINAL only: widget id -> failure message for queries that could not be calculated. */
+  failed?: Record<string, string>;
+  /** Host services for registry widgets (formatting, interaction, period). */
+  env: WidgetEnv;
+  /** PREVIEW only: executes a registry widget's query spec over the sample rows. */
+  previewExec?: (spec: QuerySpec, w: Widget) => QueryResult | undefined;
+  /** Bumped when other-source preview rows arrive, so registry widgets re-execute. */
+  previewTick?: number;
+  /** Walks a widget's drill path; returns true when the click was handled (else the caller cross-filters). */
+  drillClick?: (w: Widget, value: string) => boolean;
+  drillCrumbs?: (w: Widget) => React.ReactNode;
+  /** Paginated record fetch (server-side in the actual report, over the sample in preview). */
+  fetchRecords?: (o: {
+    filters: QueryFilter[];
+    sourceId?: string;
+    offset: number;
+    limit: number;
+  }) => Promise<{ result: RecordsResult; fields: FieldDef[] }>;
 }
 
 const autoBucketFor = (win: Win | null): Bucket =>
@@ -1678,6 +2332,11 @@ interface SeriesData {
   isDate: boolean;
   groupField: FieldDef;
   breakField?: FieldDef;
+  /** Groups dropped by Top N / the 24-period cap (0 when "Others" rolls them up). */
+  hidden: number;
+  shownGroups: number;
+  /** Break-down series dropped (only the 6 largest are shown). */
+  hiddenSeries: number;
 }
 interface SeriesSpec {
   groupBy: string;
@@ -1703,9 +2362,11 @@ function buildSeries(
   const natural = groupRows(rows, gf, bucket);
   const isDate = isDateType(gf.type);
 
+  let hidden = 0;
   let groups: { key: string; label: string; rows: Row[] }[];
   if (isDate) {
     groups = natural.slice(-24);
+    hidden = natural.length - groups.length;
   } else {
     const sort = spec.sort ?? 'auto';
     const keepRank = sort === 'auto' && (!!gf.order || !!gf.naturalSort);
@@ -1724,6 +2385,7 @@ function buildSeries(
     const n = Math.max(1, spec.topN);
     groups = list.slice(0, n);
     const rest = list.slice(n);
+    hidden = spec.others ? 0 : rest.length;
     if (spec.others && rest.length)
       groups = [
         ...groups,
@@ -1736,6 +2398,8 @@ function buildSeries(
     keys: groups.map((g) => g.key),
     isDate,
     groupField: gf,
+    hidden,
+    shownGroups: groups.length,
   };
   const kept = groups.flatMap((g) => g.rows);
   const bf =
@@ -1746,10 +2410,13 @@ function buildSeries(
     const name =
       spec.agg === 'count' || !mf
         ? 'Count'
-        : `${aggLabel(spec.agg)} of ${mf.label.toLowerCase()}`;
+        : spec.agg === 'metric'
+          ? mf.label
+          : `${aggLabel(spec.agg)} of ${mf.label.toLowerCase()}`;
     const values = groups.map((g) => val(g.rows));
     return {
       ...base,
+      hiddenSeries: 0,
       names: [name],
       values: [values],
       rowTotals: values,
@@ -1757,13 +2424,13 @@ function buildSeries(
       grand: val(kept),
     };
   }
-  const cats = groupRows(kept, bf, 'month')
-    .slice(0, 6)
-    .map((g) => g.key);
+  const allCats = groupRows(kept, bf, 'month').map((g) => g.key);
+  const cats = allCats.slice(0, 6);
   const inCat = (rs: Row[], c: string) =>
     rs.filter((r) => cellKey(bf, r) === c);
   return {
     ...base,
+    hiddenSeries: allCats.length - cats.length,
     breakField: bf,
     names: cats,
     values: cats.map((c) => groups.map((g) => val(inCat(g.rows, c)))),
@@ -1773,28 +2440,45 @@ function buildSeries(
   };
 }
 
+/** Aggregates the insight text is written from; supplied by the server in the final report. */
+interface InsightAgg {
+  total: number;
+  prevTotal: number | null;
+  hasRows: boolean;
+  groups: { label: string; v: number; n: number }[];
+}
 function buildInsights(
   rows: Row[],
   prevRows: Row[] | null,
   w: InsightWidget,
   fm: Map<string, FieldDef>,
   auto: Bucket,
-  currency: string
+  currency: string,
+  pre?: InsightAgg
 ): string[] {
   const gf = fm.get(w.groupBy);
   const mf = w.field ? fm.get(w.field) : undefined;
   const f = (v: number) => fmtMeasure(v, w.agg, mf, currency);
-  if (!gf || rows.length === 0) return ['No data for the current filters.'];
+  if (!gf || (pre ? !pre.hasRows : rows.length === 0))
+    return ['No data for the current filters.'];
   const out: string[] = [];
-  const total = aggregate(rows, w.agg, w.field, fm);
+  const total = pre ? pre.total : aggregate(rows, w.agg, w.field, fm);
+  const prevTotal = pre
+    ? pre.prevTotal
+    : prevRows
+      ? aggregate(prevRows, w.agg, w.field, fm)
+      : null;
   const additive = ADDITIVE.includes(w.agg);
   let line = additive
     ? `Total ${w.subject}: ${f(total)}`
     : `Overall ${aggLabel(w.agg).toLowerCase()}${mf ? ` of ${mf.label.toLowerCase()}` : ''}: ${f(total)}`;
-  if (prevRows) {
-    const pv = aggregate(prevRows, w.agg, w.field, fm);
+  if (prevTotal !== null) {
+    const pv = prevTotal;
     if (pv) {
-      if (w.agg === 'rate') {
+      if (
+        w.agg === 'rate' ||
+        (w.agg === 'metric' && mf?.metric?.unit !== 'ratio')
+      ) {
         const d = total - pv;
         line += `, ${d >= 0 ? 'up' : 'down'} ${Math.abs(d).toFixed(1)} points on the previous period`;
       } else {
@@ -1807,11 +2491,13 @@ function buildInsights(
 
   const bucket = w.bucket === 'auto' ? auto : w.bucket;
   const isDate = isDateType(gf.type);
-  let groups = groupRows(rows, gf, bucket).map((g) => ({
-    label: g.label,
-    v: aggregate(g.rows, w.agg, w.field, fm),
-    n: g.rows.length,
-  }));
+  let groups = pre
+    ? pre.groups
+    : groupRows(rows, gf, bucket).map((g) => ({
+        label: g.label,
+        v: aggregate(g.rows, w.agg, w.field, fm),
+        n: g.rows.length,
+      }));
   if (isDate) groups = groups.slice(-24);
   if (groups.length === 0) return out;
   const sum = groups.reduce((s, g) => s + g.v, 0) || 1;
@@ -1874,12 +2560,25 @@ function downloadCsv(
   headers: string[],
   rows: (string | number | undefined)[][]
 ) {
+  downloadCsvGrid(name, [headers, ...rows]);
+}
+
+function downloadCsvGrid(
+  name: string,
+  grid: (string | number | undefined)[][]
+) {
+  // Neutralise spreadsheet formula injection (=, +, -, @, tab, CR) unless the cell is a plain number.
+  const safe = (v: string | number | undefined) => {
+    const s = String(v ?? '');
+    return typeof v === 'string' &&
+      /^[=+\-@\t\r]/.test(s) &&
+      !/^[+-]?\d+(\.\d+)?$/.test(s)
+      ? `'${s}`
+      : s;
+  };
   const esc = (v: string | number | undefined) =>
-    `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const csv = [
-    headers.map(esc).join(','),
-    ...rows.map((r) => r.map(esc).join(',')),
-  ].join('\r\n');
+    `"${safe(v).replace(/"/g, '""')}"`;
+  const csv = grid.map((r) => r.map(esc).join(',')).join('\r\n');
   const url = URL.createObjectURL(
     new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
   );
@@ -1906,6 +2605,27 @@ function widgetTable(
   w: Widget,
   d: DataCtx
 ): { headers: string[]; rows: (string | number)[][] } {
+  if (d.mode === 'final')
+    return (
+      (d.results && resultTable(w, d.results, d)) || { headers: [], rows: [] }
+    );
+  if (!LEGACY_KINDS.has(w.kind)) {
+    const desc = getWidget(w.kind);
+    const rs: Record<string, QueryResult | undefined> = {};
+    for (const s of desc?.requirements(w as unknown as RegistryWidget, {
+      source: d.env.source,
+      fieldMap: d.fieldMap as unknown as Map<string, FieldInfo>,
+      period: d.env.period,
+      autoBucket: d.autoBucket,
+    }) ?? [])
+      rs[s.suffix ?? ''] = d.previewExec?.(s, w);
+    return (
+      desc?.toTable?.(w as unknown as RegistryWidget, rs, d.env) ?? {
+        headers: [],
+        rows: [],
+      }
+    );
+  }
   const rows = applyFilters(d.rows, w.filters, d.fieldMap);
   if (w.kind === 'chart' && w.chartType !== 'scatter') {
     const sd = buildSeries(
@@ -1973,6 +2693,407 @@ function widgetTable(
     };
   }
   return { headers: [], rows: [] };
+}
+
+/* ==========================================================================
+ * Local query executor + demo provider
+ *
+ * Implements the query contract (./report-builder/contracts) on top of the engine above. It is
+ *   1. the PREVIEW executor (design-time, <= previewLimit rows in the browser), and
+ *   2. the reference semantics for a real backend, and the engine of the demo `ReportDataProvider`
+ *      used when no `provider` prop is supplied (it "simulates" the server over the full mock dataset).
+ * Production: pass your own `provider`; the browser then never sees the raw dataset.
+ * ======================================================================== */
+const toRules = (fs: QueryFilter[] | undefined): FilterRule[] =>
+  (fs ?? []).map((x) => ({
+    id: '',
+    field: x.field,
+    op: x.op as FilterOp,
+    value: x.value,
+  }));
+
+const quantile = (sorted: number[], p: number) => {
+  if (!sorted.length) return 0;
+  const i = (sorted.length - 1) * p;
+  const lo = Math.floor(i);
+  const hi = Math.ceil(i);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+};
+
+/** Executes ONE query over rows of its source. `rows` must already have derived fields applied. */
+function runLocalQuery(
+  q: ReportQuery,
+  rows: Row[],
+  fm: Map<string, FieldDef>,
+  dateField: string
+): QueryResult {
+  const inP = (rs: Row[], p: ResolvedPeriod | null | undefined) =>
+    p
+      ? rs.filter((r) =>
+          inWindow(r, dateField, { from: p.from, to: p.to, days: p.days })
+        )
+      : rs;
+  let base = applyFilters(rows, toRules(q.filters), fm);
+  const cur0 = inP(base, q.period);
+  const prev = q.comparePeriod ? inP(base, q.comparePeriod) : null;
+  const meas = (
+    rs: Row[],
+    m: ReportQuery['measures'][number],
+    pr?: Row[] | null
+  ) =>
+    aggregate(
+      m.where?.length ? applyFilters(rs, toRules(m.where), fm) : rs,
+      m.agg as Agg,
+      m.field,
+      fm,
+      pr
+    );
+  const stats = { scanned: rows.length };
+  const mk = (s: Partial<QueryResult>) =>
+    ({ queryId: q.id, stats, ...s }) as QueryResult;
+
+  if (q.shape === 'scalar') {
+    const values = q.measures.map((m) => meas(cur0, m, prev));
+    let spark: number[] | undefined;
+    const df = fm.get(dateField);
+    if (q.spark && df && q.measures[0])
+      spark = groupRows(
+        cur0,
+        df,
+        (q.spark === 'auto' ? 'month' : q.spark) as Bucket
+      )
+        .slice(-24)
+        .map((g) => meas(g.rows, q.measures[0]));
+    return mk({
+      shape: 'scalar',
+      values,
+      prev: prev ? q.measures.map((m) => meas(prev, m)) : null,
+      spark,
+    });
+  }
+
+  if (q.shape === 'records') {
+    const cols = q.columns?.length ? q.columns : [...fm.keys()].slice(0, 8);
+    let rs = cur0;
+    const of = q.orderBy ? fm.get(q.orderBy.field) : undefined;
+    if (of && q.orderBy) {
+      const dir = q.orderBy.dir === 'asc' ? 1 : -1;
+      rs = [...rs].sort((a, b) => compareCells(of, a[of.key], b[of.key]) * dir);
+    }
+    const off = q.offset ?? 0;
+    const page = rs.slice(off, off + (q.limit ?? 50)).map((r) => {
+      const o: Row = {};
+      cols.forEach((c) => (o[c] = r[c] ?? null));
+      return o;
+    });
+    const totals: Record<string, number> = {};
+    (q.totalsFor ?? []).forEach(
+      (c) => (totals[c] = aggregate(rs, 'sum', c, fm))
+    );
+    return mk({
+      shape: 'records',
+      columns: cols,
+      rows: page,
+      totalRows: rs.length,
+      offset: off,
+      totals,
+    });
+  }
+
+  if (q.shape === 'points' && q.points) {
+    const { x, y, size, colour, max } = q.points;
+    const stride = Math.max(1, Math.ceil(cur0.length / max));
+    const bf = colour ? fm.get(colour) : undefined;
+    const cats = bf
+      ? groupRows(cur0, bf, 'month')
+          .slice(0, 6)
+          .map((g) => g.key)
+      : [];
+    const pts = cur0
+      .filter((_, i) => i % stride === 0)
+      .map((r) => ({
+        x: Number(r[x]),
+        y: Number(r[y]),
+        size: size ? Number(r[size]) : undefined,
+        c: bf ? cellKey(bf, r) : undefined,
+      }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    return mk({
+      shape: 'points',
+      points: pts,
+      categories: cats,
+      sampled: stride > 1 ? stride : 0,
+      total: cur0.length,
+    });
+  }
+
+  if (q.shape === 'histogram' && q.bins) {
+    const vs = cur0
+      .map((r) => Number(r[q.bins!.field]))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    const n = Math.max(1, q.bins.count);
+    const min = vs[0] ?? 0;
+    const max = vs[vs.length - 1] ?? 0;
+    const w = (max - min) / n || 1;
+    const bins = Array.from({ length: n }, (_, i) => ({
+      from: min + i * w,
+      to: min + (i + 1) * w,
+      count: 0,
+    }));
+    vs.forEach((v) => bins[Math.min(n - 1, Math.floor((v - min) / w))].count++);
+    return mk({
+      shape: 'histogram',
+      bins,
+      total: vs.length,
+      summary: {
+        min,
+        max,
+        mean: vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : 0,
+        p50: quantile(vs, 0.5),
+        p90: quantile(vs, 0.9),
+        p99: quantile(vs, 0.99),
+      },
+    });
+  }
+
+  // dimension(s): optional numeric bands become a synthetic ordered category
+  let work = cur0;
+  let workPrev = prev;
+  let wfm = fm;
+  const dims = q.dimensions.map((d) => {
+    if (!d.bands?.length) return d;
+    const bd: BandsDerived = {
+      id: `b_${d.field}`,
+      key: `__band_${d.field}`,
+      label: fm.get(d.field)?.label ?? d.field,
+      kind: 'bands',
+      source: d.field,
+      edges: d.bands,
+    };
+    const out = applyDerived(work, [bd], [...wfm.values()]);
+    work = out.rows;
+    if (workPrev)
+      workPrev = applyDerived(workPrev, [bd], [...wfm.values()]).rows;
+    wfm = new Map(out.fields.map((f) => [f.key, f]));
+    return { ...d, field: bd.key };
+  });
+
+  if (q.shape === 'quantiles' && q.quantileField && dims[0]) {
+    const gf = wfm.get(dims[0].field);
+    if (!gf) return mk({ shape: 'quantiles', groups: [] });
+    const groups = groupRows(work, gf, (dims[0].bucket as Bucket) ?? 'month')
+      .slice(0, q.limit ?? 8)
+      .map((g) => {
+        const vs = g.rows
+          .map((r) => Number(r[q.quantileField!]))
+          .filter(Number.isFinite)
+          .sort((a, b) => a - b);
+        const q1 = quantile(vs, 0.25),
+          q3 = quantile(vs, 0.75),
+          iqr = q3 - q1;
+        return {
+          key: g.key,
+          label: g.label,
+          n: vs.length,
+          min: vs[0] ?? 0,
+          q1,
+          median: quantile(vs, 0.5),
+          q3,
+          max: vs[vs.length - 1] ?? 0,
+          outliers: vs.filter((v) => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr)
+            .length,
+        };
+      });
+    return mk({ shape: 'quantiles', groups });
+  }
+
+  // grouped
+  const gd = dims[0];
+  const gf = gd ? wfm.get(gd.field) : undefined;
+  if (!gd || !gf)
+    return mk({
+      shape: 'grouped',
+      groups: [],
+      grand: q.measures.map(() => 0),
+      totalGroups: 0,
+    });
+  const bucket = (
+    (gd.bucket as Bucket | 'auto') === 'auto' ? 'month' : (gd.bucket ?? 'month')
+  ) as Bucket;
+  const val = (rs: Row[], j: number) => meas(rs, q.measures[j]);
+  const natural = groupRows(work, gf, bucket);
+  const isDate = isDateType(gf.type);
+  let groups: { key: string; label: string; rows: Row[] }[];
+  if (isDate) groups = natural.slice(-24);
+  else {
+    const sort = q.sort ?? {
+      by: gf.order || gf.naturalSort ? 'rank' : 'measure',
+      dir: 'desc' as const,
+    };
+    let list = natural;
+    if (sort.by === 'label')
+      list = [...natural].sort(
+        (a, b) =>
+          a.label.localeCompare(b.label, undefined, { numeric: true }) *
+          (sort.dir === 'asc' ? 1 : -1)
+      );
+    else if (sort.by === 'measure') {
+      const j = sort.index ?? 0;
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      list = natural
+        .map((g) => ({ g, v: val(g.rows, j) }))
+        .sort((a, b) => (a.v - b.v) * dir)
+        .map((x) => x.g);
+    }
+    const n = Math.max(1, q.limit ?? 6);
+    groups = list.slice(0, n);
+    const rest = list.slice(n);
+    if (q.others && rest.length)
+      groups = [
+        ...groups,
+        { key: '__others', label: 'Others', rows: rest.flatMap((g) => g.rows) },
+      ];
+  }
+  const kept = groups.flatMap((g) => g.rows);
+  const prevByKey =
+    workPrev && !isDate
+      ? new Map(groupRows(workPrev, gf, bucket).map((g) => [g.key, g.rows]))
+      : null;
+  const keptKeys = new Set(groups.map((g) => g.key));
+  const prevRowsFor = (g: { key: string }) =>
+    !prevByKey
+      ? undefined
+      : g.key === '__others'
+        ? [...prevByKey].filter(([k]) => !keptKeys.has(k)).flatMap(([, r]) => r)
+        : (prevByKey.get(g.key) ?? []);
+  const out: GroupedResult = {
+    queryId: q.id,
+    stats,
+    shape: 'grouped',
+    groups: groups.map((g) => {
+      const pr = prevRowsFor(g);
+      return {
+        key: g.key,
+        label: g.label,
+        n: g.rows.length,
+        values: q.measures.map((_, j) => val(g.rows, j)),
+        prev: pr ? q.measures.map((_, j) => val(pr, j)) : undefined,
+      };
+    }),
+    grand: q.measures.map((_, j) => val(kept, j)),
+    prevGrand: workPrev
+      ? q.measures.map((_, j) => val(workPrev!, j))
+      : undefined,
+    totalGroups: natural.length,
+  };
+  const bd2 = dims[1];
+  const bf = bd2 && bd2.field !== gf.key ? wfm.get(bd2.field) : undefined;
+  if (bf) {
+    const all = groupRows(kept, bf, 'month').map((g) => g.key);
+    const cats = all.slice(0, q.seriesLimit ?? 6);
+    out.series = cats.map((c) => ({ key: c, label: c }));
+    out.hiddenSeries = all.length - cats.length;
+    out.cells = {};
+    for (const g of groups)
+      for (const c of cats)
+        out.cells[cellKeyOf(g.key, c)] = q.measures.map((_, j) =>
+          val(
+            g.rows.filter((r) => cellKey(bf, r) === c),
+            j
+          )
+        );
+  }
+  return out;
+}
+
+/** Demo provider: simulates the backend over `source.loadRows()` (the full mock dataset, uncapped). */
+function createLocalProvider(opts: {
+  sources: ReportSource[];
+  canViewSensitive: boolean;
+  latencyMs?: number;
+}): ReportDataProvider {
+  const store = new Map<
+    string,
+    Promise<{ rows: Row[]; fields: FieldDef[]; src: ReportSource }>
+  >();
+  const load = (id: string, signal?: AbortSignal) => {
+    let p = store.get(id);
+    if (!p) {
+      const src = opts.sources.find((s) => s.id === id);
+      if (!src) return Promise.reject(new Error(`Unknown source ${id}`));
+      p = Promise.resolve(
+        src.loadRows({
+          signal: signal ?? new AbortController().signal,
+          maxRows: Number.MAX_SAFE_INTEGER,
+        })
+      )
+        .then((r) => {
+          const raw = normalizeRows(Array.isArray(r) ? r : r.rows, src.fields);
+          const rows = opts.canViewSensitive
+            ? raw
+            : maskSensitive(raw, src.fields);
+          return { rows, fields: enrichFields(src.fields, rows), src };
+        })
+        .catch((e) => (store.delete(id), Promise.reject(e)));
+      store.set(id, p);
+    }
+    return p;
+  };
+  const wait = (ms: number, signal: AbortSignal) =>
+    new Promise<void>((res, rej) => {
+      if (signal.aborted) return rej(new DOMException('Aborted', 'AbortError'));
+      const t = setTimeout(res, ms);
+      signal.addEventListener(
+        'abort',
+        () => (clearTimeout(t), rej(new DOMException('Aborted', 'AbortError'))),
+        { once: true }
+      );
+    });
+  return {
+    capabilities: { export: ['pdf', 'csv'] },
+    async loadPreview({ sourceId, limit, signal }) {
+      const { rows, src } = await load(sourceId, signal);
+      const df = src.dateField;
+      const latest = [...rows]
+        .sort((a, b) => String(b[df] ?? '').localeCompare(String(a[df] ?? '')))
+        .slice(0, limit);
+      return {
+        rows: latest,
+        totalInSource: rows.length,
+        asOf: new Date().toISOString(),
+      };
+    },
+    async execute(run, queries, { signal }) {
+      await wait(opts.latencyMs ?? 350, signal);
+      const results: Record<string, QueryResult> = {};
+      for (const q of queries) {
+        const { rows, fields, src } = await load(q.sourceId, signal);
+        const metrics = Object.values(q.metrics ?? {}) as CalculatedMetric[];
+        const derived = (q.derived ?? []) as DerivedField[];
+        const d = applyDerived(rows, derived, [
+          ...fields,
+          ...metrics.map(metricField),
+          ...(src.metrics ?? []).map(metricField),
+        ]);
+        results[q.id] = runLocalQuery(
+          q,
+          d.rows,
+          new Map(d.fields.map((f) => [f.key, f])),
+          src.dateField
+        );
+      }
+      return {
+        results,
+        failures: [],
+        meta: {
+          recordsMatched: null,
+          dataAsOf: new Date().toISOString(),
+          datasetVersion: `demo-${run.definition.sourceId}`,
+        },
+      };
+    },
+  };
 }
 
 /* ==========================================================================
@@ -2159,6 +3280,11 @@ function autoWidgets(
 
 const DEFAULT_SCHEDULE: Schedule = { frequency: 'none', recipients: '' };
 
+const DEFAULT_PRESENTATION: Presentation = {
+  showPageNumbers: true,
+  coverPage: false,
+};
+
 function blankDefinition(
   src: ReportSource,
   name = 'Untitled report'
@@ -2170,29 +3296,49 @@ function blankDefinition(
     fields: [...src.defaultFields],
     widgets: autoWidgets(src, src.defaultFields, src.fields),
     filters: [],
-    dateRange: '6m',
+    period: { preset: 'last_30_days', compare: 'previous_period' },
+    previewLimit: undefined,
+    drillPaths: [],
+    filterPresets: [],
+    presentation: { ...DEFAULT_PRESENTATION },
     palette: 'corporate',
     classification: 'internal',
     compare: true,
     schedule: { ...DEFAULT_SCHEDULE },
     derived: [],
     createdAt: new Date().toISOString(),
+    schemaVersion: SCHEMA_VERSION,
+    timezone: DEFAULT_TZ,
+    metrics: [],
+    audience: 'management',
+    tags: '',
   };
 }
 
 /** Fill any properties missing from older / imported definitions. */
 function normalizeDefinition(d: ReportDefinition): ReportDefinition {
   const defaults: Partial<ReportDefinition> = {
+    period: legacyRangeToPeriod(d.dateRange, d.customFrom, d.customTo),
+    drillPaths: [],
+    filterPresets: [],
+    presentation: { ...DEFAULT_PRESENTATION },
     palette: 'corporate',
     classification: 'internal',
     compare: true,
     schedule: { ...DEFAULT_SCHEDULE },
     derived: [],
+    timezone: DEFAULT_TZ,
+    metrics: [],
   };
   const wDefaults = { height: 'md', filters: [] } as Partial<Widget>;
+  // v2 -> v3: adds timezone, metrics, audience/tags.
+  // v3 -> v4: `dateRange`/`customFrom`/`customTo` become `period` (preset + comparison); adds drillPaths,
+  //           filterPresets, presentation, previewLimit. Add further steps here (never edit published versions in place).
+  const { dateRange: _dr, customFrom: _cf, customTo: _ct, ...rest } = d;
   return {
     ...defaults,
-    ...d,
+    ...rest,
+    schemaVersion: SCHEMA_VERSION,
     widgets: (d.widgets ?? []).map((w) => {
       const b = { ...wDefaults, ...w } as Widget;
       if (b.kind === 'kpi')
@@ -2230,7 +3376,12 @@ function reconcile(
   def: ReportDefinition,
   fields: FieldDef[]
 ): ReportDefinition {
-  const keys = new Set(def.fields);
+  // Calculated metrics (mt_*) are not selectable columns, so they are always valid references.
+  const keys = new (class extends Set<string> {
+    has(k: string) {
+      return super.has(k) || k.startsWith(METRIC_PREFIX);
+    }
+  })(def.fields);
   const dim = fields.find((x) => keys.has(x.key) && isDim(x.type));
   const widgets = def.widgets.flatMap((w): Widget[] => {
     if (w.kind === 'kpi') {
@@ -2294,6 +3445,55 @@ function reconcile(
 /* ==========================================================================
  * Template storage (default: localStorage) + built-in templates
  * ======================================================================== */
+/**
+ * Strict validation for imported templates: known source, known widget kinds, bounded sizes,
+ * field references restricted to the source catalogue + the template's own custom fields.
+ */
+function validateImportedDefinition(
+  raw: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+  sources: ReportSource[]
+): ReportDefinition {
+  if (!raw || typeof raw !== 'object') throw new Error('invalid');
+  const src = sources.find((x) => x.id === raw.sourceId);
+  if (!src) throw new Error('unknown source');
+  if (!Array.isArray(raw.widgets) || raw.widgets.length > 200)
+    throw new Error('widgets');
+  const kinds = ['kpi', 'chart', 'table', 'text', 'insight'];
+  if (
+    raw.widgets.some(
+      (w: any) => !w || !(kinds.includes(w.kind) || hasWidget(w.kind))
+    )
+  )
+    // eslint-disable-line @typescript-eslint/no-explicit-any
+    throw new Error('widget kind');
+  const d = cloneDefinition({
+    ...raw,
+    fields: Array.isArray(raw.fields)
+      ? raw.fields.filter((k: unknown) => typeof k === 'string')
+      : [],
+    filters: Array.isArray(raw.filters) ? raw.filters : [],
+    derived: Array.isArray(raw.derived) ? raw.derived.slice(0, 50) : [],
+    metrics: Array.isArray(raw.metrics) ? raw.metrics.slice(0, 50) : [],
+  } as ReportDefinition);
+  const cat = applyDerived([], d.derived ?? [], src.fields).fields;
+  const keys = new Set(cat.map((x) => x.key));
+  d.fields = d.fields.filter((k) => keys.has(k));
+  d.filters = d.filters.filter((r) => keys.has(r.field));
+  d.widgets = d.widgets.map(
+    (w) =>
+      ({
+        ...w,
+        title: String(w.title ?? '').slice(0, 200),
+        note: w.note ? String(w.note).slice(0, 500) : undefined,
+        filters: (w.filters ?? []).filter((r) => keys.has(r.field)),
+        ...(w.kind === 'text'
+          ? { text: String(w.text ?? '').slice(0, 5000) }
+          : {}),
+      }) as Widget
+  );
+  return reconcile(d, cat);
+}
+
 const LS_KEY = 'fraud-report-builder:templates:v1';
 const LS_AUTOSAVE = 'fraud-report-builder:autosave:v1';
 const readLocal = (): ReportTemplate[] => {
@@ -2343,12 +3543,48 @@ const builtIn = (
       description,
       sourceId: src,
       filters: [],
-      dateRange: '6m',
+      period: { preset: 'last_90_days', compare: 'previous_period' },
       createdAt: now,
       ...def,
     } as ReportDefinition),
   };
 };
+
+const mkE = (
+  kind: string,
+  title: string,
+  over: Record<string, unknown> = {}
+): Widget => ({ ...baseW(title, 6), kind, ...over }) as unknown as Widget;
+const CASE_F = [
+  'case_id',
+  'title',
+  'fraud_type',
+  'channel',
+  'severity',
+  'status',
+  'is_repeat',
+  'amt_aed',
+  'recovered_aed',
+  'investigator',
+  'region',
+  'customer_ref',
+  'opened',
+  'days_open',
+];
+const ALERT_F = [
+  'alert_id',
+  'rule',
+  'rule_priority',
+  'severity',
+  'status',
+  'channel',
+  'score',
+  'amt_aed',
+  'is_escalated',
+  'sar_filed',
+  'analyst',
+  'triggered',
+];
 
 const BUILTIN_TEMPLATES: ReportTemplate[] = [
   builtIn(
@@ -2533,12 +3769,11 @@ const BUILTIN_TEMPLATES: ReportTemplate[] = [
           tone: 'red',
           lowerIsBetter: true,
         }),
-        mkKpi('Analysts', {
-          agg: 'distinct',
-          field: 'analyst',
+        mkKpi('False-positive ratio', {
+          agg: 'metric',
+          field: 'mt_fp_ratio',
           tone: 'violet',
-          showTrend: false,
-          showSparkline: false,
+          lowerIsBetter: true,
         }),
         mkInsight('Key insights', 'status', { subject: 'alerts' }),
         mkChart('Alert volume by severity', 'stacked', 'triggered', {
@@ -2617,75 +3852,735 @@ const BUILTIN_TEMPLATES: ReportTemplate[] = [
       ],
     }
   ),
+
+  /* ---- Fraud & risk reporting pack (registry widgets) ---- */
+  builtIn(
+    'Fraud executive overview',
+    'Board pack: headline KPIs, trend, channel mix, risk matrix, geography, detection funnel and insights.',
+    'cases',
+    {
+      classification: 'confidential',
+      period: { preset: 'previous_quarter', compare: 'previous_period' },
+      fields: CASE_F,
+      presentation: {
+        subtitle: 'Fraud Executive Overview',
+        footerText: 'Board of Directors · Confidential',
+        showPageNumbers: true,
+        coverPage: false,
+      },
+      drillPaths: [
+        {
+          id: 'dp-channel',
+          name: 'Channel › Region › Fraud type',
+          levels: [
+            { field: 'channel' },
+            { field: 'region' },
+            { field: 'fraud_type' },
+          ],
+        },
+      ],
+      widgets: [
+        mkE('section', 'Executive summary', { span: 12, height: 'sm' }),
+        mkE('execSummary', 'Executive summary', {
+          span: 12,
+          commentary: '',
+          items: [
+            { label: 'Fraud cases', agg: 'count', lowerIsBetter: true },
+            {
+              label: 'Amount at risk',
+              agg: 'sum',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Recovered',
+              agg: 'sum',
+              field: 'recovered_aed',
+              lowerIsBetter: false,
+            },
+          ],
+        }),
+        mkE('kpiGroup', 'Headline metrics', {
+          span: 12,
+          height: 'sm',
+          items: [
+            { label: 'Cases', agg: 'count', lowerIsBetter: true },
+            {
+              label: 'Amount at risk',
+              agg: 'sum',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Recovery rate',
+              agg: 'metric',
+              field: 'mt_recovery_rate',
+              lowerIsBetter: false,
+            },
+            {
+              label: 'Critical share',
+              agg: 'metric',
+              field: 'mt_critical_share',
+              lowerIsBetter: true,
+            },
+          ],
+        }),
+        mkE('section', 'Trend and drivers', { span: 12, height: 'sm' }),
+        mkChart('Fraud cases over time', 'line', 'opened', { span: 8 }),
+        mkE('waterfall', 'What drove the change', {
+          span: 4,
+          groupBy: 'fraud_type',
+          agg: 'count',
+          topN: 5,
+          lowerIsBetter: true,
+        }),
+        mkChart('Cases by channel', 'bar', 'channel', {
+          span: 6,
+          drillPathId: 'dp-channel',
+        }),
+        mkE('riskMatrix', 'Risk matrix: severity × status', {
+          span: 6,
+          rowField: 'severity',
+          colField: 'status',
+          agg: 'count',
+        }),
+        mkE('section', 'Where and how we detect', { span: 12, height: 'sm' }),
+        mkE('geoTiles', 'Exposure by region', {
+          span: 5,
+          groupBy: 'region',
+          agg: 'sum',
+          field: 'amt_aed',
+          layout: 'world-regions',
+        }),
+        mkE('detectionFunnel', 'Detection funnel', {
+          span: 7,
+          height: 'lg',
+          stages: [
+            { label: 'Transactions', sourceId: 'transactions', agg: 'count' },
+            { label: 'Alerts raised', sourceId: 'alerts', agg: 'count' },
+            { label: 'Cases opened', sourceId: 'cases', agg: 'count' },
+            {
+              label: 'Confirmed fraud',
+              sourceId: 'cases',
+              agg: 'count',
+              whereField: 'status',
+              whereOp: 'eq',
+              whereValue: 'Confirmed fraud',
+            },
+            {
+              label: 'Confirmed loss',
+              sourceId: 'cases',
+              agg: 'sum',
+              field: 'amt_aed',
+              whereField: 'status',
+              whereOp: 'eq',
+              whereValue: 'Confirmed fraud',
+            },
+            {
+              label: 'Recovered',
+              sourceId: 'cases',
+              agg: 'sum',
+              field: 'recovered_aed',
+            },
+          ],
+        }),
+        mkInsight('Key insights', 'fraud_type', { span: 12, subject: 'cases' }),
+      ],
+    }
+  ),
+  builtIn(
+    'Daily fraud monitoring',
+    'Yesterday at a glance: alert volume, risk indicators, hot rules and the critical queue.',
+    'alerts',
+    {
+      period: { preset: 'yesterday', compare: 'previous_period' },
+      fields: ALERT_F,
+      widgets: [
+        mkE('kpiGroup', 'Yesterday', {
+          span: 12,
+          height: 'sm',
+          items: [
+            { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+            {
+              label: 'Value flagged',
+              agg: 'sum',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Escalation rate',
+              agg: 'metric',
+              field: 'mt_escalation_rate',
+              lowerIsBetter: false,
+            },
+            {
+              label: 'False positives',
+              agg: 'metric',
+              field: 'mt_fp_ratio',
+              lowerIsBetter: true,
+            },
+          ],
+        }),
+        mkE('kri', 'Key risk indicators', {
+          span: 6,
+          items: [
+            {
+              label: 'Alerts',
+              agg: 'count',
+              lowerIsBetter: true,
+              warn: 20,
+              breach: 40,
+            },
+            {
+              label: 'False-positive ratio',
+              agg: 'metric',
+              field: 'mt_fp_ratio',
+              lowerIsBetter: true,
+              warn: 50,
+              breach: 70,
+            },
+          ],
+        }),
+        mkE('riskGauge', 'Average alert score', {
+          span: 3,
+          agg: 'avg',
+          field: 'score',
+          min: 0,
+          max: 100,
+          warn: 50,
+          breach: 75,
+          lowerIsBetter: true,
+        }),
+        mkE('riskGauge', 'False-positive ratio', {
+          span: 3,
+          agg: 'metric',
+          field: 'mt_fp_ratio',
+          min: 0,
+          max: 100,
+          warn: 50,
+          breach: 70,
+          lowerIsBetter: true,
+        }),
+        mkChart('Alerts by hour of triggering day', 'bar', 'triggered', {
+          span: 6,
+        }),
+        mkE('pareto', 'Rules driving alert volume', {
+          span: 6,
+          groupBy: 'rule',
+          agg: 'count',
+          topN: 8,
+        }),
+        mkTable(
+          'Critical and high alerts',
+          [
+            'alert_id',
+            'rule',
+            'severity',
+            'status',
+            'amt_aed',
+            'analyst',
+            'triggered',
+          ],
+          {
+            filters: [
+              { id: uid(), field: 'severity', op: 'atleast', value: 'High' },
+            ],
+            sortBy: 'amt_aed',
+            limit: 10,
+          }
+        ),
+      ],
+    }
+  ),
+  builtIn(
+    'Monthly fraud management report',
+    'Previous month versus the month before: drivers, concentration, team workload and geography.',
+    'cases',
+    {
+      classification: 'confidential',
+      period: { preset: 'previous_month', compare: 'previous_period' },
+      fields: CASE_F,
+      presentation: {
+        subtitle: 'Monthly Fraud Management Report',
+        footerText: 'Fraud Management · Confidential',
+        showPageNumbers: true,
+        coverPage: false,
+      },
+      widgets: [
+        mkE('execSummary', 'Executive summary', {
+          span: 12,
+          items: [
+            { label: 'Fraud cases', agg: 'count', lowerIsBetter: true },
+            {
+              label: 'Amount at risk',
+              agg: 'sum',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Recovery rate',
+              agg: 'metric',
+              field: 'mt_recovery_rate',
+              lowerIsBetter: false,
+            },
+          ],
+        }),
+        mkE('waterfall', 'Change in cases by fraud type', {
+          span: 6,
+          groupBy: 'fraud_type',
+          agg: 'count',
+          topN: 6,
+          lowerIsBetter: true,
+        }),
+        mkE('periodCompare', 'Channel: this month vs prior', {
+          span: 6,
+          groupBy: 'channel',
+          agg: 'count',
+          topN: 6,
+        }),
+        mkE('pareto', 'Where the loss concentrates', {
+          span: 6,
+          groupBy: 'fraud_type',
+          agg: 'sum',
+          field: 'amt_aed',
+          topN: 8,
+        }),
+        mkE('geoTiles', 'Regional exposure', {
+          span: 6,
+          groupBy: 'region',
+          agg: 'sum',
+          field: 'amt_aed',
+          layout: 'world-regions',
+        }),
+        mkE('summaryTable', 'Investigator workload', {
+          span: 12,
+          groupBy: 'investigator',
+          topN: 10,
+          sortIndex: 0,
+          sortDir: 'desc',
+          showTotal: true,
+          dataBars: true,
+          measures: [
+            { label: 'Cases', agg: 'count' },
+            { label: 'Amount', agg: 'sum', field: 'amt_aed' },
+            { label: 'Avg days open', agg: 'avg', field: 'days_open' },
+          ],
+        }),
+        mkInsight('Key insights', 'channel', { span: 12, subject: 'cases' }),
+      ],
+    }
+  ),
+  builtIn(
+    'Risk exposure report',
+    'Exposure, concentration and distribution of losses with thresholds for the Chief Risk Officer.',
+    'cases',
+    {
+      classification: 'confidential',
+      period: { preset: 'last_12_months', compare: 'previous_year' },
+      fields: CASE_F,
+      widgets: [
+        mkE('kri', 'Risk appetite indicators', {
+          span: 8,
+          items: [
+            {
+              label: 'Amount at risk',
+              agg: 'sum',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+              warn: 5000000,
+              breach: 10000000,
+            },
+            {
+              label: 'Critical share',
+              agg: 'metric',
+              field: 'mt_critical_share',
+              lowerIsBetter: true,
+              warn: 15,
+              breach: 25,
+            },
+            {
+              label: 'Repeat-customer rate',
+              agg: 'rate',
+              field: 'is_repeat',
+              lowerIsBetter: true,
+              warn: 20,
+              breach: 30,
+            },
+          ],
+        }),
+        mkE('riskGauge', 'Critical share', {
+          span: 4,
+          agg: 'metric',
+          field: 'mt_critical_share',
+          min: 0,
+          max: 50,
+          warn: 15,
+          breach: 25,
+          lowerIsBetter: true,
+        }),
+        mkE('riskMatrix', 'Severity × channel', {
+          span: 6,
+          rowField: 'severity',
+          colField: 'channel',
+          agg: 'sum',
+          field: 'amt_aed',
+        }),
+        mkE('pareto', 'Concentration by region', {
+          span: 6,
+          groupBy: 'region',
+          agg: 'sum',
+          field: 'amt_aed',
+          topN: 6,
+        }),
+        mkE('histogram', 'Loss size distribution', {
+          span: 6,
+          field: 'amt_aed',
+          bins: 20,
+        }),
+        mkE('boxplot', 'Loss size by fraud type', {
+          span: 6,
+          groupBy: 'fraud_type',
+          field: 'amt_aed',
+          topN: 6,
+        }),
+      ],
+    }
+  ),
+  builtIn(
+    'Alert & investigation report',
+    'From detection to outcome: funnel, case aging against SLA, workload and resolution mix.',
+    'cases',
+    {
+      period: { preset: 'last_90_days', compare: 'previous_period' },
+      fields: CASE_F,
+      widgets: [
+        mkE('kpiGroup', 'Investigation load', {
+          span: 12,
+          height: 'sm',
+          items: [
+            { label: 'Cases', agg: 'count', lowerIsBetter: true },
+            {
+              label: 'Avg days open',
+              agg: 'avg',
+              field: 'days_open',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Amount at risk',
+              agg: 'sum',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+            },
+          ],
+        }),
+        mkE('detectionFunnel', 'Alert-to-case conversion', {
+          span: 12,
+          height: 'lg',
+          stages: [
+            { label: 'Alerts raised', sourceId: 'alerts', agg: 'count' },
+            {
+              label: 'Escalated alerts',
+              sourceId: 'alerts',
+              agg: 'count',
+              whereField: 'is_escalated',
+              whereOp: 'eq',
+              whereValue: 'Yes',
+            },
+            { label: 'Cases opened', sourceId: 'cases', agg: 'count' },
+            {
+              label: 'Confirmed fraud',
+              sourceId: 'cases',
+              agg: 'count',
+              whereField: 'status',
+              whereOp: 'eq',
+              whereValue: 'Confirmed fraud',
+            },
+          ],
+        }),
+        mkE('aging', 'Case aging vs 14-day SLA', {
+          span: 6,
+          ageField: 'days_open',
+          edges: '3, 7, 14, 30, 60',
+          slaDays: 14,
+          agg: 'count',
+        }),
+        mkChart('Investigation outcome', 'doughnut', 'status', { span: 6 }),
+        mkE('summaryTable', 'Investigator workload', {
+          span: 12,
+          groupBy: 'investigator',
+          topN: 10,
+          sortIndex: 0,
+          sortDir: 'desc',
+          showTotal: true,
+          dataBars: true,
+          measures: [
+            { label: 'Cases', agg: 'count' },
+            { label: 'Avg days open', agg: 'avg', field: 'days_open' },
+            { label: 'Amount', agg: 'sum', field: 'amt_aed' },
+          ],
+        }),
+      ],
+    }
+  ),
+  builtIn(
+    'Fraud detection performance',
+    'How well detection works: precision, false positives, escalation and score separation.',
+    'alerts',
+    {
+      period: { preset: 'last_90_days', compare: 'previous_period' },
+      fields: ALERT_F,
+      widgets: [
+        mkE('kpiGroup', 'Detection quality', {
+          span: 12,
+          height: 'sm',
+          items: [
+            {
+              label: 'Precision',
+              agg: 'metric',
+              field: 'mt_precision',
+              lowerIsBetter: false,
+            },
+            {
+              label: 'False-positive ratio',
+              agg: 'metric',
+              field: 'mt_fp_ratio',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Escalation rate',
+              agg: 'metric',
+              field: 'mt_escalation_rate',
+              lowerIsBetter: false,
+            },
+            { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+          ],
+        }),
+        mkE('riskGauge', 'False-positive ratio', {
+          span: 4,
+          agg: 'metric',
+          field: 'mt_fp_ratio',
+          min: 0,
+          max: 100,
+          warn: 50,
+          breach: 70,
+          lowerIsBetter: true,
+        }),
+        mkE('histogram', 'Alert score distribution', {
+          span: 4,
+          field: 'score',
+          bins: 20,
+        }),
+        mkE('boxplot', 'Score by severity', {
+          span: 4,
+          groupBy: 'severity',
+          field: 'score',
+          topN: 4,
+        }),
+        mkE('combo', 'Volume and false-positive ratio by month', {
+          span: 12,
+          groupBy: 'triggered',
+          agg: 'count',
+          label1: 'Alerts',
+          agg2: 'metric',
+          field2: 'mt_fp_ratio',
+          label2: 'False-positive ratio',
+          topN: 12,
+        }),
+        mkInsight('Key insights', 'rule', { span: 12, subject: 'alerts' }),
+      ],
+    }
+  ),
+  builtIn(
+    'Branch risk analysis',
+    'Branch-channel exposure by region, with change versus the prior period.',
+    'cases',
+    {
+      period: { preset: 'last_90_days', compare: 'previous_period' },
+      fields: CASE_F,
+      filters: [{ id: uid(), field: 'channel', op: 'eq', value: 'Branch' }],
+      widgets: [
+        mkE('kpiGroup', 'Branch channel', {
+          span: 12,
+          height: 'sm',
+          items: [
+            { label: 'Cases', agg: 'count', lowerIsBetter: true },
+            {
+              label: 'Amount at risk',
+              agg: 'sum',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Repeat rate',
+              agg: 'rate',
+              field: 'is_repeat',
+              lowerIsBetter: true,
+            },
+          ],
+        }),
+        mkE('geoTiles', 'Exposure by region', {
+          span: 6,
+          groupBy: 'region',
+          agg: 'sum',
+          field: 'amt_aed',
+          layout: 'world-regions',
+        }),
+        mkE('periodCompare', 'Regions vs prior period', {
+          span: 6,
+          groupBy: 'region',
+          agg: 'count',
+          topN: 6,
+        }),
+        mkE('riskMatrix', 'Region × severity', {
+          span: 12,
+          rowField: 'severity',
+          colField: 'region',
+          agg: 'count',
+        }),
+        mkE('summaryTable', 'Region scorecard', {
+          span: 12,
+          groupBy: 'region',
+          topN: 10,
+          sortIndex: 1,
+          sortDir: 'desc',
+          showTotal: true,
+          dataBars: true,
+          measures: [
+            { label: 'Cases', agg: 'count' },
+            { label: 'Amount', agg: 'sum', field: 'amt_aed' },
+            { label: 'Recovered', agg: 'sum', field: 'recovered_aed' },
+          ],
+        }),
+      ],
+    }
+  ),
+  builtIn(
+    'Customer risk analysis',
+    'Repeat-victim behaviour, loss-size spread and the largest cases.',
+    'cases',
+    {
+      period: { preset: 'last_12_months', compare: 'previous_year' },
+      fields: CASE_F,
+      widgets: [
+        mkE('kpiGroup', 'Customer risk', {
+          span: 12,
+          height: 'sm',
+          items: [
+            {
+              label: 'Repeat-customer rate',
+              agg: 'rate',
+              field: 'is_repeat',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Distinct customers',
+              agg: 'distinct',
+              field: 'customer_ref',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Avg loss',
+              agg: 'avg',
+              field: 'amt_aed',
+              lowerIsBetter: true,
+            },
+          ],
+        }),
+        mkChart('Repeat vs first-time', 'doughnut', 'is_repeat', { span: 4 }),
+        mkE('boxplot', 'Loss size by severity', {
+          span: 8,
+          groupBy: 'severity',
+          field: 'amt_aed',
+          topN: 4,
+        }),
+        mkE('summaryTable', 'Fraud type profile', {
+          span: 12,
+          groupBy: 'fraud_type',
+          topN: 8,
+          sortIndex: 1,
+          sortDir: 'desc',
+          showTotal: true,
+          dataBars: true,
+          measures: [
+            { label: 'Cases', agg: 'count' },
+            { label: 'Repeat rate %', agg: 'rate', field: 'is_repeat' },
+            { label: 'Avg loss', agg: 'avg', field: 'amt_aed' },
+          ],
+        }),
+        mkTable(
+          'Largest cases',
+          [
+            'case_id',
+            'title',
+            'fraud_type',
+            'severity',
+            'status',
+            'amt_aed',
+            'opened',
+          ],
+          { sortBy: 'amt_aed', limit: 10 }
+        ),
+      ],
+    }
+  ),
+  builtIn(
+    'Rule & model performance',
+    'Rule-by-rule precision, false positives, concentration and score behaviour.',
+    'alerts',
+    {
+      period: { preset: 'last_90_days', compare: 'previous_period' },
+      fields: ALERT_F,
+      widgets: [
+        mkE('summaryTable', 'Rule scorecard', {
+          span: 12,
+          groupBy: 'rule',
+          topN: 10,
+          sortIndex: 0,
+          sortDir: 'desc',
+          showTotal: true,
+          dataBars: true,
+          measures: [
+            { label: 'Alerts', agg: 'count' },
+            { label: 'Precision', agg: 'metric', field: 'mt_precision' },
+            {
+              label: 'False-positive ratio',
+              agg: 'metric',
+              field: 'mt_fp_ratio',
+            },
+            {
+              label: 'Escalation rate',
+              agg: 'metric',
+              field: 'mt_escalation_rate',
+            },
+          ],
+        }),
+        mkE('pareto', 'Alert volume concentration by rule', {
+          span: 6,
+          groupBy: 'rule',
+          agg: 'count',
+          topN: 8,
+        }),
+        mkE('boxplot', 'Score spread by rule', {
+          span: 6,
+          groupBy: 'rule',
+          field: 'score',
+          topN: 6,
+        }),
+        mkE('bubble', 'Score vs amount (size = score)', {
+          span: 12,
+          xField: 'score',
+          yField: 'amt_aed',
+          sizeField: 'score',
+          colour: 'severity',
+        }),
+      ],
+    }
+  ),
 ];
 
 /* ==========================================================================
  * Design tokens (compact system: 32px controls, 13px body)
  * ======================================================================== */
-interface Tokens {
-  dark: boolean;
-  card: string;
-  inset: string;
-  canvas: string;
-  line: string;
-  lineStrong: string;
-  text: string;
-  body: string;
-  muted: string;
-  hover: string;
-  input: string;
-  btn: string;
-  chipIcon: string;
-  selected: string;
-  toggleOff: string;
-  skeleton: string;
-  pop: string;
-}
-const LIGHT: Tokens = {
-  dark: false,
-  card: 'bg-white border-slate-200 shadow-sm',
-  inset: 'bg-slate-50 border-slate-200',
-  canvas: 'bg-slate-100/70',
-  line: 'border-slate-100',
-  lineStrong: 'border-slate-200',
-  text: 'text-slate-900',
-  body: 'text-slate-700',
-  muted: 'text-slate-500',
-  hover: 'hover:bg-slate-50',
-  input: 'bg-white border-slate-200 text-slate-900 placeholder:text-slate-400',
-  btn: 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50',
-  chipIcon: 'bg-blue-50 text-blue-600',
-  selected: 'bg-blue-50 border-blue-500 text-blue-700',
-  toggleOff: 'bg-slate-300',
-  skeleton: 'bg-slate-100',
-  pop: 'bg-white border-slate-200 text-slate-700 shadow-xl',
-};
-const DARK: Tokens = {
-  dark: true,
-  card: 'bg-slate-900/60 border-white/15 shadow-sm',
-  inset: 'bg-white/[0.04] border-white/15',
-  canvas: 'bg-black/20',
-  line: 'border-white/10',
-  lineStrong: 'border-white/15',
-  text: 'text-white',
-  body: 'text-white/80',
-  muted: 'text-white/60',
-  hover: 'hover:bg-white/5',
-  input: 'bg-white/10 border-white/20 text-white placeholder:text-white/50',
-  btn: 'bg-white/10 border-white/20 text-white hover:bg-white/20',
-  chipIcon: 'bg-blue-500/20 text-blue-300',
-  selected: 'bg-blue-500/15 border-blue-400 text-blue-200',
-  toggleOff: 'bg-white/25',
-  skeleton: 'bg-white/10',
-  pop: 'bg-slate-900 border-white/20 text-white/90 shadow-2xl',
-};
-const ThemeCtx = createContext<Tokens>(LIGHT);
-const useT = () => useContext(ThemeCtx);
-
-const FOCUS =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
-const PRIMARY_BTN = `inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`;
-
 const PALETTES: Record<PaletteKey, { label: string; colors: string[] }> = {
   corporate: {
     label: 'Corporate',
@@ -3520,6 +5415,7 @@ const DonutChart: React.FC<{
   showLabels: boolean;
   showPercentage: boolean;
   centerText: string;
+  centerLabel?: string;
   fmt: (v: number) => string;
   onPick?: (i: number) => void;
 }> = ({
@@ -3531,6 +5427,7 @@ const DonutChart: React.FC<{
   showLabels,
   showPercentage,
   centerText,
+  centerLabel = 'Total',
   fmt,
   onPick,
 }) => {
@@ -3590,7 +5487,7 @@ const DonutChart: React.FC<{
               fontSize="7"
               className={t.dark ? 'fill-white/60' : 'fill-slate-500'}
             >
-              Total
+              {centerLabel}
             </text>
           </g>
         )}
@@ -3724,6 +5621,19 @@ const PlotChart: React.FC<{
             <g
               key={l}
               onClick={onPick ? () => onPick(i) : undefined}
+              role={onPick ? 'button' : undefined}
+              tabIndex={onPick ? 0 : undefined}
+              aria-label={onPick ? `Filter by ${l}` : undefined}
+              onKeyDown={
+                onPick
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onPick(i);
+                      }
+                    }
+                  : undefined
+              }
               className={cur}
             >
               {sd.values.map((v, s) => (
@@ -3762,6 +5672,19 @@ const PlotChart: React.FC<{
             <g
               key={l}
               onClick={onPick ? () => onPick(i) : undefined}
+              role={onPick ? 'button' : undefined}
+              tabIndex={onPick ? 0 : undefined}
+              aria-label={onPick ? `Filter by ${l}` : undefined}
+              onKeyDown={
+                onPick
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onPick(i);
+                      }
+                    }
+                  : undefined
+              }
               className={cur}
             >
               {sd.values.map((v, s) => {
@@ -4126,6 +6049,7 @@ const WidgetCard: React.FC<{
                 {w.note}
               </p>
             )}
+            {data.drillCrumbs?.(w)}
           </div>
           {data.onExpand && (
             <button
@@ -4296,6 +6220,173 @@ const PivotTable: React.FC<{
   );
 };
 
+/* ==========================================================================
+ * Result adapters: server QueryResult -> the shapes the views already render.
+ * In the FINAL report the views never see raw rows; they read aggregates.
+ * ======================================================================== */
+const labelOfKey = (fd: FieldDef | undefined, key: string, label?: string) =>
+  label ?? (key === '__others' ? 'Others' : key);
+
+function seriesFromGrouped(
+  res: GroupedResult,
+  gf: FieldDef,
+  bf?: FieldDef,
+  name = 'Count'
+): SeriesData {
+  const labels = res.groups.map((g) => labelOfKey(gf, g.key, g.label));
+  const keys = res.groups.map((g) => g.key);
+  const base = {
+    labels,
+    keys,
+    isDate: isDateType(gf.type),
+    groupField: gf,
+    hidden: res.groups.some((g) => g.key === '__others')
+      ? 0
+      : Math.max(0, res.totalGroups - res.groups.length),
+    shownGroups: res.groups.length,
+  };
+  if (!bf || !res.series?.length) {
+    const values = res.groups.map((g) => g.values[0] ?? 0);
+    return {
+      ...base,
+      hiddenSeries: 0,
+      names: [name],
+      values: [values],
+      rowTotals: values,
+      colTotals: [res.grand[0] ?? 0],
+      grand: res.grand[0] ?? 0,
+    };
+  }
+  const cell = (g: string, s: string) => res.cells?.[cellKeyOf(g, s)]?.[0] ?? 0;
+  return {
+    ...base,
+    hiddenSeries: res.hiddenSeries ?? 0,
+    breakField: bf,
+    names: res.series.map((s) => s.label ?? s.key),
+    values: res.series.map((s) => keys.map((k) => cell(k, s.key))),
+    rowTotals: res.groups.map((g) => g.values[0] ?? 0),
+    colTotals: res.series.map((s) =>
+      keys.reduce((a, k) => a + cell(k, s.key), 0)
+    ),
+    grand: res.grand[0] ?? 0,
+  };
+}
+
+/** Server aggregates -> inputs of the insight sentence generator. */
+const insightAggFrom = (
+  g: GroupedResult | undefined,
+  total: ScalarResult | undefined
+): InsightAgg => ({
+  total: total?.values[0] ?? 0,
+  prevTotal: total?.prev ? (total.prev[0] ?? 0) : null,
+  hasRows: (g?.groups.length ?? 0) > 0,
+  groups: (g?.groups ?? []).map((x) => ({
+    label: labelOfKey(undefined, x.key, x.label),
+    v: x.values[0] ?? 0,
+    n: x.n ?? 0,
+  })),
+});
+
+/** Tabular form of one widget's ACTUAL result (CSV export, expanded view). */
+function resultTable(
+  w: Widget,
+  results: Record<string, QueryResult>,
+  data: Pick<DataCtx, 'fieldMap' | 'currency' | 'autoBucket' | 'env'>
+): { headers: string[]; rows: (string | number)[][] } | null {
+  const fm = data.fieldMap;
+  const r = results[w.id];
+  if (w.kind === 'kpi') {
+    const s = r as ScalarResult | undefined;
+    if (!s) return null;
+    return {
+      headers: ['Metric', 'Value', 'Previous period'],
+      rows: [[w.title, s.values[0] ?? 0, s.prev?.[0] ?? '']],
+    };
+  }
+  if (w.kind === 'chart') {
+    if (r?.shape !== 'grouped') return null;
+    const sd = seriesFromGrouped(
+      r,
+      fm.get(w.groupBy) ??
+        ({
+          key: w.groupBy,
+          label: w.groupBy,
+          type: 'category',
+          group: '',
+        } as FieldDef),
+      w.breakBy ? fm.get(w.breakBy) : undefined,
+      w.title
+    );
+    return {
+      headers: [fm.get(w.groupBy)?.label ?? w.groupBy, ...sd.names],
+      rows: sd.labels.map((l, i) => [l, ...sd.values.map((v) => v[i] ?? 0)]),
+    };
+  }
+  if (w.kind === 'table') {
+    if (r?.shape !== 'records') return null;
+    const cols = r.columns
+      .map((c) => fm.get(c))
+      .filter((x): x is FieldDef => !!x);
+    return {
+      headers: cols.map((c) => c.label),
+      rows: r.rows.map((row) =>
+        cols.map((c) => (row[c.key] ?? '') as string | number)
+      ),
+    };
+  }
+  if (w.kind === 'insight') {
+    const lines = buildInsights(
+      [],
+      null,
+      w,
+      fm,
+      data.autoBucket,
+      data.currency,
+      insightAggFrom(
+        r as GroupedResult | undefined,
+        results[`${w.id}#total`] as ScalarResult | undefined
+      )
+    );
+    return { headers: ['Insight'], rows: lines.map((l) => [l]) };
+  }
+  if (w.kind === 'text') return null;
+  const d = getWidget(w.kind);
+  if (!d?.toTable) return null;
+  const rs: Record<string, QueryResult | undefined> = {};
+  for (const s of d.requirements(w as unknown as RegistryWidget, {
+    source: data.env.source,
+    fieldMap: data.fieldMap as unknown as Map<string, FieldInfo>,
+    period: data.env.period,
+    autoBucket: data.autoBucket,
+  }))
+    rs[s.suffix ?? ''] = results[resultKey(w.id, s.suffix)];
+  return d.toTable(w as unknown as RegistryWidget, rs, data.env);
+}
+
+/** What a widget shows while its result is missing in the final report (never falls back to preview rows). */
+const ResultGap: React.FC<{ w: Widget; data: DataCtx }> = ({ w, data }) => {
+  const t = useT();
+  const err = data.failed?.[w.id];
+  return (
+    <WidgetCard w={w} data={data}>
+      <div
+        role={err ? 'alert' : 'status'}
+        className={`flex h-full min-h-[96px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed p-3 text-center text-xs ${t.lineStrong} ${err ? 'text-red-600' : t.muted}`}
+      >
+        {err ? (
+          <>
+            <AlertTriangle className="h-4 w-4" />
+            <span className="font-semibold">Could not be calculated</span>
+            <span>{err}</span>
+          </>
+        ) : (
+          <span>Waiting for report data…</span>
+        )}
+      </div>
+    </WidgetCard>
+  );
+};
+
 const KpiView: React.FC<{ w: KpiWidget; data: DataCtx }> = ({ w, data }) => {
   const t = useT();
   const rows = useMemo(
@@ -4304,15 +6395,25 @@ const KpiView: React.FC<{ w: KpiWidget; data: DataCtx }> = ({ w, data }) => {
   );
   const field = w.field ? data.fieldMap.get(w.field) : undefined;
   const mode = w.format ?? 'compact';
-  const value = aggregate(rows, w.agg, w.field, data.fieldMap);
+  const res =
+    data.mode === 'final'
+      ? (data.results?.[w.id] as ScalarResult | undefined)
+      : undefined;
+  const value = res
+    ? (res.values[0] ?? 0)
+    : aggregate(rows, w.agg, w.field, data.fieldMap);
+  const pointDiff =
+    w.agg === 'rate' || (w.agg === 'metric' && field?.metric?.unit !== 'ratio');
   const spark = useMemo(() => {
     const df = data.fieldMap.get(data.source.dateField);
+    if (res) return res.spark ?? [];
     if (!w.showSparkline || !df) return [];
     return groupRows(rows, df, data.autoBucket)
       .slice(-24)
       .map((g) => aggregate(g.rows, w.agg, w.field, data.fieldMap));
   }, [
     rows,
+    res,
     w.showSparkline,
     w.agg,
     w.field,
@@ -4322,21 +6423,27 @@ const KpiView: React.FC<{ w: KpiWidget; data: DataCtx }> = ({ w, data }) => {
   ]);
 
   let delta: number | null = null;
-  if (w.showTrend && data.compare && data.prevRows) {
+  if (res && w.showTrend && data.compare && res.prev) {
+    const pv = res.prev[0] ?? 0;
+    delta = pointDiff
+      ? value - pv
+      : pv === 0
+        ? null
+        : ((value - pv) / Math.abs(pv)) * 100;
+  } else if (!res && w.showTrend && data.compare && data.prevRows) {
     const pv = aggregate(
       applyFilters(data.prevRows, w.filters, data.fieldMap),
       w.agg,
       w.field,
       data.fieldMap
     );
-    delta =
-      w.agg === 'rate'
-        ? data.prevRows.length
-          ? value - pv
-          : null
-        : pv === 0
-          ? null
-          : ((value - pv) / Math.abs(pv)) * 100;
+    delta = pointDiff
+      ? data.prevRows.length
+        ? value - pv
+        : null
+      : pv === 0
+        ? null
+        : ((value - pv) / Math.abs(pv)) * 100;
   }
   const good =
     delta === null || delta === 0 ? null : delta < 0 === w.lowerIsBetter;
@@ -4348,6 +6455,20 @@ const KpiView: React.FC<{ w: KpiWidget; data: DataCtx }> = ({ w, data }) => {
       ? value <= w.target
       : value >= w.target
     : null;
+  const withinWarn =
+    w.warn === undefined
+      ? null
+      : w.lowerIsBetter
+        ? value <= w.warn
+        : value >= w.warn;
+  // Status is conveyed by text as well as colour.
+  const rag: [string, string] = onTarget
+    ? ['#059669', 'On target']
+    : withinWarn === null
+      ? ['#d97706', 'Off target']
+      : withinWarn
+        ? ['#d97706', 'Warning']
+        : ['#dc2626', 'Breach'];
   return (
     <div
       className={`rb-avoid h-full rounded-xl border p-3 ${tone.card[t.dark ? 1 : 0]}`}
@@ -4395,8 +6516,8 @@ const KpiView: React.FC<{ w: KpiWidget; data: DataCtx }> = ({ w, data }) => {
                     className={`font-semibold ${good === null ? '' : good ? 'text-emerald-600' : 'text-red-600'}`}
                   >
                     {delta > 0 ? '▲' : delta < 0 ? '▼' : '→'}{' '}
-                    {Math.abs(delta).toFixed(w.agg === 'rate' ? 1 : 0)}
-                    {w.agg === 'rate' ? ' pts' : '%'}
+                    {Math.abs(delta).toFixed(pointDiff ? 1 : 0)}
+                    {pointDiff ? ' pts' : '%'}
                   </span>{' '}
                   vs. prior
                 </>
@@ -4415,13 +6536,12 @@ const KpiView: React.FC<{ w: KpiWidget; data: DataCtx }> = ({ w, data }) => {
               className="h-full rounded-full"
               style={{
                 width: `${pct}%`,
-                background: onTarget ? '#059669' : '#d97706',
+                background: rag[0],
               }}
             />
           </div>
           <div className={`mt-1 text-[11px] ${t.muted}`}>
-            {onTarget ? 'On target' : 'Off target'}:{' '}
-            {fmtMeasure(w.target, w.agg, field, data.currency, mode)}
+            {rag[1]}: {fmtMeasure(w.target, w.agg, field, data.currency, mode)}
           </div>
         </div>
       )}
@@ -4436,9 +6556,15 @@ const ChartView: React.FC<{ w: ChartWidget; data: DataCtx }> = ({
   w,
   data,
 }) => {
+  const t = useT();
+  const res = data.mode === 'final' ? data.results?.[w.id] : undefined;
+  // The widget that emitted the cross-filter keeps its full data (it filters the others, not itself).
+  const isSource =
+    !!data.xf && w.chartType !== 'scatter' && w.groupBy === data.xf.field;
+  const baseRows = isSource ? data.fullRows : data.rows;
   const rows = useMemo(
-    () => applyFilters(data.rows, w.filters, data.fieldMap),
-    [data.rows, w.filters, data.fieldMap]
+    () => applyFilters(baseRows, w.filters, data.fieldMap),
+    [baseRows, w.filters, data.fieldMap]
   );
   const measure = w.field ? data.fieldMap.get(w.field) : undefined;
   const fmt = (v: number) => fmtMeasure(v, w.agg, measure, data.currency);
@@ -4450,23 +6576,39 @@ const ChartView: React.FC<{ w: ChartWidget; data: DataCtx }> = ({
     () =>
       w.chartType === 'scatter'
         ? null
-        : buildSeries(
-            rows,
-            {
-              groupBy: w.groupBy,
-              breakBy: single ? undefined : w.breakBy,
-              bucket: w.bucket,
-              topN: w.topN,
-              agg: w.agg,
-              field: w.field,
-              sort: w.sort,
-              others: w.others,
-            },
-            data.fieldMap,
-            data.autoBucket
-          ),
+        : res && res.shape === 'grouped'
+          ? seriesFromGrouped(
+              res,
+              data.fieldMap.get(w.groupBy) ??
+                ({
+                  key: w.groupBy,
+                  label: w.groupBy,
+                  type: 'category',
+                  group: '',
+                } as FieldDef),
+              single || !w.breakBy ? undefined : data.fieldMap.get(w.breakBy),
+              w.agg === 'count' || !w.field
+                ? 'Count'
+                : `${aggLabel(w.agg)} of ${(data.fieldMap.get(w.field)?.label ?? w.field).toLowerCase()}`
+            )
+          : buildSeries(
+              rows,
+              {
+                groupBy: w.groupBy,
+                breakBy: single ? undefined : w.breakBy,
+                bucket: w.bucket,
+                topN: w.topN,
+                agg: w.agg,
+                field: w.field,
+                sort: w.sort,
+                others: w.others,
+              },
+              data.fieldMap,
+              data.autoBucket
+            ),
     [
       rows,
+      res,
       w.chartType,
       w.groupBy,
       w.breakBy,
@@ -4484,28 +6626,44 @@ const ChartView: React.FC<{ w: ChartWidget; data: DataCtx }> = ({
   const scatter = useMemo(() => {
     if (w.chartType !== 'scatter' || !w.xField || !w.field) return null;
     const bf = w.breakBy ? data.fieldMap.get(w.breakBy) : undefined;
+    if (res && res.shape === 'points') {
+      const cats = res.categories.length ? res.categories : ['All'];
+      return {
+        pts: res.points.map((q) => ({
+          x: q.x,
+          y: q.y,
+          c: Math.max(0, q.c ? cats.indexOf(q.c) : 0),
+        })),
+        cats,
+        bf,
+        sampled: res.sampled,
+      };
+    }
     const cats = bf
       ? groupRows(rows, bf, 'month')
           .slice(0, 6)
           .map((g) => g.key)
       : ['All'];
+    const stride = Math.max(1, Math.ceil(rows.length / 400));
     const pts = rows
-      .slice(0, 400)
+      .filter((_, i) => i % stride === 0)
       .map((r) => ({
         x: Number(r[w.xField!]),
         y: Number(r[w.field!]),
         c: bf ? Math.max(0, cats.indexOf(cellKey(bf, r))) : 0,
       }))
       .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-    return { pts, cats, bf };
-  }, [rows, w.chartType, w.xField, w.field, w.breakBy, data.fieldMap]);
+    return { pts, cats, bf, sampled: stride > 1 ? stride : 0 };
+  }, [rows, res, w.chartType, w.xField, w.field, w.breakBy, data.fieldMap]);
 
   const H = H_PX[w.height];
   const pick =
     data.onPick && sd && !sd.isDate
       ? (i: number) => {
           const k = sd.keys[i];
-          if (k !== '__others') data.onPick!(sd.groupField.key, k);
+          if (k === '__others') return;
+          if (data.drillClick?.(w, k)) return;
+          data.onPick!(sd.groupField.key, k);
         }
       : undefined;
   const total = sd?.grand ?? 0;
@@ -4517,6 +6675,18 @@ const ChartView: React.FC<{ w: ChartWidget; data: DataCtx }> = ({
   const nameColors = sd
     ? sd.names.map((n, i) => colorFor(sd.breakField, n, i, data.colors))
     : data.colors;
+
+  const notes: string[] = [];
+  if (sd && sd.hidden > 0)
+    notes.push(
+      `Showing ${sd.shownGroups} of ${sd.shownGroups + sd.hidden} groups; totals cover the groups shown.`
+    );
+  if (sd && sd.hiddenSeries > 0)
+    notes.push(`${sd.hiddenSeries} smaller series not shown.`);
+  if (scatter && scatter.sampled)
+    notes.push(`Sampled: 1 in ${scatter.sampled} records plotted.`);
+  if (isSource && data.xf)
+    notes.push(`Filtering other widgets by ${data.xf.value}.`);
 
   let body: React.ReactNode;
   if (w.chartType === 'scatter') {
@@ -4547,8 +6717,9 @@ const ChartView: React.FC<{ w: ChartWidget; data: DataCtx }> = ({
         pie={w.chartType === 'pie'}
         showLegend={w.showLegend}
         showLabels={w.showLabels}
-        showPercentage={w.showPercentage}
+        showPercentage={w.showPercentage && ADDITIVE.includes(w.agg)}
         centerText={fmt(total)}
+        centerLabel={sd.hidden > 0 ? 'Shown' : 'Total'}
         fmt={fmt}
         onPick={pick}
       />
@@ -4608,6 +6779,9 @@ const ChartView: React.FC<{ w: ChartWidget; data: DataCtx }> = ({
   return (
     <WidgetCard w={w} data={data}>
       {body}
+      {notes.length > 0 && (
+        <p className={`mt-2 text-[11px] ${t.muted}`}>{notes.join(' ')}</p>
+      )}
     </WidgetCard>
   );
 };
@@ -4617,6 +6791,10 @@ const TableView: React.FC<{ w: TableWidget; data: DataCtx }> = ({
   data,
 }) => {
   const t = useT();
+  const res =
+    data.mode === 'final'
+      ? (data.results?.[w.id] as RecordsResult | undefined)
+      : undefined;
   const rows = useMemo(
     () => applyFilters(data.rows, w.filters, data.fieldMap),
     [data.rows, w.filters, data.fieldMap]
@@ -4626,6 +6804,7 @@ const TableView: React.FC<{ w: TableWidget; data: DataCtx }> = ({
     .filter((x): x is FieldDef => !!x);
   const sortField = w.sortBy ? data.fieldMap.get(w.sortBy) : undefined;
   const shown = useMemo(() => {
+    if (res) return res.rows; // already sorted + limited by the server
     let s = rows;
     if (sortField) {
       const dir = w.sortDir === 'asc' ? 1 : -1;
@@ -4635,7 +6814,7 @@ const TableView: React.FC<{ w: TableWidget; data: DataCtx }> = ({
       );
     }
     return s.slice(0, w.limit);
-  }, [rows, sortField, w.sortDir, w.limit]);
+  }, [rows, res, sortField, w.sortDir, w.limit]);
   const maxes = useMemo(() => {
     const m: Record<string, number> = {};
     cols.forEach((c) => {
@@ -4774,6 +6953,19 @@ const InsightView: React.FC<{ w: InsightWidget; data: DataCtx }> = ({
 }) => {
   const t = useT();
   const items = useMemo(() => {
+    if (data.mode === 'final')
+      return buildInsights(
+        [],
+        null,
+        w,
+        data.fieldMap,
+        data.autoBucket,
+        data.currency,
+        insightAggFrom(
+          data.results?.[w.id] as GroupedResult | undefined,
+          data.results?.[`${w.id}#total`] as ScalarResult | undefined
+        )
+      );
     const rows = applyFilters(data.rows, w.filters, data.fieldMap);
     const prev =
       data.compare && data.prevRows
@@ -4805,10 +6997,79 @@ const InsightView: React.FC<{ w: InsightWidget; data: DataCtx }> = ({
   );
 };
 
+/**
+ * Renders a registry widget. It never touches raw rows: it asks its descriptor which queries it needs and renders
+ * their results. PREVIEW: queries run locally over the sample. FINAL: results come from the backend run.
+ */
+const RegistryWidgetHost: React.FC<{ w: ExtWidget; data: DataCtx }> = ({
+  w,
+  data,
+}) => {
+  const d = getWidget(w.kind);
+  const specs = useMemo(
+    () =>
+      d
+        ? d.requirements(w as unknown as RegistryWidget, {
+            source: data.source as unknown as SourceInfo,
+            fieldMap: data.fieldMap as unknown as Map<string, FieldInfo>,
+            period: data.env.period,
+            autoBucket: data.autoBucket,
+          })
+        : [],
+    [d, w, data.source, data.fieldMap, data.env.period, data.autoBucket]
+  );
+  const results = useMemo(() => {
+    const out: Record<string, QueryResult | undefined> = {};
+    for (const s of specs)
+      out[s.suffix ?? ''] =
+        data.mode === 'final'
+          ? data.results?.[resultKey(w.id, s.suffix)]
+          : data.previewExec?.(s, w);
+    return out;
+  }, [specs, data.mode, data.results, data.previewExec, data.previewTick, w]);
+  if (!d?.render)
+    return (
+      <ResultGap
+        w={w}
+        data={{
+          ...data,
+          failed: { [w.id]: `Widget type "${w.kind}" is not installed.` },
+        }}
+      />
+    );
+  const err =
+    data.failed?.[w.id] ??
+    specs.map((s) => data.failed?.[resultKey(w.id, s.suffix)]).find(Boolean);
+  const ready = specs.every((s) => results[s.suffix ?? '']);
+  const status: ResultStatus = err ? 'error' : ready ? 'ok' : 'loading';
+  const Render = d.render;
+  return (
+    <WidgetCard w={w} data={data}>
+      <Render
+        widget={w as unknown as RegistryWidget}
+        results={results}
+        status={status}
+        error={err}
+        env={data.env}
+      />
+    </WidgetCard>
+  );
+};
+
+/** Original kinds that are rendered from a single result keyed by widget id. */
+const RESULT_BACKED = new Set(['kpi', 'chart', 'table', 'insight']);
+
 const WidgetView: React.FC<{ widget: Widget; data: DataCtx }> = ({
   widget,
   data,
 }) => {
+  // Structural guarantee: the ACTUAL report can never be drawn from the preview sample.
+  if (
+    data.mode === 'final' &&
+    RESULT_BACKED.has(widget.kind) &&
+    !data.results?.[widget.id]
+  )
+    return <ResultGap w={widget} data={data} />;
   switch (widget.kind) {
     case 'kpi':
       return <KpiView w={widget} data={data} />;
@@ -4820,6 +7081,8 @@ const WidgetView: React.FC<{ widget: Widget; data: DataCtx }> = ({
       return <TextView w={widget} data={data} />;
     case 'insight':
       return <InsightView w={widget} data={data} />;
+    default:
+      return <RegistryWidgetHost w={widget} data={data} />;
   }
 };
 
@@ -4898,11 +7161,56 @@ const WIDGET_LIBRARY: {
   },
 ];
 
+const LEGACY_KINDS = new Set(['kpi', 'chart', 'table', 'text', 'insight']);
+/** Registry widgets grouped by category (Executive, Fraud & risk, Analytical...). */
+const RegistryPalette: React.FC<{
+  capabilities: ReportDataProvider['capabilities'];
+  onAdd: (kind: string) => void;
+  compact?: boolean;
+}> = ({ capabilities, onAdd }) => {
+  const t = useT();
+  const groups = (Object.keys(CATEGORY_LABEL) as WidgetCategory[])
+    .map((c) => ({
+      c,
+      items: listWidgets({ category: c, capabilities }).filter(
+        (d) => !LEGACY_KINDS.has(d.kind) && d.maturity !== 'planned'
+      ),
+    }))
+    .filter((g) => g.items.length);
+  return (
+    <div className="space-y-3">
+      {groups.map((g) => (
+        <section key={g.c} aria-label={CATEGORY_LABEL[g.c]}>
+          <h3
+            className={`px-1 pb-1 text-[10px] font-bold uppercase tracking-wider ${t.muted}`}
+          >
+            {CATEGORY_LABEL[g.c]}
+          </h3>
+          <div className="grid grid-cols-2 gap-1.5">
+            {g.items.map((d) => (
+              <button
+                key={d.kind}
+                type="button"
+                onClick={() => onAdd(d.kind)}
+                title={d.hint}
+                className={`flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2.5 text-center text-[11px] font-medium transition-colors ${t.btn} ${FOCUS}`}
+              >
+                <d.icon className="h-[18px] w-[18px] text-blue-600" />
+                {d.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+};
+
 const WidgetMenu: React.FC<{
   onPick: (id: string) => void;
   close: () => void;
 }> = ({ onPick, close }) => (
-  <div className="grid grid-cols-1 gap-0.5">
+  <div className="grid max-h-[60vh] grid-cols-1 gap-0.5 overflow-y-auto">
     {WIDGET_LIBRARY.map((x) => (
       <MenuItem
         key={x.id}
@@ -4916,6 +7224,21 @@ const WidgetMenu: React.FC<{
         {x.label}
       </MenuItem>
     ))}
+    {listWidgets()
+      .filter((d) => !LEGACY_KINDS.has(d.kind) && d.maturity !== 'planned')
+      .map((d) => (
+        <MenuItem
+          key={d.kind}
+          icon={<d.icon className="h-4 w-4" />}
+          hint={d.hint}
+          onClick={() => {
+            onPick(`ext:${d.kind}`);
+            close();
+          }}
+        >
+          {d.label}
+        </MenuItem>
+      ))}
   </div>
 );
 
@@ -5028,9 +7351,12 @@ const Canvas: React.FC<{
               }
             }}
             tabIndex={readOnly ? -1 : 0}
-            role={readOnly ? undefined : 'button'}
-            aria-label={readOnly ? undefined : `Select widget ${w.title}`}
-            aria-pressed={readOnly ? undefined : selected}
+            role={readOnly ? undefined : 'group'}
+            aria-roledescription={readOnly ? undefined : 'selectable widget'}
+            aria-label={
+              readOnly ? undefined : `${w.title}. Press Enter to select.`
+            }
+            aria-current={readOnly ? undefined : selected ? 'true' : undefined}
           >
             <WidgetView widget={w} data={data} />
             {selected && (
@@ -5127,41 +7453,48 @@ const Canvas: React.FC<{
 /* ==========================================================================
  * Report header (paper) + filter chips
  * ======================================================================== */
+/** Human-readable value of a filter rule ('in' and 'between' are stored encoded). */
+const ruleValueLabel = (r: FilterRule): string =>
+  r.op === 'in'
+    ? inValues(r.value).join(', ')
+    : r.op === 'between'
+      ? r.value.replace('|', ' – ')
+      : r.value;
+const ruleLabel = (r: FilterRule, fm: Map<string, FieldDef>) =>
+  `${fm.get(r.field)?.label ?? r.field} ${OP_LABEL[r.op]} ${ruleValueLabel(r)}`;
+
 function describeFilters(
   def: ReportDefinition,
   fieldMap: Map<string, FieldDef>
 ): string {
   const parts = [
-    def.dateRange === 'custom' && def.customFrom && def.customTo
-      ? `${fmtDate(def.customFrom)} to ${fmtDate(def.customTo)}`
-      : RANGE_LABEL[def.dateRange],
+    def.period.preset === 'custom' && def.period.from && def.period.to
+      ? `${fmtDate(def.period.from)} to ${fmtDate(def.period.to)}`
+      : PRESET_LABEL[def.period.preset],
   ];
   def.filters
     .filter((r) => r.field && r.value !== '')
-    .forEach((r) =>
-      parts.push(
-        `${fieldMap.get(r.field)?.label ?? r.field} ${OP_LABEL[r.op]} ${r.value}`
-      )
-    );
+    .forEach((r) => parts.push(ruleLabel(r, fieldMap)));
   return parts.join(' · ');
 }
 
-
-  const formatDate = (date: Date): string => {
-    // 1. Get the date parts (dd-MMM-yyyy)
-    const dateOptions: Intl.DateTimeFormatOptions = {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-    };
-    // Replace spaces with dashes
-    const datePart = date.toLocaleDateString('en-GB', dateOptions).replace(/ /g, '-');
-
-    // 2. Get the time parts (HH:mm:ss) in 24-hour format
-    const timePart = date.toLocaleTimeString('en-GB', { hour12: false });
-
-    return `${datePart} ${timePart}`;
+const formatDate = (date: Date): string => {
+  // 1. Get the date parts (dd-MMM-yyyy)
+  const dateOptions: Intl.DateTimeFormatOptions = {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
   };
+  // Replace spaces with dashes
+  const datePart = date
+    .toLocaleDateString('en-GB', dateOptions)
+    .replace(/ /g, '-');
+
+  // 2. Get the time parts (HH:mm:ss) in 24-hour format
+  const timePart = date.toLocaleTimeString('en-GB', { hour12: false });
+
+  return `${datePart} ${timePart}`;
+};
 
 const ReportPaper: React.FC<{
   def: ReportDefinition;
@@ -5171,37 +7504,112 @@ const ReportPaper: React.FC<{
   user: string;
   children: React.ReactNode;
   id?: string;
-}> = ({ def, source, fieldMap, recordCount, user, children, id }) => {
+  /** 'preview' = design sample (clearly marked); 'final' = generated report with run metadata. */
+  mode?: 'preview' | 'final';
+  meta?: ReportRunMetadata;
+}> = ({
+  def,
+  source,
+  fieldMap,
+  recordCount,
+  user,
+  children,
+  id,
+  mode = 'preview',
+  meta,
+}) => {
   const t = useT();
   const cls = CLASSIFICATION[def.classification];
+  const pres = def.presentation ?? DEFAULT_PRESENTATION;
+  const accent = pres.accent || '#2563eb';
   return (
     <div id={id} className={`rounded-xl border p-4 ${t.card}`}>
-      <header className={`mb-3 border-b pb-3 ${t.lineStrong}`}>
+      <header
+        className={`mb-3 border-b-2 pb-3 ${t.lineStrong}`}
+        style={{ borderBottomColor: accent }}
+      >
+        {(pres.brandName || pres.headerText) && (
+          <div
+            className={`mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.14em] ${t.muted}`}
+          >
+            <span style={{ color: accent }}>{pres.brandName}</span>
+            <span>{pres.headerText}</span>
+          </div>
+        )}
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2
-              className={`truncate text-xl font-bold tracking-tight ${t.text}`}
-            >
+            <h2 className={`text-xl font-bold tracking-tight ${t.text}`}>
               {def.name || 'Untitled report'}
             </h2>
+            {pres.subtitle && (
+              <p className={`mt-0.5 text-sm font-medium ${t.body}`}>
+                {pres.subtitle}
+              </p>
+            )}
             {def.description && (
               <p className={`mt-0.5 text-xs ${t.muted}`}>{def.description}</p>
             )}
           </div>
-          {def.classification !== 'none' && (
-            <span className="flex shrink-0 items-center gap-1">
-              <Lock className="h-3 w-3 text-amber-600" />
-              <Badge value={cls.label} tone={cls.tone} />
-            </span>
-          )}
+          <span className="flex shrink-0 flex-col items-end gap-1">
+            {def.classification !== 'none' && (
+              <span className="flex items-center gap-1">
+                <Lock className="h-3 w-3 text-amber-600" />
+                <Badge value={cls.label} tone={cls.tone} />
+              </span>
+            )}
+            {mode === 'preview' ? (
+              <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+                Preview · sample data
+              </span>
+            ) : (
+              <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+                Actual data
+              </span>
+            )}
+          </span>
         </div>
-        <p className={`mt-1.5 text-[11px] ${t.muted}`}>
-          {source.name} · {describeFilters(def, fieldMap)} ·{' '}
-          {recordCount.toLocaleString()} records · Prepared by {user} on{' '}
-          {formatDate(new Date())}
-        </p>
+        {mode === 'final' && meta ? (
+          <p className={`mt-1.5 text-[11px] ${t.muted}`}>
+            Reporting period: <strong>{describePeriod(meta.period)}</strong>
+            {meta.comparePeriod && (
+              <> (compared with {describePeriod(meta.comparePeriod)})</>
+            )}{' '}
+            · {meta.sourceName}
+            {meta.filters.length > 0 && (
+              <> · {meta.filters.join(' · ')}</>
+            )} ·{' '}
+            {meta.recordsMatched === null
+              ? '—'
+              : meta.recordsMatched.toLocaleString()}{' '}
+            records · Generated {formatDate(new Date(meta.generatedAt))} by{' '}
+            {meta.generatedBy} ({meta.timezone})
+            {meta.dataAsOf && (
+              <> · Data as of {formatDate(new Date(meta.dataAsOf))}</>
+            )}
+          </p>
+        ) : (
+          <p className={`mt-1.5 text-[11px] ${t.muted}`}>
+            {source.name} · {describeFilters(def, fieldMap)} ·{' '}
+            {recordCount.toLocaleString()} preview records (sample, not the
+            reporting period) · {user}
+          </p>
+        )}
       </header>
       {children}
+      {(pres.footerText || pres.showPageNumbers || mode === 'final') && (
+        <footer
+          className={`mt-3 flex items-center justify-between border-t pt-2 text-[10px] ${t.lineStrong} ${t.muted}`}
+        >
+          <span>
+            {pres.footerText}
+            {def.classification !== 'none' ? ` · ${cls.label}` : ''}
+          </span>
+          <span>
+            {mode === 'final' && meta ? `Run ${meta.runId.slice(0, 8)} · ` : ''}
+            {pres.showPageNumbers ? 'Page numbers added on print / PDF' : ''}
+          </span>
+        </footer>
+      )}
     </div>
   );
 };
@@ -5210,6 +7618,60 @@ const ReportPaper: React.FC<{
  * Filter editor
  * ======================================================================== */
 const BOOL_OPTIONS = ['Yes', 'No', 'Unknown'];
+
+/** Searchable multi-select with checkboxes (filter operator "is any of"). */
+const MultiPick: React.FC<{
+  options: string[];
+  value: string[];
+  onChange: (v: string[]) => void;
+}> = ({ options, value, onChange }) => {
+  const t = useT();
+  const [q, setQ] = useState('');
+  const shown = options.filter((o) =>
+    o.toLowerCase().includes(q.toLowerCase())
+  );
+  return (
+    <div className="space-y-1">
+      <TextInput
+        aria-label="Search values"
+        placeholder={`Search ${options.length} values…`}
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      <div
+        role="group"
+        aria-label="Values"
+        className={`max-h-32 overflow-y-auto rounded-lg border p-1 ${t.lineStrong}`}
+      >
+        {shown.length === 0 && (
+          <p className={`px-1.5 py-1 text-xs ${t.muted}`}>No matches.</p>
+        )}
+        {shown.map((o) => (
+          <label
+            key={o}
+            className={`flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs ${t.body} ${t.hover}`}
+          >
+            <input
+              type="checkbox"
+              checked={value.includes(o)}
+              onChange={(e) =>
+                onChange(
+                  e.target.checked
+                    ? [...value, o]
+                    : value.filter((x) => x !== o)
+                )
+              }
+            />
+            {o}
+          </label>
+        ))}
+      </div>
+      {value.length > 0 && (
+        <p className={`text-[11px] ${t.muted}`}>{value.length} selected</p>
+      )}
+    </div>
+  );
+};
 
 const FilterEditor: React.FC<{
   fields: FieldDef[];
@@ -5284,9 +7746,41 @@ const FilterEditor: React.FC<{
                   value: o,
                   label: OP_LABEL[o],
                 }))}
-                onChange={(v) => patch(r.id, { op: v as FilterOp })}
+                onChange={(v) => patch(r.id, { op: v as FilterOp, value: '' })}
               />
-              {fd.type === 'category' || fd.type === 'boolean' ? (
+              {r.op === 'in' ? (
+                <MultiPick
+                  options={optionsFor(fd)}
+                  value={inValues(r.value)}
+                  onChange={(vs) =>
+                    patch(r.id, { value: vs.length ? JSON.stringify(vs) : '' })
+                  }
+                />
+              ) : r.op === 'between' ? (
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[0, 1].map((i) => (
+                    <TextInput
+                      key={i}
+                      aria-label={i === 0 ? 'From' : 'To'}
+                      placeholder={i === 0 ? 'From' : 'To'}
+                      type={isDateType(fd.type) ? 'date' : 'number'}
+                      step={isNumeric(fd.type) ? 'any' : undefined}
+                      value={r.value.split('|')[i] ?? ''}
+                      onChange={(e) => {
+                        const parts = [
+                          r.value.split('|')[0] ?? '',
+                          r.value.split('|')[1] ?? '',
+                        ];
+                        parts[i] = e.target.value;
+                        patch(r.id, {
+                          value: parts[0] || parts[1] ? parts.join('|') : '',
+                        });
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : (fd.type === 'category' && !fd.valuesTruncated) ||
+                fd.type === 'boolean' ? (
                 <Select
                   label="Value"
                   value={r.value}
@@ -5435,6 +7929,7 @@ const FieldsPanel: React.FC<{
   onSetAll: (keys: string[]) => void;
   onAdd: (field: FieldDef) => void;
   onCustom: (editKey?: string) => void;
+  onMetric: () => void;
 }> = ({
   fields,
   resetKey,
@@ -5445,6 +7940,7 @@ const FieldsPanel: React.FC<{
   onSetAll,
   onAdd,
   onCustom,
+  onMetric,
 }) => {
   const t = useT();
   const [q, setQ] = useState('');
@@ -5499,6 +7995,13 @@ const FieldsPanel: React.FC<{
           className={`flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed py-1.5 text-xs font-medium text-blue-600 hover:border-blue-400 ${t.lineStrong} ${FOCUS}`}
         >
           <Sparkles className="h-3.5 w-3.5" /> New custom field
+        </button>
+        <button
+          type="button"
+          onClick={onMetric}
+          className={`flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed py-1.5 text-xs font-medium text-blue-600 hover:border-blue-400 ${t.lineStrong} ${FOCUS}`}
+        >
+          <Hash className="h-3.5 w-3.5" /> Calculated metrics (rates, ratios)
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -5718,6 +8221,7 @@ const CustomFieldsModal: React.FC<{
   onRemove: (id: string) => void;
 }> = ({ open, editKey, fields, derived, rows, onClose, onSave, onRemove }) => {
   const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
   const [draft, setDraft] = useState<DerivedField | null>(null);
   const [edgesText, setEdgesText] = useState('');
 
@@ -6148,6 +8652,8 @@ const CustomFieldsModal: React.FC<{
         role="dialog"
         aria-modal="true"
         aria-label="Custom fields"
+        ref={trapRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={`flex h-[min(780px,92vh)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
       >
@@ -6376,6 +8882,493 @@ const CustomFieldsModal: React.FC<{
 
 const x_ok = (n: number) => Number.isFinite(n);
 
+/** Keeps Tab inside a dialog, moves focus in on open and restores it on close. */
+function useFocusTrap<T extends HTMLElement>(active: boolean) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (!active) return;
+    const prev = document.activeElement as HTMLElement | null;
+    const el = ref.current;
+    const sel =
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+    window.setTimeout(
+      () => (el?.querySelector<HTMLElement>(sel) ?? el)?.focus(),
+      0
+    );
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !el) return;
+      const items = [...el.querySelectorAll<HTMLElement>(sel)];
+      if (items.length === 0) return;
+      const first = items[0],
+        last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      prev?.focus?.();
+    };
+  }, [active]);
+  return ref;
+}
+
+/* ==========================================================================
+ * Calculated metrics: ratio of aggregates (Fraud rate, False-positive ratio, Recovery rate, bps ...)
+ * ======================================================================== */
+const metricField = (m: CalculatedMetric): FieldDef => ({
+  key: m.key,
+  label: m.label,
+  type: 'number',
+  group: 'Metrics',
+  metric: m,
+  scale: 2,
+});
+const SIDE_AGGS: SimpleAgg[] = [
+  'count',
+  'sum',
+  'avg',
+  'min',
+  'max',
+  'distinct',
+];
+const UNIT_LABEL: Record<CalculatedMetric['unit'], string> = {
+  pct: 'Percentage (%)',
+  bps: 'Basis points (bps)',
+  ratio: 'Ratio (×)',
+};
+const blankMetric = (): CalculatedMetric => ({
+  id: uid(),
+  key: '',
+  label: 'New metric',
+  unit: 'pct',
+  numerator: { agg: 'count', where: [] },
+  denominator: { agg: 'count', where: [] },
+});
+const sideText = (s: MetricSide, fm: Map<string, FieldDef>) => {
+  const f = s.field ? fm.get(s.field)?.label : undefined;
+  const w = activeRules(s.where).length;
+  return `${aggLabel(s.agg)}${f ? ` of ${f.toLowerCase()}` : ''}${w ? ` where ${w} condition${w > 1 ? 's' : ''} match` : ''}`;
+};
+const metricValid = (m: CalculatedMetric) => {
+  if (!m.label.trim()) return false;
+  if (m.formula) {
+    const parsed = parseFormula(m.formula.expression);
+    return (
+      parsed.ok &&
+      parsed.refs.every((r) => {
+        const s = m.formula!.terms[r];
+        return !!s && (s.agg === 'count' || !!s.field);
+      })
+    );
+  }
+  return [m.numerator, m.denominator].every(
+    (s) => s.agg === 'count' || !!s.field
+  );
+};
+
+const MetricModal: React.FC<{
+  open: boolean;
+  fields: FieldDef[];
+  fieldMap: Map<string, FieldDef>;
+  certified: CalculatedMetric[];
+  mine: CalculatedMetric[];
+  rows: Row[];
+  onClose: () => void;
+  onSave: (m: CalculatedMetric) => void;
+  onRemove: (id: string) => void;
+}> = ({
+  open,
+  fields,
+  fieldMap,
+  certified,
+  mine,
+  rows,
+  onClose,
+  onSave,
+  onRemove,
+}) => {
+  const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
+  const [draft, setDraft] = useState<CalculatedMetric | null>(null);
+  useEffect(() => {
+    if (open) setDraft(blankMetric());
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [open, onClose]);
+
+  const nums = fields.filter((x) => isNumeric(x.type));
+  const preview = useMemo(() => {
+    if (!draft || !metricValid(draft)) return null;
+    const key = draft.key || '__preview';
+    const fm = new Map(fieldMap);
+    fm.set(key, metricField({ ...draft, key }));
+    return {
+      text: fmtMeasure(
+        aggregate(rows, 'metric', key, fm),
+        'metric',
+        fm.get(key),
+        'AED'
+      ),
+      den: aggregate(
+        applyFilters(rows, draft.denominator.where, fm),
+        draft.denominator.agg,
+        draft.denominator.field,
+        fm
+      ),
+    };
+  }, [draft, rows, fieldMap]);
+  if (!open) return null;
+
+  const set = (p: Partial<CalculatedMetric>) =>
+    setDraft((d) => (d ? { ...d, ...p } : d));
+  const side = (
+    title: string,
+    s: MetricSide,
+    change: (s: MetricSide) => void
+  ) => (
+    <div className={`space-y-2 rounded-lg border p-2.5 ${t.inset}`}>
+      <div className={`text-xs font-semibold ${t.text}`}>{title}</div>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Value">
+          <Select
+            value={s.agg}
+            options={SIDE_AGGS.map((a) => ({ value: a, label: aggLabel(a) }))}
+            onChange={(v) => {
+              const a = v as SimpleAgg;
+              const pool = a === 'distinct' ? fields : nums;
+              change({
+                ...s,
+                agg: a,
+                field:
+                  a === 'count'
+                    ? undefined
+                    : pool.some((x) => x.key === s.field)
+                      ? s.field
+                      : pool[0]?.key,
+              });
+            }}
+          />
+        </Field>
+        {s.agg !== 'count' ? (
+          <Field label="Field">
+            <Select
+              value={s.field ?? ''}
+              options={(s.agg === 'distinct' ? fields : nums).map((x) => ({
+                value: x.key,
+                label: x.label,
+              }))}
+              onChange={(v) => change({ ...s, field: v })}
+            />
+          </Field>
+        ) : (
+          <span />
+        )}
+      </div>
+      <div className={`text-[11px] font-semibold ${t.muted}`}>
+        Only include records where all of these match
+      </div>
+      <FilterEditor
+        fields={fields}
+        rules={s.where}
+        allRows={rows}
+        onChange={(where) => change({ ...s, where })}
+      />
+    </div>
+  );
+
+  const listItem = (m: CalculatedMetric, editable: boolean) => (
+    <li
+      key={m.id}
+      className={`flex items-center gap-1 rounded-lg border px-2 py-1.5 ${draft?.id === m.id ? t.selected : t.lineStrong}`}
+    >
+      <button
+        type="button"
+        onClick={() =>
+          setDraft(
+            editable
+              ? JSON.parse(JSON.stringify(m))
+              : {
+                  ...JSON.parse(JSON.stringify(m)),
+                  id: uid(),
+                  key: '',
+                  certified: false,
+                  label: `${m.label} (copy)`,
+                }
+          )
+        }
+        title={
+          editable ? 'Edit' : 'Certified: click to start a copy you can change'
+        }
+        className={`min-w-0 flex-1 text-left ${FOCUS}`}
+      >
+        <span className={`block truncate text-[13px] font-medium ${t.text}`}>
+          {m.label}
+        </span>
+        <span className={`block truncate text-[10px] ${t.muted}`}>
+          {m.certified ? 'Certified · ' : ''}
+          {m.description ?? UNIT_LABEL[m.unit]}
+        </span>
+      </button>
+      {editable && (
+        <IconButton
+          label={`Delete ${m.label}`}
+          onClick={() => {
+            if (
+              window.confirm(
+                `Delete "${m.label}"? Widgets using it fall back to a count.`
+              )
+            )
+              onRemove(m.id);
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </IconButton>
+      )}
+    </li>
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Calculated metrics"
+        ref={trapRef}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className={`flex h-[min(760px,92vh)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
+      >
+        <div
+          className={`flex items-center justify-between border-b px-4 py-3 ${t.lineStrong}`}
+        >
+          <div>
+            <h2
+              className={`flex items-center gap-2 text-sm font-semibold ${t.text}`}
+            >
+              <Hash className="h-4 w-4 text-blue-600" /> Calculated metrics
+            </h2>
+            <p className={`text-[11px] ${t.muted}`}>
+              A metric is one total divided by another (e.g. false-positive
+              alerts ÷ all alerts). It stays correct for any chart grouping,
+              unlike averaging a per-row percentage. Use it from any KPI, chart
+              or insight via Value → Calculated metric.
+            </p>
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+        <div className="grid min-h-0 flex-1 md:grid-cols-[250px_minmax(0,1fr)]">
+          <div
+            className={`min-h-0 space-y-3 overflow-y-auto border-b p-3 md:border-b-0 md:border-r ${t.lineStrong}`}
+          >
+            <GhostButton
+              onClick={() => setDraft(blankMetric())}
+              icon={<Plus className="h-3.5 w-3.5" />}
+            >
+              New metric
+            </GhostButton>
+            <div>
+              <div className={`mb-1 text-[11px] font-semibold ${t.muted}`}>
+                Certified ({certified.length})
+              </div>
+              <ul className="space-y-1">
+                {certified.length === 0 && (
+                  <li className={`text-xs ${t.muted}`}>
+                    None for this data source.
+                  </li>
+                )}
+                {certified.map((m) => listItem(m, false))}
+              </ul>
+            </div>
+            <div>
+              <div className={`mb-1 text-[11px] font-semibold ${t.muted}`}>
+                Yours ({mine.length})
+              </div>
+              <ul className="space-y-1">
+                {mine.length === 0 && (
+                  <li className={`text-xs ${t.muted}`}>None yet.</li>
+                )}
+                {mine.map((m) => listItem(m, true))}
+              </ul>
+            </div>
+          </div>
+          <div className="min-h-0 space-y-3 overflow-y-auto p-4">
+            {draft && (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Metric name">
+                    <TextInput
+                      value={draft.label}
+                      onChange={(e) => set({ label: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Show as">
+                    <Select
+                      value={draft.unit}
+                      options={(
+                        Object.keys(UNIT_LABEL) as CalculatedMetric['unit'][]
+                      ).map((k) => ({
+                        value: k,
+                        label: UNIT_LABEL[k],
+                      }))}
+                      onChange={(v) =>
+                        set({ unit: v as CalculatedMetric['unit'] })
+                      }
+                    />
+                  </Field>
+                </div>
+                <Field label="Description (shown to other users)">
+                  <TextInput
+                    value={draft.description ?? ''}
+                    onChange={(e) => set({ description: e.target.value })}
+                    placeholder="What does this measure and how is it defined?"
+                  />
+                </Field>
+                {!draft.formula ? (
+                  <>
+                    {side(
+                      'Top of the fraction (numerator)',
+                      draft.numerator,
+                      (numerator) => set({ numerator })
+                    )}
+                    {side(
+                      'Bottom of the fraction (denominator)',
+                      draft.denominator,
+                      (denominator) => set({ denominator })
+                    )}
+                    <GhostButton
+                      onClick={() =>
+                        set({
+                          formula: {
+                            expression: 'PCT(a, b)',
+                            terms: { a: draft.numerator, b: draft.denominator },
+                          },
+                        })
+                      }
+                    >
+                      Use a custom formula instead (growth %, weighted score,
+                      conditions)
+                    </GhostButton>
+                  </>
+                ) : (
+                  <>
+                    <Field label="Formula">
+                      <TextInput
+                        aria-label="Formula"
+                        value={draft.formula.expression}
+                        onChange={(e) =>
+                          set({
+                            formula: {
+                              ...draft.formula!,
+                              expression: e.target.value,
+                            },
+                          })
+                        }
+                        placeholder="e.g. PCT(fraud, total)  or  (x - PREV(x)) / PREV(x) * 100"
+                      />
+                    </Field>
+                    {(() => {
+                      const parsed = parseFormula(draft.formula.expression);
+                      return parsed.ok ? (
+                        <>
+                          <p className={`text-[11px] ${t.muted}`}>
+                            Functions: IF(cond, a, b) · MIN · MAX · ABS ·
+                            ROUND(x, n) · PCT(a, b) · PREV(x) = value in the
+                            comparison period. The result is shown in the unit
+                            chosen above, so write PCT(a, b) for a percentage.
+                            Division by zero shows 0.
+                          </p>
+                          {parsed.refs.map((r) =>
+                            side(
+                              `Value "${r}"`,
+                              draft.formula!.terms[r] ?? {
+                                agg: 'count',
+                                where: [],
+                              },
+                              (s) =>
+                                set({
+                                  formula: {
+                                    ...draft.formula!,
+                                    terms: { ...draft.formula!.terms, [r]: s },
+                                  },
+                                })
+                            )
+                          )}
+                        </>
+                      ) : (
+                        <p role="alert" className="text-xs text-red-600">
+                          {parsed.error}
+                        </p>
+                      );
+                    })()}
+                    <GhostButton onClick={() => set({ formula: undefined })}>
+                      Back to simple fraction
+                    </GhostButton>
+                  </>
+                )}
+                <div
+                  className={`rounded-xl border p-3 text-xs ${t.inset} ${t.body}`}
+                >
+                  <div className={`mb-1 font-semibold ${t.text}`}>In words</div>
+                  {draft.formula ? (
+                    draft.formula.expression
+                  ) : (
+                    <>
+                      {sideText(draft.numerator, fieldMap)} ÷{' '}
+                      {sideText(draft.denominator, fieldMap)}
+                    </>
+                  )}
+                  <div className={`mt-2 ${t.text}`}>
+                    Value on the current data:{' '}
+                    <strong>
+                      {preview
+                        ? preview.text
+                        : 'complete the settings to preview'}
+                    </strong>
+                    {preview && !draft.formula && preview.den === 0 && (
+                      <span className="ml-2 text-amber-600">
+                        Denominator is zero, so the result shows 0.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+        <div
+          className={`flex items-center justify-end gap-2 border-t px-4 py-3 ${t.lineStrong}`}
+        >
+          <GhostButton onClick={onClose}>Close</GhostButton>
+          <button
+            type="button"
+            disabled={!draft || !metricValid(draft)}
+            onClick={() => draft && onSave(draft)}
+            className={PRIMARY_BTN}
+          >
+            <Check className="h-3.5 w-3.5" />{' '}
+            {draft?.key ? 'Update metric' : 'Save metric'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ==========================================================================
  * Data preview
  * ======================================================================== */
@@ -6498,26 +9491,34 @@ const SPAN_OPTIONS: { value: string; label: string }[] = [
 const WidgetInspector: React.FC<{
   widget: Widget;
   fields: FieldDef[];
+  metricFields: FieldDef[];
   allFields: FieldDef[];
   allRows: Row[];
   onPatch: (p: Partial<Widget>, coalesceKey?: string) => void;
   onDuplicate: () => void;
   onRemove: () => void;
+  sources: SourceInfo[];
+  drillPaths: DrillPath[];
 }> = ({
   widget,
   fields,
+  metricFields,
   allFields,
   allRows,
   onPatch,
   onDuplicate,
   onRemove,
+  sources,
+  drillPaths,
 }) => {
   const t = useT();
   const patch = (p: Record<string, unknown>, key?: string) =>
     onPatch(p as Partial<Widget>, key);
   const numeric = fields.filter((x) => isNumeric(x.type));
-  const dims = fields.filter((x) => isDim(x.type));
-  const cats = fields.filter((x) => isCat(x.type));
+  const canView = useContext(MaskCtx);
+  // Sensitive fields are not offered as dimensions unless the viewer may see their values.
+  const dims = fields.filter((x) => isDim(x.type) && (!x.sensitive || canView));
+  const cats = fields.filter((x) => isCat(x.type) && (!x.sensitive || canView));
   const bools = fields.filter((x) => x.type === 'boolean');
   const AGGS: Agg[] = [
     'count',
@@ -6528,13 +9529,16 @@ const WidgetInspector: React.FC<{
     'distinct',
     'yes',
     'rate',
+    'metric',
   ];
   const measureOpts = (agg: Agg) =>
-    (agg === 'distinct'
-      ? fields
-      : agg === 'yes' || agg === 'rate'
-        ? bools
-        : numeric
+    (agg === 'metric'
+      ? metricFields
+      : agg === 'distinct'
+        ? fields
+        : agg === 'yes' || agg === 'rate'
+          ? bools
+          : numeric
     ).map((x) => ({ value: x.key, label: x.label }));
   const aggOpts = AGGS.filter(
     (a) => a === 'count' || measureOpts(a).length > 0
@@ -6650,13 +9654,18 @@ const WidgetInspector: React.FC<{
     </Section>
   );
 
-  const kindLabel = {
-    kpi: 'KPI card',
-    chart: 'Chart',
-    table: 'Table',
-    text: 'Commentary',
-    insight: 'Key insights',
-  }[widget.kind];
+  const kindLabel =
+    (
+      {
+        kpi: 'KPI card',
+        chart: 'Chart',
+        table: 'Table',
+        text: 'Commentary',
+        insight: 'Key insights',
+      } as Record<string, string>
+    )[widget.kind] ??
+    getWidget(widget.kind)?.label ??
+    widget.kind;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -6973,6 +9982,27 @@ const WidgetInspector: React.FC<{
                   placeholder="e.g. 20"
                 />
               </Field>
+              <Field
+                label="Warning threshold (optional)"
+                hint="Between the target and this value the card shows Warning; beyond it, Breach."
+              >
+                <TextInput
+                  type="number"
+                  value={widget.warn ?? ''}
+                  onChange={(e) =>
+                    patch(
+                      {
+                        warn:
+                          e.target.value === ''
+                            ? undefined
+                            : Number(e.target.value),
+                      },
+                      `wn-${widget.id}`
+                    )
+                  }
+                  placeholder="e.g. 30"
+                />
+              </Field>
               {noteField}
             </Section>
           </>
@@ -7085,6 +10115,33 @@ const WidgetInspector: React.FC<{
           </Section>
         )}
 
+        {(widget.kind === 'chart' || widget.kind === 'insight') &&
+          drillPaths.length > 0 && (
+            <Section title="Drill-down">
+              <Field label="Drill path">
+                <Select
+                  value={widget.drillPathId ?? ''}
+                  options={[
+                    { value: '', label: 'None (click filters the report)' },
+                    ...drillPaths.map((d) => ({ value: d.id, label: d.name })),
+                  ]}
+                  onChange={(v) => patch({ drillPathId: v || undefined })}
+                />
+              </Field>
+            </Section>
+          )}
+        {!LEGACY_KINDS.has(widget.kind) && getWidget(widget.kind) && (
+          <Section title={getWidget(widget.kind)!.label} defaultOpen>
+            <SchemaInspector
+              widget={widget as unknown as RegistryWidget}
+              schema={getWidget(widget.kind)!.config}
+              fields={fields as unknown as FieldInfo[]}
+              sources={sources}
+              onPatch={(pp, key) => patch(pp, key)}
+            />
+            {noteField}
+          </Section>
+        )}
         {widget.kind === 'insight' && (
           <Section title="Data" defaultOpen>
             <Field label="Analyse by">
@@ -7150,41 +10207,273 @@ const ReportInspector: React.FC<{
           whole report.
         </p>
       </div>
-      <Section title="Period" defaultOpen badge={RANGE_LABEL[def.dateRange]}>
-        <Field label="Date range">
-          <Select
-            value={def.dateRange}
-            options={(Object.keys(RANGE_LABEL) as DateRangeKey[]).map((k) => ({
-              value: k,
-              label: RANGE_LABEL[k],
-            }))}
-            onChange={(v) =>
-              onChange((d) => ({ ...d, dateRange: v as DateRangeKey }))
+      <Section
+        title="Drill-down paths"
+        badge={String((def.drillPaths ?? []).length || '')}
+      >
+        <p className={`text-[11px] ${t.muted}`}>
+          A path is an ordered hierarchy (e.g. Channel › Region). Attach it to a
+          chart in the widget inspector; clicking a bar then drills one level
+          down, and the last level opens the records.
+        </p>
+        {(def.drillPaths ?? []).map((path) => (
+          <div
+            key={path.id}
+            className={`space-y-2 rounded-lg border p-2 ${t.inset}`}
+          >
+            <TextInput
+              aria-label="Path name"
+              value={path.name}
+              onChange={(e) =>
+                onChange(
+                  (d) => ({
+                    ...d,
+                    drillPaths: (d.drillPaths ?? []).map((x) =>
+                      x.id === path.id ? { ...x, name: e.target.value } : x
+                    ),
+                  }),
+                  `dp-${path.id}`
+                )
+              }
+            />
+            {path.levels.map((lv, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <span className={`w-4 text-[11px] ${t.muted}`}>{i + 1}</span>
+                <div className="flex-1">
+                  <Select
+                    label={`Level ${i + 1}`}
+                    value={lv.field}
+                    options={allFields
+                      .filter((f) => isDim(f.type))
+                      .map((f) => ({ value: f.key, label: f.label }))}
+                    onChange={(v) =>
+                      onChange((d) => ({
+                        ...d,
+                        drillPaths: (d.drillPaths ?? []).map((x) =>
+                          x.id === path.id
+                            ? {
+                                ...x,
+                                levels: x.levels.map((l, j) =>
+                                  j === i ? { field: v } : l
+                                ),
+                              }
+                            : x
+                        ),
+                      }))
+                    }
+                  />
+                </div>
+                {path.levels.length > 2 && (
+                  <IconButton
+                    label="Remove level"
+                    onClick={() =>
+                      onChange((d) => ({
+                        ...d,
+                        drillPaths: (d.drillPaths ?? []).map((x) =>
+                          x.id === path.id
+                            ? {
+                                ...x,
+                                levels: x.levels.filter((_, j) => j !== i),
+                              }
+                            : x
+                        ),
+                      }))
+                    }
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </IconButton>
+                )}
+              </div>
+            ))}
+            <div className="flex justify-between">
+              <GhostButton
+                onClick={() => {
+                  const used = new Set(path.levels.map((l) => l.field));
+                  const next = allFields.find(
+                    (f) => isCat(f.type) && !used.has(f.key)
+                  );
+                  if (next)
+                    onChange((d) => ({
+                      ...d,
+                      drillPaths: (d.drillPaths ?? []).map((x) =>
+                        x.id === path.id
+                          ? { ...x, levels: [...x.levels, { field: next.key }] }
+                          : x
+                      ),
+                    }));
+                }}
+              >
+                Add level
+              </GhostButton>
+              <GhostButton
+                onClick={() =>
+                  onChange((d) => ({
+                    ...d,
+                    drillPaths: (d.drillPaths ?? []).filter(
+                      (x) => x.id !== path.id
+                    ),
+                    widgets: d.widgets.map((w) =>
+                      w.drillPathId === path.id
+                        ? { ...w, drillPathId: undefined }
+                        : w
+                    ),
+                  }))
+                }
+              >
+                Delete path
+              </GhostButton>
+            </div>
+          </div>
+        ))}
+        <GhostButton
+          onClick={() => {
+            const cats = allFields.filter((f) => isCat(f.type));
+            if (cats.length < 2) return;
+            onChange((d) => ({
+              ...d,
+              drillPaths: [
+                ...(d.drillPaths ?? []),
+                {
+                  id: uid(),
+                  name: `${cats[0].label} › ${cats[1].label}`,
+                  levels: [{ field: cats[0].key }, { field: cats[1].key }],
+                },
+              ],
+            }));
+          }}
+        >
+          Add drill path
+        </GhostButton>
+      </Section>
+
+      <Section title="Cover, header & footer">
+        <Field label="Subtitle">
+          <TextInput
+            value={def.presentation?.subtitle ?? ''}
+            placeholder="e.g. Monthly fraud management report"
+            onChange={(e) =>
+              onChange(
+                (d) => ({
+                  ...d,
+                  presentation: {
+                    ...(d.presentation ?? DEFAULT_PRESENTATION),
+                    subtitle: e.target.value,
+                  },
+                }),
+                'pres-sub'
+              )
             }
           />
         </Field>
-        {def.dateRange === 'custom' && (
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="From">
-              <TextInput
-                type="date"
-                value={def.customFrom ?? ''}
-                onChange={(e) =>
-                  onChange((d) => ({ ...d, customFrom: e.target.value }))
-                }
-              />
-            </Field>
-            <Field label="To">
-              <TextInput
-                type="date"
-                value={def.customTo ?? ''}
-                onChange={(e) =>
-                  onChange((d) => ({ ...d, customTo: e.target.value }))
-                }
-              />
-            </Field>
-          </div>
-        )}
+        <Field label="Organisation / brand">
+          <TextInput
+            value={def.presentation?.brandName ?? ''}
+            onChange={(e) =>
+              onChange(
+                (d) => ({
+                  ...d,
+                  presentation: {
+                    ...(d.presentation ?? DEFAULT_PRESENTATION),
+                    brandName: e.target.value,
+                  },
+                }),
+                'pres-brand'
+              )
+            }
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Header text">
+            <TextInput
+              value={def.presentation?.headerText ?? ''}
+              onChange={(e) =>
+                onChange(
+                  (d) => ({
+                    ...d,
+                    presentation: {
+                      ...(d.presentation ?? DEFAULT_PRESENTATION),
+                      headerText: e.target.value,
+                    },
+                  }),
+                  'pres-h'
+                )
+              }
+            />
+          </Field>
+          <Field label="Footer text">
+            <TextInput
+              value={def.presentation?.footerText ?? ''}
+              placeholder="Confidential"
+              onChange={(e) =>
+                onChange(
+                  (d) => ({
+                    ...d,
+                    presentation: {
+                      ...(d.presentation ?? DEFAULT_PRESENTATION),
+                      footerText: e.target.value,
+                    },
+                  }),
+                  'pres-f'
+                )
+              }
+            />
+          </Field>
+        </div>
+        <Field label="Accent colour">
+          <input
+            type="color"
+            aria-label="Accent colour"
+            value={def.presentation?.accent ?? '#2563eb'}
+            onChange={(e) =>
+              onChange(
+                (d) => ({
+                  ...d,
+                  presentation: {
+                    ...(d.presentation ?? DEFAULT_PRESENTATION),
+                    accent: e.target.value,
+                  },
+                }),
+                'pres-acc'
+              )
+            }
+            className="h-8 w-14 cursor-pointer rounded border"
+          />
+        </Field>
+        <Toggle
+          checked={def.presentation?.showPageNumbers ?? true}
+          onChange={(v) =>
+            onChange((d) => ({
+              ...d,
+              presentation: {
+                ...(d.presentation ?? DEFAULT_PRESENTATION),
+                showPageNumbers: v,
+              },
+            }))
+          }
+          label="Page numbers on print / PDF"
+        />
+      </Section>
+
+      <Section
+        title="Report period"
+        defaultOpen
+        badge={PRESET_LABEL[def.period.preset]}
+      >
+        <PeriodPicker
+          value={def.period}
+          onChange={(period) => onChange((d) => ({ ...d, period }))}
+          timezone={def.timezone ?? DEFAULT_TZ}
+        />
+        <Field
+          label="Time zone"
+          hint="Decides which day a record belongs to and what 'today' means."
+        >
+          <Select
+            value={def.timezone ?? DEFAULT_TZ}
+            options={TIMEZONES.map((z) => ({ value: z, label: z }))}
+            onChange={(v) => onChange((d) => ({ ...d, timezone: v }))}
+          />
+        </Field>
         <SwitchRow
           label="Compare with previous period"
           checked={def.compare}
@@ -7262,12 +10551,166 @@ const ReportInspector: React.FC<{
 /* ==========================================================================
  * Expand modal, templates drawer
  * ======================================================================== */
+/** Paginated record list for a drill-through (server-side paging in the actual report). */
+const DrillThroughModal: React.FC<{
+  info: { title: string; filters: QueryFilter[]; sourceId?: string } | null;
+  data: DataCtx;
+  onClose: () => void;
+}> = ({ info, data, onClose }) => {
+  const t = useT();
+  const PAGE = 25;
+  const [offset, setOffset] = useState(0);
+  const [state, setState] = useState<{
+    loading: boolean;
+    error?: string;
+    result?: RecordsResult;
+    fields: FieldDef[];
+  }>({ loading: false, fields: [] });
+  useEffect(() => setOffset(0), [info]);
+  useEffect(() => {
+    if (!info || !data.fetchRecords) return;
+    let live = true;
+    setState((s) => ({ ...s, loading: true, error: undefined }));
+    data
+      .fetchRecords({
+        filters: info.filters,
+        sourceId: info.sourceId,
+        offset,
+        limit: PAGE,
+      })
+      .then(
+        (r) =>
+          live &&
+          setState({ loading: false, result: r.result, fields: r.fields })
+      )
+      .catch(
+        (e) =>
+          live &&
+          setState({
+            loading: false,
+            fields: [],
+            error: e instanceof Error ? e.message : 'Could not load records.',
+          })
+      );
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, offset]);
+  useEffect(() => {
+    if (!info) return;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [info, onClose]);
+  if (!info) return null;
+  const r = state.result;
+  return (
+    <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Records"
+        className={`flex max-h-[85vh] w-full max-w-5xl flex-col rounded-2xl border ${t.card}`}
+      >
+        <div
+          className={`flex items-start justify-between gap-3 border-b p-4 ${t.lineStrong}`}
+        >
+          <div>
+            <h2 className={`text-base font-bold ${t.text}`}>{info.title}</h2>
+            <p className={`mt-0.5 text-xs ${t.muted}`}>
+              {data.mode === 'final'
+                ? 'Actual records'
+                : 'Preview sample records'}
+              {r ? ` · ${r.totalRows.toLocaleString()} match` : ''}
+            </p>
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          {state.error ? (
+            <p role="alert" className="py-10 text-center text-sm text-red-600">
+              {state.error}
+            </p>
+          ) : !r ? (
+            <p className={`py-10 text-center text-sm ${t.muted}`}>
+              Loading records…
+            </p>
+          ) : r.rows.length === 0 ? (
+            <Empty />
+          ) : (
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className={`${t.inset} ${t.muted}`}>
+                  {state.fields.map((f) => (
+                    <th
+                      key={f.key}
+                      className="whitespace-nowrap px-2 py-1.5 font-medium"
+                    >
+                      {f.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {r.rows.map((row, i) => (
+                  <tr
+                    key={i}
+                    className={`border-b last:border-b-0 ${t.line} ${t.body}`}
+                  >
+                    {state.fields.map((f) => (
+                      <td
+                        key={f.key}
+                        className={`max-w-[220px] truncate px-2 py-1.5 ${isNumeric(f.type) ? 'text-right tabular-nums' : ''}`}
+                      >
+                        <CellValue
+                          field={f}
+                          value={row[f.key]}
+                          currency={data.currency}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {r && (
+          <div
+            className={`flex items-center justify-between border-t px-4 py-2 text-xs ${t.lineStrong} ${t.muted}`}
+          >
+            <span>
+              {r.totalRows === 0 ? 0 : offset + 1}–
+              {Math.min(offset + PAGE, r.totalRows)} of{' '}
+              {r.totalRows.toLocaleString()}
+            </span>
+            <span className="flex gap-2">
+              <GhostButton
+                onClick={() => setOffset(Math.max(0, offset - PAGE))}
+              >
+                Previous
+              </GhostButton>
+              <GhostButton onClick={() => setOffset(offset + PAGE)}>
+                Next
+              </GhostButton>
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const WidgetModal: React.FC<{
   widget: Widget | null;
   data: DataCtx;
   onClose: () => void;
 }> = ({ widget, data, onClose }) => {
   const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(!!widget);
   const [tab, setTab] = useState<'data' | 'records'>('data');
   useEffect(() => {
     setTab('data');
@@ -7308,6 +10751,8 @@ const WidgetModal: React.FC<{
         role="dialog"
         aria-modal="true"
         aria-label={widget.title}
+        ref={trapRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={`flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
       >
@@ -7430,6 +10875,7 @@ const TemplatesDrawer: React.FC<{
   onImport,
 }) => {
   const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
   const [q, setQ] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -7451,6 +10897,8 @@ const TemplatesDrawer: React.FC<{
         role="dialog"
         aria-modal="true"
         aria-label="Report templates"
+        ref={trapRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={`flex h-full w-full max-w-md flex-col border-l ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
       >
@@ -7609,9 +11057,26 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   currency = 'AED',
   theme = 'light',
   height = 'calc(100vh - 6rem)',
-  canViewSensitive,
+  canViewSensitive = false,
+  capabilities,
+  onAudit,
+  provider: providerProp,
+  previewLimit: previewLimitProp = DEFAULT_PREVIEW_LIMIT,
+  tenantId,
+  fiscalYearStartMonth,
 }) => {
   const t = theme === 'dark' ? DARK : LIGHT;
+  const provider = useMemo(
+    () =>
+      providerProp ??
+      createLocalProvider({ sources, canViewSensitive, latencyMs: 450 }),
+    [providerProp, sources, canViewSensitive]
+  );
+  const run = useReportRun(provider);
+  /** true while the canvas shows the generated (ACTUAL) report; false = design-time preview sample. */
+  const [viewingFinal, setViewingFinal] = useState(false);
+  const viewMode: 'preview' | 'final' =
+    viewingFinal && run.state.result ? 'final' : 'preview';
 
   const [hist, setHist] = useState<History>(() => ({
     past: [],
@@ -7619,6 +11084,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     future: [],
   }));
   const def = hist.present;
+  // Idempotent render-time sync of the active report time zone (see dayOf / zonedParts).
+  setReportTimezone(def.timezone ?? DEFAULT_TZ);
   const lastEdit = useRef<{ key: string; at: number } | null>(null);
 
   const [step, setStep] = useState(1);
@@ -7634,22 +11101,38 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   } | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const [rowsState, setRowsState] = useState<{ id: string; rows: Row[]; truncated: boolean }>({
+  const [rowsState, setRowsState] = useState<{
+    id: string;
+    rows: Row[];
+    truncated: boolean;
+    at?: string;
+    total?: number;
+  }>({
     id: '',
     rows: [],
     truncated: false,
   });
-  const rawRows = useMemo(
-    () =>
-      rowsState.id ===
-      (sources.find((x) => x.id === def.sourceId) ?? sources[0]).id
-        ? rowsState.rows
-        : [],
-    [rowsState, sources, def.sourceId]
-  );
+  const rawRows = useMemo(() => {
+    const src = sources.find((x) => x.id === def.sourceId) ?? sources[0];
+    if (rowsState.id !== src.id) return [];
+    // Defence in depth: viewers without the grant never hold raw sensitive values in component state.
+    return canViewSensitive
+      ? rowsState.rows
+      : maskSensitive(rowsState.rows, src.fields);
+  }, [rowsState, sources, def.sourceId, canViewSensitive]);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [rowsError, setRowsError] = useState<string | null>(null);
-  const rowCache = useRef(new Map<string, { rows: Row[]; truncated: boolean }>());
+  const rowCache = useRef(
+    new Map<
+      string,
+      { rows: Row[]; truncated: boolean; at?: string; total?: number }
+    >()
+  );
+  const [reloadTick, setReloadTick] = useState(0);
+  const refreshData = () => {
+    rowCache.current.clear();
+    setReloadTick((n) => n + 1);
+  };
 
   const [userTemplates, setUserTemplates] = useState<ReportTemplate[]>([]);
   const [templateId, setTemplateId] = useState<string | null>(null);
@@ -7674,20 +11157,28 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
 
   const source = sources.find((s) => s.id === def.sourceId) ?? sources[0];
   const rowsTruncated = rowsState.id === source.id && rowsState.truncated;
+  const loadedAt = rowsState.id === source.id ? rowsState.at : undefined;
   const baseFields = useMemo(
     () => enrichFields(source.fields, rawRows),
     [source, rawRows]
   );
   const derivedOut = useMemo(
     () => applyDerived(rawRows, def.derived ?? [], baseFields),
-    [rawRows, def.derived, baseFields]
+    [rawRows, def.derived, baseFields, def.timezone]
   );
   const allRows = derivedOut.rows;
   /** Full field catalogue: source fields (enriched) plus the report's custom fields. */
   const catalogue = derivedOut.fields;
+  const certifiedMetrics = source.metrics ?? [];
+  const allMetrics = useMemo(
+    () => [...certifiedMetrics, ...(def.metrics ?? [])],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [source, def.metrics]
+  );
+  const metricFields = useMemo(() => allMetrics.map(metricField), [allMetrics]);
   const fieldMap = useMemo(
-    () => new Map(catalogue.map((x) => [x.key, x])),
-    [catalogue]
+    () => new Map([...catalogue, ...metricFields].map((x) => [x.key, x])),
+    [catalogue, metricFields]
   );
   const selectedFields = useMemo(
     () =>
@@ -7772,10 +11263,16 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     return () => window.removeEventListener('beforeunload', h);
   }, [dirty]);
 
-  /* ---- data loading ---- */
+  /* ---- design-time preview data: ONLY the latest N rows are loaded (never the full dataset) ---- */
+  const previewLimit = Math.max(
+    10,
+    Math.min(MAX_PREVIEW_LIMIT, def.previewLimit ?? previewLimitProp)
+  );
   useEffect(() => {
     let cancelled = false;
-    const cached = rowCache.current.get(source.id);
+    const ctrl = new AbortController();
+    const cacheKey = `${source.id}:${previewLimit}`;
+    const cached = rowCache.current.get(cacheKey);
     if (cached) {
       setRowsState({ id: source.id, ...cached });
       setRowsError(null);
@@ -7783,24 +11280,40 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     }
     setRowsLoading(true);
     setRowsError(null);
-    Promise.resolve(source.loadRows())
-      .then((result) => {
+    provider
+      .loadPreview({
+        sourceId: source.id,
+        limit: previewLimit,
+        signal: ctrl.signal,
+      })
+      .then((res) => {
         if (cancelled) return;
-        const loaded = Array.isArray(result) ? { rows: result, truncated: false } : result;
-        const clean = normalizeRows(loaded.rows, source.fields);
-        const cachedRows = { rows: clean, truncated: loaded.truncated };
-        rowCache.current.set(source.id, cachedRows);
-        setRowsState({ id: source.id, ...cachedRows });
+        // Defence in depth: enforce the cap even if a backend ignores `limit`.
+        const capped = res.rows.length > previewLimit;
+        const clean = normalizeRows(
+          capped ? res.rows.slice(0, previewLimit) : res.rows,
+          source.fields
+        );
+        const entry = {
+          rows: clean,
+          truncated: capped || (res.totalInSource ?? 0) > clean.length,
+          at: res.asOf ?? new Date().toISOString(),
+          total: res.totalInSource,
+        };
+        rowCache.current.set(cacheKey, entry);
+        setRowsState({ id: source.id, ...entry });
       })
       .catch(
         () =>
-          !cancelled && setRowsError(`Could not load data for ${source.name}.`)
+          !cancelled &&
+          setRowsError(`Could not load preview data for ${source.name}.`)
       )
       .finally(() => !cancelled && setRowsLoading(false));
     return () => {
       cancelled = true;
+      ctrl.abort();
     };
-  }, [source]);
+  }, [source, reloadTick, provider, previewLimit]);
 
   useEffect(() => {
     templateStore
@@ -7810,26 +11323,62 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   }, [templateStore, notify]);
 
   /* ---- derived data ---- */
-  const win = useMemo(
-    () => windowFor(def.dateRange, def.customFrom, def.customTo),
-    [def.dateRange, def.customFrom, def.customTo]
+  const tz = def.timezone ?? DEFAULT_TZ;
+  const today = todayIn(tz);
+  const ropts = useMemo(
+    () => ({ today, fiscalYearStartMonth }),
+    [today, fiscalYearStartMonth]
   );
+  /** Period of the ACTUAL report. Never used to filter the preview sample. */
+  const period = useMemo(
+    () => resolvePeriod(def.period, ropts),
+    [def.period, ropts]
+  );
+  const effCompare: CompareMode = def.compare ? def.period.compare : 'none';
+  const comparePeriod = useMemo(
+    () => resolveComparison(period, effCompare, ropts),
+    [period, effCompare, ropts]
+  );
+  const rangeErr = periodError(def.period);
+  /** Dates actually spanned by the preview sample (what the design-time charts show). */
+  const previewExtent = useMemo<Win | null>(() => {
+    let lo = '',
+      hi = '';
+    for (const r of allRows) {
+      const d = dayOf(String(r[source.dateField] ?? ''));
+      if (!d || d === 'Unknown') continue;
+      if (!lo || d < lo) lo = d;
+      if (!hi || d > hi) hi = d;
+    }
+    return lo
+      ? {
+          from: lo,
+          to: hi,
+          days:
+            Math.round(
+              (parseIso(hi).getTime() - parseIso(lo).getTime()) / 864e5
+            ) + 1,
+        }
+      : null;
+  }, [allRows, source.dateField]);
+  const win: Win | null =
+    viewMode === 'final'
+      ? period
+        ? { from: period.from, to: period.to, days: period.days }
+        : null
+      : previewExtent;
   const autoBucket = autoBucketFor(win);
   const baseRows = useMemo(
     () => applyFilters(allRows, def.filters, fieldMap),
     [allRows, def.filters, fieldMap]
   );
+  // Preview: every sample row (no period filter, no previous-period comparison: neither is meaningful on N rows).
+  // Final: widgets render from server results, so no rows are held here at all.
   const rows = useMemo(
-    () => baseRows.filter((r) => inWindow(r, source.dateField, win)),
-    [baseRows, source.dateField, win]
+    () => (viewMode === 'final' ? [] : baseRows),
+    [baseRows, viewMode]
   );
-  const prevRows = useMemo(
-    () =>
-      win
-        ? baseRows.filter((r) => inWindow(r, source.dateField, prevWindow(win)))
-        : null,
-    [baseRows, source.dateField, win]
-  );
+  const prevRows = null as Row[] | null;
 
   useEffect(() => {
     if (!interactive) setCrossFilter(null);
@@ -7854,17 +11403,20 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
 
   const colors = PALETTES[def.palette].colors;
   const rangeText =
-    def.dateRange === 'custom' && def.customFrom && def.customTo
-      ? `${fmtDate(def.customFrom)} to ${fmtDate(def.customTo)}`
-      : RANGE_LABEL[def.dateRange].toLowerCase();
+    def.period.preset === 'custom' && def.period.from && def.period.to
+      ? `${fmtDate(def.period.from)} to ${fmtDate(def.period.to)}`
+      : PRESET_LABEL[def.period.preset].toLowerCase();
   const vars = useMemo(
     () => ({
-      records: viewRows.length.toLocaleString(),
+      records:
+        viewMode === 'final'
+          ? (run.state.result?.meta.recordsMatched ?? 0).toLocaleString()
+          : `${viewRows.length.toLocaleString()} (preview)`,
       range: rangeText,
       source: source.name,
       date: new Date().toLocaleDateString(),
     }),
-    [viewRows.length, rangeText, source.name]
+    [viewRows.length, rangeText, source.name, viewMode, run.state.result]
   );
 
   const pickHandler = useCallback((field: string, value: string) => {
@@ -7875,9 +11427,376 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     );
   }, []);
 
+  /* ---- preview execution for registry widgets (same query vocabulary as the backend, tiny local sample) ---- */
+  const [otherPreview, setOtherPreview] = useState<
+    Record<
+      string,
+      { rows: Row[]; fm: Map<string, FieldDef>; src: ReportSource }
+    >
+  >({});
+  const otherInflight = useRef(new Set<string>());
+  useEffect(() => {
+    setOtherPreview({});
+    otherInflight.current.clear();
+  }, [provider, previewLimit, def.sourceId]);
+  const ensureOther = useCallback(
+    (sid: string) => {
+      if (otherInflight.current.has(sid)) return;
+      const src = sources.find((s) => s.id === sid);
+      if (!src) return;
+      otherInflight.current.add(sid);
+      provider
+        .loadPreview({ sourceId: sid, limit: previewLimit })
+        .then((res) => {
+          const raw = normalizeRows(
+            res.rows.slice(0, previewLimit),
+            src.fields
+          );
+          const rs = canViewSensitive ? raw : maskSensitive(raw, src.fields);
+          const fs = enrichFields(src.fields, rs);
+          setOtherPreview((o) => ({
+            ...o,
+            [sid]: {
+              rows: rs,
+              src,
+              fm: new Map(
+                [...fs, ...(src.metrics ?? []).map(metricField)].map((f) => [
+                  f.key,
+                  f,
+                ])
+              ),
+            },
+          }));
+        })
+        .catch(() => otherInflight.current.delete(sid));
+    },
+    [sources, provider, previewLimit, canViewSensitive]
+  );
+  const previewExec = useCallback(
+    (spec: QuerySpec, w: Widget): QueryResult | undefined => {
+      const sid = spec.sourceId ?? source.id;
+      let rs: Row[];
+      let fm: Map<string, FieldDef>;
+      let df: string;
+      if (sid === source.id) {
+        rs = baseRows;
+        fm = fieldMap;
+        df = source.dateField;
+      } else {
+        const o = otherPreview[sid];
+        if (!o) {
+          ensureOther(sid);
+          return undefined;
+        }
+        rs = o.rows;
+        fm = o.fm;
+        df = o.src.dateField;
+      }
+      const xfApplies =
+        xf &&
+        sid === source.id &&
+        !(
+          getWidget(w.kind)?.skipsCrossFilter?.(
+            w as unknown as RegistryWidget,
+            xf
+          ) ?? false
+        );
+      const {
+        suffix: _s,
+        label: _l,
+        sourceId: _sid,
+        extraFilters,
+        compare: _c,
+        ...rest
+      } = spec;
+      const q: ReportQuery = {
+        ...rest,
+        id: w.id,
+        widgetId: w.id,
+        label: w.title,
+        sourceId: sid,
+        period: null,
+        filters: [
+          ...w.filters
+            .filter((r) => r.field && r.value !== '')
+            .map((r) => ({ field: r.field, op: r.op, value: r.value })),
+          ...(xfApplies && xf
+            ? [{ field: xf.field, op: 'eq' as const, value: xf.value }]
+            : []),
+          ...(extraFilters ?? []),
+        ],
+        dimensions: (rest.dimensions ?? []).map((d) => ({
+          ...d,
+          bucket: d.bucket === 'auto' ? autoBucket : d.bucket,
+        })),
+        measures: rest.measures ?? [],
+      };
+      try {
+        return runLocalQuery(q, rs, fm, df);
+      } catch {
+        return undefined;
+      }
+    },
+    [source, baseRows, fieldMap, otherPreview, ensureOther, xf, autoBucket]
+  );
+
+  const runResult = viewMode === 'final' ? run.state.result : undefined;
+
+  /* ---- drill-down paths + drill-through ---- */
+  const [drill, setDrill] = useState<Record<string, string[]>>({});
+  const [drillThrough, setDrillThrough] = useState<{
+    title: string;
+    filters: QueryFilter[];
+    sourceId?: string;
+  } | null>(null);
+  const pathOf = useCallback(
+    (w: Widget) => def.drillPaths?.find((x) => x.id === w.drillPathId),
+    [def.drillPaths]
+  );
+  const applyDrill = useCallback(
+    (w: Widget): Widget => {
+      const path = pathOf(w);
+      if (!path || path.levels.length === 0) return w;
+      const vals = drill[w.id] ?? [];
+      const lvl = Math.min(vals.length, path.levels.length - 1);
+      return {
+        ...w,
+        groupBy: path.levels[lvl].field,
+        filters: [
+          ...w.filters,
+          ...vals.map((v, i) => ({
+            id: `drill${i}`,
+            field: path.levels[i].field,
+            op: 'eq' as FilterOp,
+            value: v,
+          })),
+        ],
+      } as Widget;
+    },
+    [pathOf, drill]
+  );
+  /** Section filters + drill state folded into each widget: what is actually rendered and queried. */
+  const effectiveWidgets = useMemo(
+    () =>
+      (
+        applySectionFilters(
+          def.widgets as unknown as RegistryWidget[]
+        ) as unknown as Widget[]
+      ).map(applyDrill),
+    [def.widgets, applyDrill]
+  );
+  const drillKey = JSON.stringify(drill);
+  const drillClick = useCallback(
+    (w: Widget, value: string) => {
+      const path = pathOf(w);
+      if (!path) return false;
+      const vals = drill[w.id] ?? [];
+      if (vals.length < path.levels.length - 1) {
+        setDrill((d) => ({ ...d, [w.id]: [...vals, value] }));
+      } else {
+        const all = [...vals, value];
+        setDrillThrough({
+          title: `${w.title}: ${all.join(' › ')}`,
+          filters: all.map((v, i) => ({
+            field: path.levels[i].field,
+            op: 'eq' as const,
+            value: v,
+          })),
+        });
+      }
+      return true;
+    },
+    [pathOf, drill]
+  );
+  const drillCrumbs = useCallback(
+    (w: Widget) => {
+      const path = pathOf(w);
+      if (!path) return null;
+      const vals = drill[w.id] ?? [];
+      const lbl = (i: number) =>
+        path.levels[i].label ??
+        fieldMap.get(path.levels[i].field)?.label ??
+        path.levels[i].field;
+      return (
+        <nav
+          aria-label="Drill path"
+          className="rb-noprint mt-1 flex flex-wrap items-center gap-1 text-[11px]"
+        >
+          <button
+            type="button"
+            onClick={() => setDrill((d) => ({ ...d, [w.id]: [] }))}
+            className={`rounded px-1 font-semibold ${vals.length ? 'text-blue-600 hover:underline' : ''} ${FOCUS}`}
+          >
+            {lbl(0)}
+          </button>
+          {vals.map((v, i) => (
+            <React.Fragment key={i}>
+              <span aria-hidden="true">›</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setDrill((d) => ({ ...d, [w.id]: vals.slice(0, i + 1) }))
+                }
+                className={`rounded px-1 ${i < vals.length - 1 ? 'text-blue-600 hover:underline' : 'font-semibold'} ${FOCUS}`}
+              >
+                {v}
+              </button>
+            </React.Fragment>
+          ))}
+          <span className="opacity-60">
+            {vals.length < path.levels.length - 1
+              ? `· click a bar to drill into ${lbl(vals.length + 1)}`
+              : '· click a bar to open records'}
+          </span>
+        </nav>
+      );
+    },
+    [pathOf, drill, fieldMap]
+  );
+  const fetchRecords = useCallback(
+    async (o: {
+      filters: QueryFilter[];
+      sourceId?: string;
+      offset: number;
+      limit: number;
+    }) => {
+      const sid = o.sourceId ?? source.id;
+      const own = sid === source.id;
+      const src = sources.find((s) => s.id === sid);
+      if (!src) throw new Error('Unknown data source.');
+      const other = otherPreview[sid];
+      const fm = own
+        ? fieldMap
+        : (other?.fm ??
+          new Map(
+            enrichFields(src.fields, []).map((f) => [f.key, f] as const)
+          ));
+      const cols = own
+        ? def.fields.filter((k) => fm.has(k) && !k.startsWith(METRIC_PREFIX))
+        : src.fields.slice(0, 8).map((f) => f.key);
+      const q: ReportQuery = {
+        id: '__drill',
+        widgetId: '__drill',
+        label: 'Records',
+        sourceId: sid,
+        shape: 'records',
+        period: viewMode === 'final' && own ? period : null,
+        filters: [
+          ...(own
+            ? def.filters
+                .filter((r) => r.field && r.value !== '')
+                .map((r) => ({ field: r.field, op: r.op, value: r.value }))
+            : []),
+          ...o.filters,
+        ],
+        dimensions: [],
+        measures: [],
+        columns: cols,
+        offset: o.offset,
+        limit: o.limit,
+        orderBy: { field: src.dateField, dir: 'desc' },
+      };
+      const fields = cols
+        .map((k) => fm.get(k))
+        .filter((x): x is FieldDef => !!x);
+      if (viewMode === 'final' && runResult) {
+        if (!provider.execute)
+          throw new Error(
+            'This data backend does not support record drill-through.'
+          );
+        const res = await provider.execute(runResult.compiled.request, [q], {
+          signal: new AbortController().signal,
+        });
+        const r = res.results.__drill;
+        if (!r || r.shape !== 'records')
+          throw new Error(res.failures[0]?.message ?? 'No records returned.');
+        return { result: r, fields };
+      }
+      const rs = own ? baseRows : other?.rows;
+      if (!rs) {
+        ensureOther(sid);
+        throw new Error('Loading preview data… try again in a moment.');
+      }
+      return {
+        result: runLocalQuery(q, rs, fm, src.dateField) as RecordsResult,
+        fields,
+      };
+    },
+    [
+      source,
+      sources,
+      otherPreview,
+      fieldMap,
+      def.fields,
+      def.filters,
+      viewMode,
+      period,
+      runResult,
+      provider,
+      baseRows,
+      ensureOther,
+    ]
+  );
+
+  /* ---- host services handed to registry widgets ---- */
+  const env: WidgetEnv = useMemo(
+    () => ({
+      mode: viewMode,
+      source: source as unknown as SourceInfo,
+      fieldMap: fieldMap as unknown as Map<string, FieldInfo>,
+      colors,
+      currency,
+      compare: viewMode === 'final' && def.compare && effCompare !== 'none',
+      period,
+      vars,
+      fmt: (v, agg, field, style) =>
+        fmtMeasure(
+          v,
+          agg as Agg,
+          field ? fieldMap.get(field) : undefined,
+          currency,
+          style
+        ),
+      fmtPct: (v, d = 1) => `${v.toFixed(d)}%`,
+      onPick: interactive ? pickHandler : undefined,
+      onExpand: setExpandedId,
+      onDrillThrough: (widgetId, filters, sourceId) =>
+        setDrillThrough({
+          title: `${def.widgets.find((w) => w.id === widgetId)?.title ?? 'Records'}`,
+          filters,
+          sourceId,
+        }),
+      active: xf,
+    }),
+    [
+      viewMode,
+      source,
+      fieldMap,
+      colors,
+      currency,
+      def.compare,
+      effCompare,
+      period,
+      vars,
+      interactive,
+      pickHandler,
+      xf,
+      def.widgets,
+    ]
+  );
+
+  const failedMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const f of runResult?.failures ?? [])
+      m[f.queryId.split('#')[0]] = f.message;
+    return m;
+  }, [runResult]);
+
   const dataCtx: DataCtx = useMemo(
     () => ({
       rows: viewRows,
+      fullRows: rows,
+      xf,
       prevRows: viewPrev,
       source,
       fieldMap,
@@ -7885,14 +11804,25 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       currency,
       colors,
       autoBucket,
-      compare: def.compare,
+      compare: def.compare && effCompare !== 'none',
       canViewSensitive,
       onPick: interactive ? pickHandler : undefined,
       onExpand: setExpandedId,
       vars,
+      mode: viewMode,
+      results: runResult?.results,
+      failed: failedMap,
+      env,
+      drillClick: interactive ? drillClick : undefined,
+      drillCrumbs,
+      fetchRecords,
+      previewExec: viewMode === 'preview' ? previewExec : undefined,
+      previewTick: Object.keys(otherPreview).length,
     }),
     [
       viewRows,
+      rows,
+      xf,
       viewPrev,
       source,
       fieldMap,
@@ -7901,12 +11831,183 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       colors,
       autoBucket,
       def.compare,
+      effCompare,
       canViewSensitive,
       interactive,
       pickHandler,
       vars,
+      viewMode,
+      runResult,
+      failedMap,
+      env,
+      previewExec,
+      otherPreview,
+      drillClick,
+      drillCrumbs,
+      fetchRecords,
     ]
   );
+
+  /* ---- validation (live, actionable) ---- */
+  const sourceInfos = sources as unknown as SourceInfo[];
+  const widgetsAsRegistry = def.widgets as unknown as RegistryWidget[];
+  const issues = useMemo(
+    () =>
+      validateReport({
+        name: def.name,
+        sourceId: def.sourceId,
+        period: { ...def.period, compare: effCompare },
+        filters: def.filters,
+        widgets: widgetsAsRegistry,
+        schedule: def.schedule,
+        format: output.format,
+        sources: sourceInfos,
+        fieldMap: fieldMap as unknown as Map<string, FieldInfo>,
+        capabilities: provider.capabilities ?? {},
+        canExport: capabilities?.canExport,
+        canViewSensitive,
+        today,
+      }),
+    [
+      def,
+      effCompare,
+      widgetsAsRegistry,
+      output.format,
+      sourceInfos,
+      fieldMap,
+      provider,
+      capabilities,
+      canViewSensitive,
+      today,
+    ]
+  );
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [runDialog, setRunDialog] = useState(false);
+
+  /* ---- compile + run (ACTUAL report) ---- */
+  const compilable = useMemo<CompilableDefinition>(
+    () => ({
+      name: def.name,
+      sourceId: def.sourceId,
+      schemaVersion: SCHEMA_VERSION,
+      timezone: tz,
+      period: { ...def.period, compare: effCompare },
+      filters: def.filters,
+      widgets: widgetsAsRegistry,
+      metrics: allMetrics,
+      derived: def.derived ?? [],
+      createdAt: def.createdAt,
+    }),
+    [def, tz, effCompare, widgetsAsRegistry, allMetrics]
+  );
+  const compileNow = useCallback(
+    (
+      cross: { field: string; value: string } | null,
+      runId = uid(),
+      drilled = false
+    ) =>
+      compileReport({
+        definition: drilled
+          ? {
+              ...compilable,
+              widgets: def.widgets.map(
+                applyDrill
+              ) as unknown as RegistryWidget[],
+            }
+          : compilable,
+        sources: sourceInfos,
+        fieldMap: fieldMap as unknown as Map<string, FieldInfo>,
+        today,
+        fiscalYearStartMonth,
+        crossFilter: cross,
+        runId,
+        user: currentUser,
+        tenantId,
+      }),
+    [
+      compilable,
+      def.widgets,
+      applyDrill,
+      sourceInfos,
+      fieldMap,
+      today,
+      fiscalYearStartMonth,
+      currentUser,
+      tenantId,
+    ]
+  );
+  const currentHash = useMemo(() => definitionHash(compilable), [compilable]);
+  /** The definition changed after the report was generated: what is on screen is no longer what the design says. */
+  const stale =
+    !!run.state.result && run.state.result.meta.definitionHash !== currentHash;
+  const refinedKey = useRef('');
+
+  const startRun = () => {
+    if (hasErrors(issues)) {
+      setIssuesOpen(true);
+      return notify(
+        `Fix ${issues.filter((i) => i.severity === 'error').length} issue(s) before generating the report.`,
+        'error'
+      );
+    }
+    setCrossFilter(null);
+    setDrill({});
+    refinedKey.current = '';
+    setViewingFinal(false);
+    setRunDialog(true);
+    void run.start(compileNow(null), {
+      reportName: def.name,
+      sourceName: source.name,
+      user: currentUser,
+      filterLabels: def.filters
+        .filter((r) => r.field && r.value !== '')
+        .map((r) => ruleLabel(r, fieldMap)),
+      viewFilterLabels: [],
+    });
+  };
+  useEffect(() => {
+    if (run.state.phase === 'succeeded' && runDialog) {
+      setViewingFinal(true);
+      setRunDialog(false);
+      const m = run.state.result!.meta;
+      onAudit?.({
+        type: 'report.export',
+        reportName: def.name,
+        detail: `generated ${m.runId}, ${m.recordsMatched ?? '?'} records`,
+        at: m.generatedAt,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.state.phase]);
+
+  // Cross-filtering the ACTUAL report re-queries the backend (debounced); the source widget keeps its full data.
+  const xfKey = `${xf ? `${xf.field}=${xf.value}` : ''}|${drillKey === '{}' ? '' : drillKey}`;
+  useEffect(() => {
+    if (viewMode !== 'final' || !run.state.result) return;
+    if (refinedKey.current === xfKey) return;
+    const id = window.setTimeout(() => {
+      refinedKey.current = xfKey;
+      const c = compileNow(xf, run.state.result!.runId, true);
+      run.refine(
+        c,
+        c.queries.filter((q) => q.id !== RECORDS_QUERY_ID).map((q) => q.id),
+        [
+          ...(xf
+            ? [`${fieldMap.get(xf.field)?.label ?? xf.field} = ${xf.value}`]
+            : []),
+          ...Object.entries(drill)
+            .filter(([, v]) => v.length)
+            .map(
+              ([id2, v]) =>
+                `${def.widgets.find((w) => w.id === id2)?.title ?? 'Widget'}: ${v.join(' › ')}`
+            ),
+        ]
+      );
+    }, 250);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [xfKey, viewMode, run.state.result?.runId]);
 
   /* ---- field actions ---- */
   const setFields = (keys: string[]) =>
@@ -7978,7 +12079,24 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     setSelectedWidgetId(w.id);
   };
 
+  const addRegistryWidget = (kind: string) => {
+    const d = getWidget(kind);
+    if (!d) return;
+    const out = d.create({
+      source: source as unknown as SourceInfo,
+      fields: selectedFields as unknown as FieldInfo[],
+      sources: sourceInfos,
+    });
+    if ('unavailable' in out && !('kind' in out))
+      return notify(
+        String((out as { unavailable: string }).unavailable),
+        'error'
+      );
+    setEditMode(true);
+    addWidget(out as unknown as Widget);
+  };
   const addOfType = (id: string) => {
+    if (id.startsWith('ext:')) return addRegistryWidget(id.slice(4));
     const cats = selectedFields
       .filter((x) => isCat(x.type))
       .sort((a, b) => Number(!!b.order) - Number(!!a.order));
@@ -8133,6 +12251,46 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   /* ---- custom fields (categorisation) ---- */
   const [customOpen, setCustomOpen] = useState(false);
   const [customEdit, setCustomEdit] = useState<string | null>(null);
+  /* ---- calculated metrics ---- */
+  const [metricOpen, setMetricOpen] = useState(false);
+  const openMetric = () => setMetricOpen(true);
+  const saveMetric = (m: CalculatedMetric) => {
+    update((cur) => {
+      const list = cur.metrics ?? [];
+      if (m.key) {
+        return { ...cur, metrics: list.map((x) => (x.id === m.id ? m : x)) };
+      }
+      const taken = new Set([
+        ...certifiedMetrics.map((x) => x.key),
+        ...list.map((x) => x.key),
+      ]);
+      const base = `${METRIC_PREFIX}${slug(m.label).replace(/-/g, '_')}`;
+      let key = base,
+        i = 2;
+      while (taken.has(key)) key = `${base}_${i++}`;
+      return { ...cur, metrics: [...list, { ...m, key, certified: false }] };
+    });
+    notify(
+      `Metric “${m.label}” saved. Use it via Value → Calculated metric.`,
+      'success'
+    );
+  };
+  const removeMetric = (id: string) =>
+    update((cur) => {
+      const gone = (cur.metrics ?? []).find((x) => x.id === id);
+      if (!gone) return cur;
+      return {
+        ...cur,
+        metrics: (cur.metrics ?? []).filter((x) => x.id !== id),
+        widgets: cur.widgets.map((w) =>
+          (w.kind === 'kpi' || w.kind === 'chart' || w.kind === 'insight') &&
+          w.field === gone.key
+            ? ({ ...w, field: undefined, agg: 'count' } as Widget)
+            : w
+        ),
+      };
+    });
+
   const openCustom = (key?: string) => {
     setCustomEdit(key ?? null);
     setCustomOpen(true);
@@ -8201,7 +12359,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    if (!dirty) return;
+    // Restricted reports are never written to browser storage.
+    if (!dirty || def.classification === 'restricted') return;
     const id = window.setTimeout(() => {
       try {
         localStorage.setItem(
@@ -8240,7 +12399,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
         if (mod && e.key.toLowerCase() === 'd') {
           e.preventDefault();
           duplicateWidget(selectedWidgetId);
-        } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        } else if (e.key === 'Delete') {
           e.preventDefault();
           removeWidget(selectedWidgetId);
         } else if (e.key === 'Escape') setSelectedWidgetId(null);
@@ -8252,6 +12411,16 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
 
   /* ---- navigation ---- */
   const validate = (target: number): string | null => {
+    if (target >= 2 && rangeErr) return rangeErr;
+    if (target >= 3 && def.schedule.frequency !== 'none') {
+      const bad = def.schedule.recipients
+        .split(',')
+        .map((x) => x.trim())
+        .filter((x) => x && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+      if (bad.length) return `Invalid recipient e-mail: ${bad[0]}`;
+      if (!def.schedule.recipients.trim())
+        return 'Add at least one recipient for the schedule, or set it to on-demand.';
+    }
     if (target >= 2) {
       if (!def.name.trim()) return 'Give your report a name before continuing.';
       if (def.fields.length === 0)
@@ -8271,14 +12440,16 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   };
 
   /* ---- templates ---- */
-  const saveTemplate = async (draft: boolean) => {
+  const saveTemplate = async (draft: boolean, asCopy = false) => {
     if (!def.name.trim())
       return notify('Give your report a name before saving.', 'error');
     const now = new Date().toISOString();
-    const existing = userTemplates.find((x) => x.id === templateId);
+    const existing = asCopy
+      ? undefined
+      : userTemplates.find((x) => x.id === templateId);
     const tpl: ReportTemplate = {
       id: existing?.id ?? uid(),
-      name: def.name.trim(),
+      name: asCopy ? `${def.name.trim()} (copy)` : def.name.trim(),
       description: def.description,
       definition: JSON.parse(JSON.stringify(def)),
       isDraft: draft,
@@ -8293,8 +12464,18 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       setTemplateId(tpl.id);
       resetHistory(def);
       clearAutosave();
+      onAudit?.({
+        type: 'report.save',
+        reportName: tpl.name,
+        detail: draft ? 'draft' : 'template',
+        at: now,
+      });
       notify(
-        draft ? 'Draft saved.' : 'Template saved. Find it under Templates.',
+        asCopy
+          ? 'Saved as a copy.'
+          : draft
+            ? 'Draft saved.'
+            : 'Template saved. Find it under Templates.',
         'success'
       );
     } catch {
@@ -8347,6 +12528,11 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       await templateStore.remove(tp.id);
       setUserTemplates((p) => p.filter((x) => x.id !== tp.id));
       if (templateId === tp.id) setTemplateId(null);
+      onAudit?.({
+        type: 'report.delete',
+        reportName: tp.name,
+        at: new Date().toISOString(),
+      });
       notify('Template deleted.', 'success');
     } catch {
       notify('Could not delete the template.', 'error');
@@ -8354,16 +12540,11 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   };
   const importTemplate = async (file: File) => {
     try {
-      const raw = JSON.parse(await file.text());
-      const defn = raw.definition ?? raw;
-      if (
-        !defn ||
-        !Array.isArray(defn.widgets) ||
-        !sources.some((s) => s.id === defn.sourceId)
-      )
-        throw new Error('invalid');
+      const text = await file.text();
+      if (text.length > 2_000_000) throw new Error('too large');
+      const raw = JSON.parse(text);
+      const d = validateImportedDefinition(raw.definition ?? raw, sources);
       const now = new Date().toISOString();
-      const d = cloneDefinition(defn as ReportDefinition);
       const tpl: ReportTemplate = {
         id: uid(),
         name: raw.name ?? d.name ?? 'Imported report',
@@ -8400,54 +12581,84 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     setStep(1);
   };
 
-  /* ---- generation ---- */
-  const generate = async () => {
-    const err = validate(3);
-    if (err) return notify(err, 'error');
+  /* ---- export: ONLY from an actual run (never from the preview sample) ---- */
+  const exportReport = async () => {
+    if (capabilities?.canExport === false)
+      return notify('You do not have permission to export reports.', 'error');
+    const r = run.state.result;
+    if (!r || viewMode !== 'final')
+      return notify(
+        'Generate the report first. Exports always use actual data, never the preview sample.',
+        'error'
+      );
+    if (stale)
+      return notify(
+        'The report changed after it was generated. Regenerate before exporting.',
+        'error'
+      );
     setGenerating(true);
     try {
       if (onGenerate) {
-        const hidden = canViewSensitive
-          ? []
-          : selectedFields.filter((x) => x.sensitive).map((x) => x.key);
-        const safeRows = hidden.length
-          ? viewRows.map((r) => {
-              const c: Row = { ...r };
-              hidden.forEach((k) => {
-                c[k] = MASK;
-              });
-              return c;
-            })
-          : viewRows;
         await onGenerate({
           definition: def,
           templateId: templateId ?? undefined,
-          rows: safeRows,
+          run: {
+            meta: r.meta,
+            request: r.compiled.request,
+            results: r.results,
+          },
           columns: selectedFields,
           format: output.format,
           options: output,
           schedule: def.schedule,
         });
       } else if (output.format === 'csv') {
-        downloadCsv(
-          `${slug(def.name)}-${iso(new Date())}.csv`,
-          selectedFields.map((x) => x.label),
-          viewRows.map((r) =>
-            selectedFields.map((x) => exportCell(x, r[x.key], canViewSensitive))
-          )
-        );
-      } else {
-        await new Promise((r) => setTimeout(r, 150));
+        const m = r.meta;
+        const grid: (string | number | undefined)[][] = [
+          [def.name],
+          ['Data status', 'ACTUAL DATA'],
+          ['Reporting period', describePeriod(m.period)],
+          ['Records in scope', m.recordsMatched ?? ''],
+          ['Filters', m.filters.join(' | ') || 'None'],
+          ['Generated', `${m.generatedAt} by ${m.generatedBy}`],
+          ['Data as of', m.dataAsOf ?? ''],
+          ['Run / definition', `${m.runId} / ${m.definitionHash}`],
+          ...(m.partial
+            ? [
+                [
+                  'WARNING',
+                  'Partial data: some widgets could not be calculated',
+                ],
+              ]
+            : []),
+          [],
+        ];
+        for (const w of def.widgets) {
+          const tb = resultTable(w, r.results, dataCtx);
+          if (!tb) continue;
+          grid.push([w.title], tb.headers, ...tb.rows, []);
+        }
+        downloadCsvGrid(`${slug(def.name)}-${iso(new Date())}.csv`, grid);
+      } else if (output.format === 'pdf') {
+        await new Promise((res) => setTimeout(res, 150));
         window.print();
+      } else {
+        throw new Error('unsupported');
       }
       setLastRun({
         at: new Date(),
-        rows: viewRows.length,
+        rows: r.meta.recordsMatched ?? 0,
         format: output.format,
       });
-      notify('Report generated.', 'success');
+      onAudit?.({
+        type: 'report.export',
+        reportName: def.name,
+        detail: `${output.format}, run ${r.meta.runId}, ${r.meta.recordsMatched ?? '?'} records`,
+        at: new Date().toISOString(),
+      });
+      notify('Report exported.', 'success');
     } catch {
-      notify('Report generation failed. Try again.', 'error');
+      notify('Export failed. Try again.', 'error');
     } finally {
       setGenerating(false);
     }
@@ -8488,31 +12699,186 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       )}
     >
       {() => (
-        <FilterEditor
-          fields={catalogue}
-          rules={def.filters}
-          allRows={allRows}
-          onChange={(filters) => update((d) => ({ ...d, filters }))}
-        />
+        <div>
+          <FilterEditor
+            fields={catalogue}
+            rules={def.filters}
+            allRows={allRows}
+            onChange={(filters) => update((d) => ({ ...d, filters }))}
+          />
+          <div className={`space-y-1.5 border-t p-3 ${t.line}`}>
+            <p className={`text-[11px] font-semibold ${t.muted}`}>
+              Filter presets
+            </p>
+            {(def.filterPresets ?? []).map((pr) => (
+              <div key={pr.id} className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    update((d) => ({
+                      ...d,
+                      filters: pr.rules.map((r) => ({ ...r, id: uid() })),
+                    }))
+                  }
+                  className={`flex-1 truncate rounded-lg border px-2 py-1 text-left text-xs ${t.btn} ${FOCUS}`}
+                >
+                  {pr.name}
+                </button>
+                <IconButton
+                  label={`Delete preset ${pr.name}`}
+                  onClick={() =>
+                    update((d) => ({
+                      ...d,
+                      filterPresets: (d.filterPresets ?? []).filter(
+                        (x) => x.id !== pr.id
+                      ),
+                    }))
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </IconButton>
+              </div>
+            ))}
+            <div className="flex gap-1.5">
+              <TextInput
+                aria-label="Preset name"
+                placeholder="Name this filter set"
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+              />
+              <GhostButton
+                onClick={() => {
+                  const rules = def.filters.filter(
+                    (r) => r.field && r.value !== ''
+                  );
+                  if (!presetName.trim() || !rules.length)
+                    return notify(
+                      'Add at least one filter and a name to save a preset.',
+                      'error'
+                    );
+                  update((d) => ({
+                    ...d,
+                    filterPresets: [
+                      ...(d.filterPresets ?? []),
+                      {
+                        id: uid(),
+                        name: presetName.trim().slice(0, 60),
+                        rules,
+                      },
+                    ],
+                  }));
+                  setPresetName('');
+                }}
+              >
+                Save
+              </GhostButton>
+            </div>
+          </div>
+        </div>
       )}
     </Popover>
   );
 
-  const rangeSelect = (
-    <div className="w-36">
-      <Select
-        label="Date range"
-        value={def.dateRange}
-        options={(Object.keys(RANGE_LABEL) as DateRangeKey[]).map((k) => ({
-          value: k,
-          label: RANGE_LABEL[k],
-        }))}
-        onChange={(v) =>
-          update((d) => ({ ...d, dateRange: v as DateRangeKey }))
-        }
-      />
+  const periodButton = (
+    <Popover
+      width={300}
+      trigger={({ toggle, ref }) => (
+        <button
+          ref={ref}
+          type="button"
+          onClick={toggle}
+          title="Reporting period for the actual report (the preview sample is not filtered by it)"
+          className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[13px] font-medium ${rangeErr ? 'border-red-400 text-red-600' : t.btn} ${FOCUS}`}
+        >
+          <Calendar className="h-3.5 w-3.5" /> {PRESET_LABEL[def.period.preset]}
+        </button>
+      )}
+    >
+      {() => (
+        <div className="p-3">
+          <PeriodPicker
+            value={def.period}
+            onChange={(pd) => update((d) => ({ ...d, period: pd }))}
+            timezone={tz}
+            fiscalYearStartMonth={fiscalYearStartMonth}
+          />
+        </div>
+      )}
+    </Popover>
+  );
+
+  /* chips: every active scope in one glance (period · filters · cross-filter) */
+  const filterChips = (
+    <div
+      className="flex flex-wrap items-center gap-1.5"
+      aria-label="Active filters"
+    >
+      <span
+        className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] font-medium ${t.inset} ${t.body}`}
+      >
+        <Calendar className="h-3 w-3" /> {describePeriod(period)}
+      </span>
+      {def.filters
+        .filter((r) => r.field && r.value !== '')
+        .map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() =>
+              update((d) => ({
+                ...d,
+                filters: d.filters.filter((x) => x.id !== r.id),
+              }))
+            }
+            title="Remove filter"
+            className={`inline-flex h-6 items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 text-[11px] font-medium text-blue-800 ${FOCUS}`}
+          >
+            {ruleLabel(r, fieldMap)} <X className="h-3 w-3" />
+          </button>
+        ))}
     </div>
   );
+
+  /* preview / actual banner shown above the report */
+  const previewBanner = (
+    <PreviewBanner
+      info={{
+        limit: previewLimit,
+        loaded: allRows.length,
+        total: rowsState.id === source.id ? rowsState.total : undefined,
+        from: previewExtent?.from,
+        to: previewExtent?.to,
+        loadedAt,
+        sourceName: source.name,
+        recordLabel: source.recordLabel,
+      }}
+      options={PREVIEW_LIMIT_OPTIONS}
+      onLimit={(n) => update((d) => ({ ...d, previewLimit: n }))}
+      onRefresh={refreshData}
+      loading={rowsLoading}
+      periodLabel={describePeriod(period)}
+    />
+  );
+  const modeBanner =
+    viewMode === 'final' && run.state.result ? (
+      <ActualBanner
+        meta={run.state.result.meta}
+        stale={stale}
+        refining={run.state.refining}
+        onRegenerate={startRun}
+        onBackToDesign={() => setViewingFinal(false)}
+      />
+    ) : (
+      previewBanner
+    );
+  const paperMode = viewMode;
+  /** Section widgets pass their filters down to the widgets that follow them. */
+  const canvasWidgets = effectiveWidgets;
+  const paperMeta = runResult?.meta;
+  const paperCount =
+    viewMode === 'final'
+      ? (runResult?.meta.recordsMatched ?? 0)
+      : viewRows.length;
 
   const statusLabel = dirty ? 'Unsaved' : templateId ? 'Saved' : 'New';
 
@@ -8608,6 +12974,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
           onSetAll={setFields}
           onAdd={quickAddFromField}
           onCustom={openCustom}
+          onMetric={() => openMetric()}
         />
       </Panel>
 
@@ -8652,10 +13019,10 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
                 <Table2 className="h-4 w-4" /> Data preview
               </>
             }
-            hint={`${selectedFields.length} fields · ${rows.length.toLocaleString()} records in period`}
-            action={rangeSelect}
+            hint={`${selectedFields.length} fields · ${rows.length.toLocaleString()} preview records (latest ${previewLimit})`}
           />
-          <div className="flex min-h-0 flex-1 flex-col p-3">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+            {previewBanner}
             {rowsLoading ? (
               <div className="space-y-2" aria-hidden="true">
                 {Array.from({ length: 8 }).map((_, i) => (
@@ -8703,6 +13070,31 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
                 rows={2}
                 placeholder="What is this report for?"
                 className={`w-full resize-none rounded-lg border px-2.5 py-2 text-[13px] ${t.input} ${FOCUS}`}
+              />
+            </Field>
+            <Field label="Audience">
+              <Select
+                value={def.audience ?? 'management'}
+                options={[
+                  { value: 'executive', label: 'Executive' },
+                  { value: 'management', label: 'Management' },
+                  { value: 'analytical', label: 'Analytical' },
+                ]}
+                onChange={(v) =>
+                  update((d) => ({
+                    ...d,
+                    audience: v as ReportDefinition['audience'],
+                  }))
+                }
+              />
+            </Field>
+            <Field label="Tags (comma-separated)">
+              <TextInput
+                value={def.tags ?? ''}
+                onChange={(e) =>
+                  update((d) => ({ ...d, tags: e.target.value }), 'tags')
+                }
+                placeholder="e.g. monthly, board"
               />
             </Field>
             <Field label="Classification">
@@ -8805,6 +13197,11 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
                 </button>
               ))}
             </div>
+            <div className={`my-3 border-t ${t.line}`} />
+            <RegistryPalette
+              capabilities={provider.capabilities}
+              onAdd={addRegistryWidget}
+            />
           </div>
         ) : (
           <FieldsPanel
@@ -8817,6 +13214,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
             onSetAll={setFields}
             onAdd={quickAddFromField}
             onCustom={openCustom}
+            onMetric={() => openMetric()}
           />
         )}
       </Panel>
@@ -8874,7 +13272,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
               onChange={setDevice}
             />
           </div>
-          {rangeSelect}
+          {periodButton}
           {filtersPopover}
           {crossChip}
           <div className="ml-auto flex items-center gap-2">
@@ -8919,18 +13317,22 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
             </p>
           ) : (
             <div
-              className="mx-auto transition-[max-width] duration-200"
+              className="mx-auto space-y-3 transition-[max-width] duration-200"
               style={{ maxWidth: device === 'mobile' ? 390 : '100%' }}
             >
+              {modeBanner}
+              {filterChips}
               <ReportPaper
                 def={def}
                 source={source}
                 fieldMap={fieldMap}
-                recordCount={viewRows.length}
+                recordCount={paperCount}
                 user={currentUser}
+                mode={paperMode}
+                meta={paperMeta}
               >
                 <Canvas
-                  widgets={def.widgets}
+                  widgets={canvasWidgets}
                   data={dataCtx}
                   selectedId={selectedWidgetId}
                   readOnly={!editMode}
@@ -9057,11 +13459,14 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
             key={selectedWidget.id}
             widget={selectedWidget}
             fields={selectedFields}
+            metricFields={metricFields}
             allFields={catalogue}
             allRows={allRows}
             onPatch={(p, key) => patchWidget(selectedWidget.id, p, key)}
             onDuplicate={() => duplicateWidget(selectedWidget.id)}
             onRemove={() => removeWidget(selectedWidget.id)}
+            sources={sourceInfos}
+            drillPaths={def.drillPaths ?? []}
           />
         ) : (
           <ReportInspector
@@ -9092,17 +13497,23 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
           action={<div className="flex items-center gap-2">{crossChip}</div>}
         />
         <div className={`min-h-0 flex-1 overflow-y-auto p-4 ${t.canvas}`}>
-          <div className="mx-auto max-w-[1100px]">
+          <div className="mx-auto max-w-[1100px] space-y-3">
+            <div className="rb-noprint space-y-3">
+              {modeBanner}
+              {filterChips}
+            </div>
             <ReportPaper
               id="rb-print"
               def={def}
               source={source}
               fieldMap={fieldMap}
-              recordCount={viewRows.length}
+              recordCount={paperCount}
               user={currentUser}
+              mode={paperMode}
+              meta={paperMeta}
             >
               <Canvas
-                widgets={def.widgets}
+                widgets={canvasWidgets}
                 data={dataCtx}
                 selectedId={null}
                 readOnly
@@ -9120,48 +13531,44 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       <Panel>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <Section
-            title="Run parameters"
+            title="Report period & filters"
             defaultOpen
-            badge={RANGE_LABEL[def.dateRange]}
+            badge={PRESET_LABEL[def.period.preset]}
           >
-            <Field label="Date range">
-              <Select
-                value={def.dateRange}
-                options={(Object.keys(RANGE_LABEL) as DateRangeKey[]).map(
-                  (k) => ({ value: k, label: RANGE_LABEL[k] })
-                )}
-                onChange={(v) =>
-                  update((d) => ({ ...d, dateRange: v as DateRangeKey }))
-                }
-              />
-            </Field>
-            {def.dateRange === 'custom' && (
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="From">
-                  <TextInput
-                    type="date"
-                    value={def.customFrom ?? ''}
-                    onChange={(e) =>
-                      update((d) => ({ ...d, customFrom: e.target.value }))
-                    }
-                  />
-                </Field>
-                <Field label="To">
-                  <TextInput
-                    type="date"
-                    value={def.customTo ?? ''}
-                    onChange={(e) =>
-                      update((d) => ({ ...d, customTo: e.target.value }))
-                    }
-                  />
-                </Field>
-              </div>
-            )}
+            <PeriodPicker
+              value={def.period}
+              onChange={(pd) => update((d) => ({ ...d, period: pd }))}
+              timezone={tz}
+              fiscalYearStartMonth={fiscalYearStartMonth}
+            />
             <FilterEditor
               fields={catalogue}
               rules={def.filters}
               allRows={allRows}
               onChange={(filters) => update((d) => ({ ...d, filters }))}
+            />
+          </Section>
+
+          <Section
+            title="Checks before generating"
+            defaultOpen
+            badge={
+              issues.filter((i) => i.severity === 'error').length
+                ? `${issues.filter((i) => i.severity === 'error').length} to fix`
+                : 'Ready'
+            }
+          >
+            <IssuesPanel
+              issues={issues}
+              onJump={(i) => {
+                if (i.widgetId) {
+                  setStep(2);
+                  setEditMode(true);
+                  setViewingFinal(false);
+                  setSelectedWidgetId(i.widgetId);
+                } else if (i.fix === 'data') setStep(1);
+                else if (i.fix === 'period' || i.fix === 'filters') setStep(3);
+              }}
             />
           </Section>
 
@@ -9320,9 +13727,29 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
           )}
           <button
             type="button"
-            onClick={generate}
-            disabled={generating || rowsLoading}
-            className={`${PRIMARY_BTN} !h-9 w-full`}
+            onClick={startRun}
+            disabled={run.state.phase === 'running' || rowsLoading}
+            className={`${viewMode === 'final' && !stale ? `${t.btn} border` : PRIMARY_BTN} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold`}
+          >
+            {run.state.phase === 'running' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            {viewMode === 'final' ? 'Regenerate report' : 'Generate report'}
+          </button>
+          <button
+            type="button"
+            onClick={exportReport}
+            disabled={generating || viewMode !== 'final' || stale}
+            title={
+              viewMode !== 'final'
+                ? 'Generate the report first: exports use actual data only'
+                : stale
+                  ? 'Regenerate first: the report changed'
+                  : undefined
+            }
+            className={`${viewMode === 'final' && !stale ? PRIMARY_BTN : `${t.btn} border`} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50`}
           >
             {generating ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -9330,10 +13757,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
               <Download className="h-4 w-4" />
             )}
             {generating
-              ? 'Generating…'
-              : output.format === 'pdf'
-                ? 'Generate PDF'
-                : 'Generate report'}
+              ? 'Exporting…'
+              : `Export ${output.format.toUpperCase()}`}
           </button>
         </div>
       </Panel>
@@ -9350,7 +13775,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     .rb-noprint { display: none !important; }
     .rb-pb { break-before: page; }
     .rb-avoid { break-inside: avoid; }
-    @page { size: ${output.paper} ${output.orientation}; margin: 10mm; }
+    @page { size: ${output.paper} ${output.orientation}; margin: 12mm 10mm 14mm; @bottom-center { content: "${CLASSIFICATION[def.classification].label} · Page " counter(page) " of " counter(pages); font-size: 9px; color: #64748b; } }
   }`;
 
   return (
@@ -9450,6 +13875,15 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
               >
                 <Redo2 className="h-4 w-4" />
               </IconButton>
+              <IconButton
+                label="Refresh data"
+                onClick={refreshData}
+                disabled={rowsLoading}
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${rowsLoading ? 'animate-spin' : ''}`}
+                />
+              </IconButton>
               <GhostButton
                 onClick={() => setTemplatesOpen(true)}
                 icon={<FolderOpen className="h-3.5 w-3.5" />}
@@ -9467,6 +13901,13 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
                 icon={<Save className="h-3.5 w-3.5" />}
               >
                 Save draft
+              </GhostButton>
+              <GhostButton
+                onClick={() => saveTemplate(false, true)}
+                icon={<Copy className="h-3.5 w-3.5" />}
+                title="Save a copy under a new name"
+              >
+                Save as
               </GhostButton>
               {step > 1 && (
                 <GhostButton
@@ -9488,16 +13929,16 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
               ) : (
                 <button
                   type="button"
-                  onClick={generate}
-                  disabled={generating || rowsLoading}
+                  onClick={startRun}
+                  disabled={run.state.phase === 'running' || rowsLoading}
                   className={PRIMARY_BTN}
                 >
-                  {generating ? (
+                  {run.state.phase === 'running' ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Download className="h-3.5 w-3.5" />
                   )}{' '}
-                  Generate
+                  Generate report
                 </button>
               )}
             </div>
@@ -9535,10 +13976,65 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
             </div>
           )}
 
+          {rangeErr && (
+            <div
+              role="alert"
+              className="flex shrink-0 items-center gap-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800"
+            >
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {rangeErr} Widgets show no data until this is fixed.
+            </div>
+          )}
+
           <div className="min-h-0 flex-1">
             {step === 1 && renderStep1()}
             {step === 2 && renderStep2()}
             {step === 3 && renderStep3()}
+          </div>
+
+          <div
+            role="status"
+            className={`flex shrink-0 flex-wrap items-center gap-x-4 gap-y-0.5 rounded-xl border px-3 py-1 text-[11px] ${t.card} ${t.muted}`}
+          >
+            <span>
+              {rowsLoading
+                ? 'Loading data…'
+                : rowsError
+                  ? 'Data unavailable'
+                  : 'Ready'}
+            </span>
+            {viewMode === 'final' && runResult ? (
+              <span className="font-medium text-emerald-700">
+                ACTUAL DATA ·{' '}
+                {(runResult.meta.recordsMatched ?? 0).toLocaleString()} records
+                in scope · run {runResult.meta.runId.slice(0, 8)}
+              </span>
+            ) : (
+              <span className="font-medium text-amber-700">
+                PREVIEW SAMPLE · {rawRows.length.toLocaleString()}
+                {rowsState.id === source.id && rowsState.total
+                  ? ` of ${rowsState.total.toLocaleString()}`
+                  : ''}{' '}
+                {source.recordLabel} loaded · {viewRows.length.toLocaleString()}{' '}
+                in view
+              </span>
+            )}
+            {loadedAt && viewMode === 'preview' && (
+              <span>Sample refreshed {fmtDateTime(loadedAt)}</span>
+            )}
+            <span>Time zone {def.timezone ?? DEFAULT_TZ}</span>
+            <span className="ml-auto">
+              {(rangeErr ? 1 : 0) +
+                (rowsError ? 1 : 0) +
+                (rowsTruncated ? 1 : 0)}{' '}
+              problem
+              {(rangeErr ? 1 : 0) +
+                (rowsError ? 1 : 0) +
+                (rowsTruncated ? 1 : 0) ===
+              1
+                ? ''
+                : 's'}
+            </span>
           </div>
 
           <TemplatesDrawer
@@ -9561,21 +14057,42 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
             onSave={saveDerived}
             onRemove={removeDerived}
           />
+          <MetricModal
+            open={metricOpen}
+            fields={catalogue}
+            fieldMap={fieldMap}
+            certified={certifiedMetrics}
+            mine={def.metrics ?? []}
+            rows={rows}
+            onClose={() => setMetricOpen(false)}
+            onSave={saveMetric}
+            onRemove={removeMetric}
+          />
+          <DrillThroughModal
+            info={drillThrough}
+            data={dataCtx}
+            onClose={() => setDrillThrough(null)}
+          />
           <WidgetModal
             widget={def.widgets.find((w) => w.id === expandedId) ?? null}
             data={dataCtx}
             onClose={() => setExpandedId(null)}
           />
 
-          {rowsTruncated && (
-            <div
-              role="status"
-              aria-live="polite"
-              className="fixed bottom-20 left-1/2 z-[60] -translate-x-1/2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-[13px] font-medium text-amber-950 shadow-lg"
-            >
-              Only the first 100 rows were loaded for preview. Counts, aggregates, and exports may be incomplete.
-            </div>
-          )}
+          {runDialog &&
+            run.state.phase !== 'idle' &&
+            run.state.phase !== 'succeeded' && (
+              <RunDialog
+                state={run.state}
+                reportName={def.name}
+                onCancel={run.cancel}
+                onRetry={run.retry}
+                onClose={() => {
+                  run.cancel();
+                  setRunDialog(false);
+                }}
+              />
+            )}
 
           {toast && (
             <div
@@ -9592,4 +14109,15 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   );
 };
 
+export { createLocalProvider, runLocalQuery, SOURCES as DEMO_SOURCES };
+/** @internal exposed for tests */
+export const __test = {
+  BUILTIN_TEMPLATES,
+  enrichFields,
+  metricField,
+  normalizeRows,
+  applyDerived,
+  aggregate,
+  blankMetric,
+};
 export default ReportBuilder;

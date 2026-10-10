@@ -767,7 +767,7 @@ export const reportTemplateStore: ReportTemplateStore = {
         'reportTemplateStore.list',
         'API unavailable, using mock templates'
       );
-      return [...MOCK_TEMPLATES, ...readLocalTemplates()];
+      return [ ...readLocalTemplates()];
     }
   },
   save: async (template) => {
