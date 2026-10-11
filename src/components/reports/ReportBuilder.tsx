@@ -126,81 +126,7077 @@ import {
   X,
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import {
-  DARK,
-  FOCUS,
-  LIGHT,
-  PRIMARY_BTN,
-  ThemeCtx,
-  useT,
-  type Tokens,
-} from './report-builder/theme';
-import {
-  getWidget,
-  hasWidget,
-  type FieldInfo,
-  type QuerySpec,
-  type RegistryWidget,
-  type ResultStatus,
-  type SourceInfo,
-  type WidgetEnv,
-  type ExtKind,
-} from './report-builder/registry';
-import { resultKey } from './report-builder/compiler';
-import { evalFormula, parseFormula } from './report-builder/formula';
-import {
-  PRESET_LABEL,
-  describePeriod,
-  legacyRangeToPeriod,
-  periodError,
-  resolveComparison,
-  resolvePeriod,
-  todayIn,
-} from './report-builder/dateRanges';
-import { useReportRun } from './report-builder/runEngine';
-import {
-  RECORDS_QUERY_ID,
-  applySectionFilters,
-  compileReport,
-  definitionHash,
-  type CompilableDefinition,
-} from './report-builder/compiler';
-import { hasErrors, validateReport } from './report-builder/validation';
 import { Calendar } from 'lucide-react';
-import './report-builder/widgets';
-import { SchemaInspector } from './report-builder/components/SchemaInspector';
 import {
-  CATEGORY_LABEL,
-  listWidgets,
-  type WidgetCategory,
-} from './report-builder/registry';
-import { registerLegacyWidgets } from './report-builder/legacyDescriptors';
-import {
-  ActualBanner,
-  IssuesPanel,
-  PreviewBanner,
-  RunDialog,
-} from './report-builder/components/RunPanel';
-import { PeriodPicker } from './report-builder/components/PeriodPicker';
-import type {
-  CompareMode,
-  DatePreset,
-  GroupedResult,
-  HistogramResult,
-  PointsResult,
-  QuantilesResult,
-  QueryFilter,
-  QueryResult,
-  RecordsResult,
-  ReportDataProvider,
-  ReportPeriod,
-  ReportQuery,
-  ReportRunMetadata,
-  ReportRunRequest,
-  ResolvedPeriod,
-  ScalarResult,
-} from './report-builder/contracts';
-import { cellKeyOf } from './report-builder/contracts';
+  ArrowDownRight,
+  ArrowUpRight,
+  BarChart2,
+  Circle,
+  Filter as FunnelIcon,
+  Gauge,
+  Heading,
+  Info,
+  LineChart,
+  ListOrdered,
+  Map as MapIcon,
+  ScrollText,
+  Share2,
+  ShieldCheck,
+  Sigma,
+  TrendingUp,
+  Waves,
+  XCircle,
+} from 'lucide-react';
+
+/* ==========================================================================
+ * Report Builder core (inlined): theme tokens, query contract, widget registry, compiler,
+ * validation, run engine and the fraud / risk widget library.
+ * Single-file by design (same deployment model as before): no extra module paths are required.
+ * ======================================================================== */
+
+/* ---------------- theme.ts ---------------- */
+/**
+ * Design tokens shared by the Report Builder and its extracted modules.
+ * (Moved verbatim out of ReportBuilder.tsx so widgets/components can live in their own files.)
+ */
+
+interface Tokens {
+  dark: boolean;
+  card: string;
+  inset: string;
+  canvas: string;
+  line: string;
+  lineStrong: string;
+  text: string;
+  body: string;
+  muted: string;
+  hover: string;
+  input: string;
+  btn: string;
+  chipIcon: string;
+  selected: string;
+  toggleOff: string;
+  skeleton: string;
+  pop: string;
+}
+const LIGHT: Tokens = {
+  dark: false,
+  card: 'bg-white border-slate-200 shadow-sm',
+  inset: 'bg-slate-50 border-slate-200',
+  canvas: 'bg-slate-100/70',
+  line: 'border-slate-100',
+  lineStrong: 'border-slate-200',
+  text: 'text-slate-900',
+  body: 'text-slate-700',
+  muted: 'text-slate-500',
+  hover: 'hover:bg-slate-50',
+  input: 'bg-white border-slate-200 text-slate-900 placeholder:text-slate-400',
+  btn: 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50',
+  chipIcon: 'bg-blue-50 text-blue-600',
+  selected: 'bg-blue-50 border-blue-500 text-blue-700',
+  toggleOff: 'bg-slate-300',
+  skeleton: 'bg-slate-100',
+  pop: 'bg-white border-slate-200 text-slate-700 shadow-xl',
+};
+const DARK: Tokens = {
+  dark: true,
+  card: 'bg-slate-900/60 border-white/15 shadow-sm',
+  inset: 'bg-white/[0.04] border-white/15',
+  canvas: 'bg-black/20',
+  line: 'border-white/10',
+  lineStrong: 'border-white/15',
+  text: 'text-white',
+  body: 'text-white/80',
+  muted: 'text-white/60',
+  hover: 'hover:bg-white/5',
+  input: 'bg-white/10 border-white/20 text-white placeholder:text-white/50',
+  btn: 'bg-white/10 border-white/20 text-white hover:bg-white/20',
+  chipIcon: 'bg-blue-500/20 text-blue-300',
+  selected: 'bg-blue-500/15 border-blue-400 text-blue-200',
+  toggleOff: 'bg-white/25',
+  skeleton: 'bg-white/10',
+  pop: 'bg-slate-900 border-white/20 text-white/90 shadow-2xl',
+};
+const ThemeCtx = createContext<Tokens>(LIGHT);
+const useT = () => useContext(ThemeCtx);
+
+const FOCUS =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
+const PRIMARY_BTN = `inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`;
+
+/* ---------------- contracts.ts ---------------- */
+/**
+ * Report Builder: data contracts
+ * ----------------------------------------------------------------------------
+ * The browser never aggregates the production dataset. It sends a *report definition compiled into
+ * queries* to the backend and receives *aggregated results*:
+ *
+ *   Browser ── ReportRunRequest (queries) ──▶ Backend query engine ──▶ Database
+ *   Browser ◀── QueryResult (aggregates) ────┘
+ *
+ * Two modes use the same query vocabulary but different executors:
+ *   - PREVIEW  design-time, tiny sample (default latest 100 rows) executed in the browser
+ *   - FINAL    the real report, executed by `ReportDataProvider` on the server
+ *
+ * This file is dependency-free (no React) so it can be shared with the server (Node) as-is.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Periods
+ * ------------------------------------------------------------------------- */
+type DatePreset =
+  | 'today'
+  | 'yesterday'
+  | 'last_7_days'
+  | 'last_30_days'
+  | 'last_90_days'
+  | 'last_6_months'
+  | 'last_12_months'
+  | 'this_month'
+  | 'previous_month'
+  | 'this_quarter'
+  | 'previous_quarter'
+  | 'this_year'
+  | 'previous_year'
+  | 'year_to_date'
+  | 'all_time'
+  | 'custom';
+
+type CompareMode = 'previous_period' | 'previous_year' | 'none';
+
+/** What the user configures (stored in the report definition). */
+interface ReportPeriod {
+  preset: DatePreset;
+  /** ISO dates, only for preset === 'custom'. */
+  from?: string;
+  to?: string;
+  compare: CompareMode;
+}
+
+/** A concrete, inclusive date window (ISO yyyy-mm-dd, in the report time zone). */
+interface ResolvedPeriod {
+  preset: DatePreset;
+  from: string;
+  to: string;
+  days: number;
+  label: string;
+}
+
+/* ---------------------------------------------------------------------------
+ * Queries
+ * ------------------------------------------------------------------------- */
+type QueryOp =
+  | 'eq'
+  | 'neq'
+  | 'in'
+  | 'contains'
+  | 'gt'
+  | 'lt'
+  | 'between'
+  | 'after'
+  | 'before'
+  | 'atleast'
+  | 'atmost';
+
+/**
+ * `in` values are a JSON array string ('["Card","ATM"]'); `between` is 'low|high'.
+ * Keeping `value` a string keeps parity with the existing FilterRule model.
+ */
+interface QueryFilter {
+  field: string;
+  op: QueryOp;
+  value: string;
+}
+
+type QueryAgg =
+  | 'count'
+  | 'sum'
+  | 'avg'
+  | 'min'
+  | 'max'
+  | 'distinct'
+  | 'yes'
+  | 'rate'
+  | 'metric';
+
+interface QueryMeasure {
+  /** Stable id inside the query ('m0', 'm1'...). */
+  id: string;
+  label?: string;
+  agg: QueryAgg;
+  /** Field key, or a calculated-metric key (mt_*) when agg === 'metric'. */
+  field?: string;
+  /** Conditional measure: aggregate only rows matching all of these (e.g. funnel stages). */
+  where?: QueryFilter[];
+}
+
+type TimeBucket = 'day' | 'week' | 'month' | 'quarter' | 'year';
+
+interface QueryDimension {
+  field: string;
+  /** Date dimensions only. `auto` lets the server choose from the period length. */
+  bucket?: TimeBucket | 'auto';
+  /** Numeric dimensions: group into ranges (aging buckets, amount bands). Edges ascending. */
+  bands?: number[];
+}
+
+type QueryShape =
+  | 'scalar' //     one value per measure (+ previous-period value, + sparkline)
+  | 'grouped' //    dimension(s) x measure(s)
+  | 'records' //    row-level page (tables, drill-through)
+  | 'points' //     (x, y[, size][, colour]) sample for scatter / bubble
+  | 'histogram' //  equal-width bins of one numeric field
+  | 'quantiles'; // min / q1 / median / q3 / max per group (box plot)
+
+interface ReportQuery {
+  /** Unique within a run. Widget queries use the widget id (or `${widgetId}#${suffix}`). */
+  id: string;
+  widgetId: string;
+  label: string;
+  sourceId: string;
+  shape: QueryShape;
+  /** null = all time. */
+  period: ResolvedPeriod | null;
+  /** When set, scalar/grouped results also carry previous-period values. */
+  comparePeriod?: ResolvedPeriod | null;
+  filters: QueryFilter[];
+  dimensions: QueryDimension[];
+  measures: QueryMeasure[];
+  sort?: {
+    by: 'measure' | 'label' | 'rank';
+    index?: number;
+    dir: 'asc' | 'desc';
+  };
+  /** Top N groups (grouped) or max rows (records). */
+  limit?: number;
+  offset?: number;
+  /** Roll groups beyond `limit` into an "Others" group. */
+  others?: boolean;
+  /** Max break-down series (second dimension). */
+  seriesLimit?: number;
+  /** records: sort order. */
+  orderBy?: { field: string; dir: 'asc' | 'desc' };
+  /** records: columns to return. */
+  columns?: string[];
+  /** records: also return grand totals of these numeric columns. */
+  totalsFor?: string[];
+  /** scalar: also return a sparkline over the period with this bucket. */
+  spark?: TimeBucket | 'auto';
+  /** points: x/y/size/colour fields and sample cap. */
+  points?: {
+    x: string;
+    y: string;
+    size?: string;
+    colour?: string;
+    max: number;
+  };
+  /** histogram: field and bin count. */
+  bins?: { field: string; count: number };
+  /** quantiles: numeric field to summarise. */
+  quantileField?: string;
+  /** Calculated-metric definitions referenced by `measures` (key -> definition). */
+  metrics?: Record<string, unknown>;
+  /** Custom (derived) field definitions referenced by this query. */
+  derived?: unknown[];
+}
+
+/* ---------------------------------------------------------------------------
+ * Results
+ * ------------------------------------------------------------------------- */
+interface ResultBase {
+  queryId: string;
+  /** Rows scanned / ms taken, for transparency and support. */
+  stats?: { scanned?: number; ms?: number; cached?: boolean };
+  warnings?: string[];
+}
+interface ScalarResult extends ResultBase {
+  shape: 'scalar';
+  /** One per measure. */
+  values: number[];
+  /** Previous-period values (same order), when comparePeriod was requested. */
+  prev?: number[] | null;
+  /** Sparkline of measure 0 over the period. */
+  spark?: number[];
+}
+interface GroupRow {
+  key: string;
+  label?: string;
+  /** One per measure. */
+  values: number[];
+  prev?: number[];
+  /** Rows in the group (for "n=" annotations). */
+  n?: number;
+}
+interface GroupedResult extends ResultBase {
+  shape: 'grouped';
+  groups: GroupRow[];
+  /** Second dimension values (series). */
+  series?: { key: string; label?: string }[];
+  /** `${groupKey}\u0001${seriesKey}` -> value per measure. */
+  cells?: Record<string, number[]>;
+  /** Totals per measure over everything matched (not only the groups returned). */
+  grand: number[];
+  prevGrand?: number[];
+  /** Groups before Top-N, and hidden break-down series. */
+  totalGroups: number;
+  hiddenSeries?: number;
+}
+interface RecordsResult extends ResultBase {
+  shape: 'records';
+  columns: string[];
+  rows: Row[];
+  totalRows: number;
+  offset: number;
+  totals?: Record<string, number>;
+}
+interface PointsResult extends ResultBase {
+  shape: 'points';
+  points: { x: number; y: number; size?: number; c?: string }[];
+  categories: string[];
+  /** 1 in N sampling stride used by the server (0 = not sampled). */
+  sampled: number;
+  total: number;
+}
+interface HistogramResult extends ResultBase {
+  shape: 'histogram';
+  bins: { from: number; to: number; count: number }[];
+  total: number;
+  summary: {
+    min: number;
+    max: number;
+    mean: number;
+    p50: number;
+    p90: number;
+    p99: number;
+  };
+}
+interface QuantileGroup {
+  key: string;
+  label?: string;
+  n: number;
+  min: number;
+  q1: number;
+  median: number;
+  q3: number;
+  max: number;
+  /** Count of points beyond 1.5 x IQR. */
+  outliers: number;
+}
+interface QuantilesResult extends ResultBase {
+  shape: 'quantiles';
+  groups: QuantileGroup[];
+}
+type QueryResult =
+  | ScalarResult
+  | GroupedResult
+  | RecordsResult
+  | PointsResult
+  | HistogramResult
+  | QuantilesResult;
+
+interface QueryFailure {
+  queryId: string;
+  message: string;
+  retryable: boolean;
+}
+
+/* ---------------------------------------------------------------------------
+ * Run request / response
+ * ------------------------------------------------------------------------- */
+interface ReportRunRequest {
+  runId: string;
+  /** Opaque snapshot of the definition for server-side audit & reproducibility. */
+  definition: {
+    name: string;
+    schemaVersion: number;
+    hash: string;
+    sourceId: string;
+  };
+  tenantId?: string;
+  requestedBy?: string;
+  timezone: string;
+  period: ResolvedPeriod | null;
+  comparePeriod: ResolvedPeriod | null;
+  filters: QueryFilter[];
+  queries: ReportQuery[];
+}
+
+interface BatchResult {
+  results: Record<string, QueryResult>;
+  failures: QueryFailure[];
+  meta: {
+    /** Records matching period + report filters (exact). */
+    recordsMatched: number | null;
+    /** Most recent data timestamp the engine used. */
+    dataAsOf?: string;
+    datasetVersion?: string;
+    partial?: boolean;
+    warnings?: string[];
+  };
+}
+
+type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+interface JobStatus {
+  state: JobState;
+  /** 0..1 */
+  progress?: number;
+  message?: string;
+}
+
+interface PreviewRequest {
+  sourceId: string;
+  /** Max rows. The server must return the most recent rows first. */
+  limit: number;
+  signal?: AbortSignal;
+}
+interface PreviewResponse {
+  rows: Row[];
+  /** Total rows that exist in the source (for "100 of 2.4M"). Optional. */
+  totalInSource?: number;
+  asOf?: string;
+}
+
+type ExportFormat = 'pdf' | 'xlsx' | 'csv' | 'pptx';
+
+interface ProviderCapabilities {
+  /** Provider supports submit / poll / cancel / fetchResult (long-running jobs). */
+  asyncJobs?: boolean;
+  export?: ExportFormat[];
+  /** Enables the Network Graph widget. */
+  graph?: boolean;
+  /** Enables a real map in the Geographic widgets. */
+  geo?: boolean;
+}
+
+/**
+ * The only thing a host application must implement to run Report Builder against real data.
+ * Implement `execute` for sub-minute reports, or `submit/poll/fetchResult` for background jobs.
+ */
+interface ReportDataProvider {
+  capabilities?: ProviderCapabilities;
+  loadPreview(req: PreviewRequest): Promise<PreviewResponse>;
+  execute?(
+    run: ReportRunRequest,
+    queries: ReportQuery[],
+    ctx: { signal: AbortSignal }
+  ): Promise<BatchResult>;
+  submit?(
+    run: ReportRunRequest,
+    ctx: { signal: AbortSignal }
+  ): Promise<{ jobId: string }>;
+  poll?(jobId: string, ctx: { signal: AbortSignal }): Promise<JobStatus>;
+  fetchResult?(
+    jobId: string,
+    ctx: { signal: AbortSignal }
+  ): Promise<BatchResult>;
+  cancel?(jobId: string): Promise<void>;
+  /**
+   * Records of the ACTUAL report (selected period + report filters), for exports routed to the host's
+   * export service (`onGenerate`). Omit it when the export service generates the file server-side from
+   * `run` (recommended at large volumes); the payload then carries `rows: []`.
+   */
+  fetchExportRows?(
+    run: ReportRunRequest,
+    ctx: { signal: AbortSignal; maxRows: number }
+  ): Promise<{ rows: Row[]; truncated: boolean }>;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reproducibility metadata
+ * ------------------------------------------------------------------------- */
+interface ReportRunMetadata {
+  runId: string;
+  /** Always 'actual': the preview never produces run metadata. */
+  dataStatus: 'actual';
+  reportName: string;
+  /** Hash of the normalised definition: identical definition => identical hash. */
+  definitionHash: string;
+  schemaVersion: number;
+  sourceId: string;
+  sourceName: string;
+  datasetVersion?: string;
+  dataAsOf?: string;
+  period: ResolvedPeriod | null;
+  comparePeriod: ResolvedPeriod | null;
+  /** Human-readable filter descriptions (report + section) in force when generated. */
+  filters: string[];
+  /** Cross-filter / drill state captured at generation, if any. */
+  viewFilters: string[];
+  generatedAt: string;
+  generatedBy: string;
+  tenantId?: string;
+  timezone: string;
+  recordsMatched: number | null;
+  queryCount: number;
+  durationMs: number;
+  partial: boolean;
+  warnings: string[];
+}
+
+/* ---------------------------------------------------------------------------
+ * Small shared helpers (pure)
+ * ------------------------------------------------------------------------- */
+/** JSON.stringify with sorted keys: equal inputs always give equal output. */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`;
+  const o = v as Record<string, unknown>;
+  return `{${Object.keys(o)
+    .filter((k) => o[k] !== undefined)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(o[k])}`)
+    .join(',')}}`;
+}
+
+/** 53-bit string hash (cyrb53), rendered as 14 hex chars. Not cryptographic: for identity/caching only. */
+function hashString(s: string): string {
+  let h1 = 0xdeadbeef,
+    h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 =
+    Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+    Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 =
+    Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+    Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0))
+    .toString(16)
+    .padStart(14, '0');
+}
+
+/** Cache identity of a query: everything that affects its result, nothing that doesn't (ids/labels). */
+function queryFingerprint(q: ReportQuery): string {
+  const { id: _id, widgetId: _w, label: _l, ...rest } = q;
+  return hashString(stableStringify(rest));
+}
+
+const CELL_SEP = '\u0001';
+const cellKeyOf = (group: string, series: string) =>
+  `${group}${CELL_SEP}${series}`;
+
+/* ---------------- dateRanges.ts ---------------- */
+/**
+ * Report period handling: presets -> concrete windows, and comparison windows.
+ *
+ * Conventions
+ *  - All dates are ISO `yyyy-mm-dd` strings in the REPORT time zone; windows are inclusive.
+ *  - "to-date" presets (this month / quarter / year, YTD) end today. Their comparison window covers the
+ *    SAME ELAPSED DAYS of the previous month / quarter / year, so MTD is never compared with a full month.
+ *  - Full-unit presets (previous month / quarter / year) compare with the unit before them.
+ *  - Rolling presets (today, last N days/months, custom) compare with the equally long window just before.
+ *  - "Previous year" comparison shifts the window back 12 months (29-Feb clamps to 28-Feb).
+ */
+
+const PRESET_LABEL: Record<DatePreset, string> = {
+  today: 'Today',
+  yesterday: 'Yesterday',
+  last_7_days: 'Last 7 days',
+  last_30_days: 'Last 30 days',
+  last_90_days: 'Last 90 days',
+  last_6_months: 'Last 6 months',
+  last_12_months: 'Last 12 months',
+  this_month: 'This month',
+  previous_month: 'Previous month',
+  this_quarter: 'This quarter',
+  previous_quarter: 'Previous quarter',
+  this_year: 'This year',
+  previous_year: 'Previous year',
+  year_to_date: 'Year to date',
+  all_time: 'All time',
+  custom: 'Custom range',
+};
+
+/** Grouped for the picker UI. */
+const PRESET_GROUPS: { label: string; presets: DatePreset[] }[] = [
+  {
+    label: 'Recent',
+    presets: [
+      'today',
+      'yesterday',
+      'last_7_days',
+      'last_30_days',
+      'last_90_days',
+    ],
+  },
+  {
+    label: 'Calendar',
+    presets: [
+      'this_month',
+      'previous_month',
+      'this_quarter',
+      'previous_quarter',
+      'this_year',
+      'previous_year',
+      'year_to_date',
+    ],
+  },
+  { label: 'Rolling', presets: ['last_6_months', 'last_12_months'] },
+  { label: 'Other', presets: ['all_time', 'custom'] },
+];
+
+const COMPARE_LABEL: Record<CompareMode, string> = {
+  previous_period: 'Previous period',
+  previous_year: 'Same period last year',
+  none: 'No comparison',
+};
+
+/* ---- ISO date arithmetic (UTC, no time-zone surprises) ---- */
+const pad = (n: number) => String(n).padStart(2, '0');
+const isoOf = (d: Date) =>
+  `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+const parseISO = (s: string) => new Date(`${s}T00:00:00Z`);
+const isISODate = (s: unknown): s is string =>
+  typeof s === 'string' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(s) &&
+  isoOf(parseISO(s)) === s;
+const addDaysISO = (s: string, n: number) => {
+  const d = parseISO(s);
+  d.setUTCDate(d.getUTCDate() + n);
+  return isoOf(d);
+};
+const daysInMonth = (y: number, m0: number) =>
+  new Date(Date.UTC(y, m0 + 1, 0)).getUTCDate();
+/** Add months, clamping the day (31-Mar + 1 month = 30-Apr). */
+const addMonthsISO = (s: string, n: number) => {
+  const d = parseISO(s);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + n;
+  const ny = y + Math.floor(m / 12);
+  const nm = ((m % 12) + 12) % 12;
+  return isoOf(
+    new Date(Date.UTC(ny, nm, Math.min(d.getUTCDate(), daysInMonth(ny, nm))))
+  );
+};
+const diffDaysISO = (a: string, b: string) =>
+  Math.round((parseISO(b).getTime() - parseISO(a).getTime()) / 864e5);
+const spanDays = (from: string, to: string) => diffDaysISO(from, to) + 1;
+const startOfMonth = (s: string) => `${s.slice(0, 7)}-01`;
+const endOfMonth = (s: string) => {
+  const d = parseISO(s);
+  return isoOf(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)));
+};
+const quarterStart = (s: string) => {
+  const d = parseISO(s);
+  const q = Math.floor(d.getUTCMonth() / 3) * 3;
+  return isoOf(new Date(Date.UTC(d.getUTCFullYear(), q, 1)));
+};
+const startOfYear = (s: string, startMonth = 1) => {
+  const d = parseISO(s);
+  const y = d.getUTCFullYear();
+  const m0 = startMonth - 1;
+  return isoOf(new Date(Date.UTC(d.getUTCMonth() >= m0 ? y : y - 1, m0, 1)));
+};
+
+/** Today's date in a time zone (injectable `now` for tests). */
+function todayIn(tz: string, now: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+  } catch {
+    return isoOf(now);
+  }
+}
+
+const mk = (
+  preset: DatePreset,
+  from: string,
+  to: string,
+  label?: string
+): ResolvedPeriod => ({
+  preset,
+  from,
+  to,
+  days: spanDays(from, to),
+  label: label ?? PRESET_LABEL[preset],
+});
+
+interface ResolveOptions {
+  /** 'yyyy-mm-dd' in the report time zone. */
+  today: string;
+  /** Month the fiscal year starts (1 = January). Affects Year to date only. */
+  fiscalYearStartMonth?: number;
+}
+
+/** Returns null for all-time. Throws nothing: use `periodError` for custom ranges first. */
+function resolvePeriod(
+  p: ReportPeriod,
+  o: ResolveOptions
+): ResolvedPeriod | null {
+  const t = o.today;
+  switch (p.preset) {
+    case 'all_time':
+      return null;
+    case 'custom':
+      return p.from && p.to && p.from <= p.to
+        ? mk('custom', p.from, p.to, 'Custom range')
+        : null;
+    case 'today':
+      return mk('today', t, t);
+    case 'yesterday': {
+      const y = addDaysISO(t, -1);
+      return mk('yesterday', y, y);
+    }
+    case 'last_7_days':
+      return mk(p.preset, addDaysISO(t, -6), t);
+    case 'last_30_days':
+      return mk(p.preset, addDaysISO(t, -29), t);
+    case 'last_90_days':
+      return mk(p.preset, addDaysISO(t, -89), t);
+    case 'last_6_months':
+      return mk(p.preset, addDaysISO(addMonthsISO(t, -6), 1), t);
+    case 'last_12_months':
+      return mk(p.preset, addDaysISO(addMonthsISO(t, -12), 1), t);
+    case 'this_month':
+      return mk(p.preset, startOfMonth(t), t);
+    case 'previous_month': {
+      const prev = addMonthsISO(startOfMonth(t), -1);
+      return mk(p.preset, prev, endOfMonth(prev));
+    }
+    case 'this_quarter':
+      return mk(p.preset, quarterStart(t), t);
+    case 'previous_quarter': {
+      const s = addMonthsISO(quarterStart(t), -3);
+      return mk(p.preset, s, endOfMonth(addMonthsISO(s, 2)));
+    }
+    case 'this_year':
+      return mk(p.preset, `${t.slice(0, 4)}-01-01`, t);
+    case 'previous_year': {
+      const y = Number(t.slice(0, 4)) - 1;
+      return mk(p.preset, `${y}-01-01`, `${y}-12-31`);
+    }
+    case 'year_to_date':
+      return mk(p.preset, startOfYear(t, o.fiscalYearStartMonth ?? 1), t);
+  }
+}
+
+/** The comparison window for a resolved period, or null (all time / no comparison). */
+function resolveComparison(
+  cur: ResolvedPeriod | null,
+  mode: CompareMode,
+  o: ResolveOptions
+): ResolvedPeriod | null {
+  if (!cur || mode === 'none') return null;
+  if (mode === 'previous_year') {
+    return {
+      preset: cur.preset,
+      from: addMonthsISO(cur.from, -12),
+      to: addMonthsISO(cur.to, -12),
+      days: spanDays(addMonthsISO(cur.from, -12), addMonthsISO(cur.to, -12)),
+      label: 'Same period last year',
+    };
+  }
+  // previous_period
+  const unitShift = (months: number, toDate: boolean): ResolvedPeriod => {
+    const from = addMonthsISO(cur.from, -months);
+    const fullEnd = addDaysISO(addMonthsISO(cur.from, 0), -1);
+    const unitEnd = endOfMonth(addMonthsISO(from, months - 1));
+    const to = toDate
+      ? minISO(addDaysISO(from, cur.days - 1), unitEnd)
+      : fullEnd;
+    return {
+      preset: cur.preset,
+      from,
+      to,
+      days: spanDays(from, to),
+      label: 'Previous period',
+    };
+  };
+  switch (cur.preset) {
+    case 'this_month':
+      return unitShift(1, true);
+    case 'this_quarter':
+      return unitShift(3, true);
+    case 'this_year':
+    case 'year_to_date':
+      return unitShift(12, true);
+    case 'previous_month':
+      return unitShift(1, false);
+    case 'previous_quarter':
+      return unitShift(3, false);
+    case 'previous_year':
+      return unitShift(12, false);
+    default: {
+      const to = addDaysISO(cur.from, -1);
+      const from = addDaysISO(to, -(cur.days - 1));
+      return {
+        preset: cur.preset,
+        from,
+        to,
+        days: cur.days,
+        label: 'Previous period',
+      };
+    }
+  }
+}
+const minISO = (a: string, b: string) => (a < b ? a : b);
+
+/** Actionable message for an incomplete / inverted custom range; null when fine. */
+function periodError(p: ReportPeriod): string | null {
+  if (p.preset !== 'custom') return null;
+  if (!p.from || !p.to)
+    return 'Select both a start and an end date for the custom period.';
+  if (!isISODate(p.from) || !isISODate(p.to))
+    return 'The custom period contains an invalid date.';
+  if (p.from > p.to) return 'The custom period starts after it ends.';
+  return null;
+}
+
+/** Formats a window for headers: "01 Jan 2026 – 30 Sep 2026". */
+function describePeriod(r: ResolvedPeriod | null): string {
+  if (!r) return 'All available data';
+  const f = (s: string) =>
+    parseISO(s).toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  return r.from === r.to ? f(r.from) : `${f(r.from)} – ${f(r.to)}`;
+}
+
+/** Maps the v3 `dateRange` key to the v4 period. */
+function legacyRangeToPeriod(
+  range: string | undefined,
+  from?: string,
+  to?: string
+): ReportPeriod {
+  const map: Record<string, DatePreset> = {
+    '7d': 'last_7_days',
+    '30d': 'last_30_days',
+    '90d': 'last_90_days',
+    '6m': 'last_6_months',
+    '12m': 'last_12_months',
+    all: 'all_time',
+    custom: 'custom',
+  };
+  return {
+    preset: map[range ?? ''] ?? 'last_6_months',
+    from: range === 'custom' ? from : undefined,
+    to: range === 'custom' ? to : undefined,
+    compare: range === 'all' ? 'none' : 'previous_period',
+  };
+}
+
+/* ---------------- formula.ts ---------------- */
+/**
+ * Safe formula engine for calculated metrics ("Fraud rate = fraud_txn / total_txn * 100").
+ *
+ * - A real tokenizer + recursive-descent parser. No `eval`, no `Function`.
+ * - Operates on *already aggregated* values (ratio of aggregates), so results are correct at any grouping level.
+ * - The AST is plain JSON: send it to the backend to evaluate there with identical semantics.
+ * - Division by zero / non-finite results evaluate to `null` (shown as "—"), never Infinity or NaN.
+ *
+ * Grammar
+ *   expr    := compare
+ *   compare := sum (('>'|'<'|'>='|'<='|'=='|'!=') sum)?
+ *   sum     := product (('+'|'-') product)*
+ *   product := unary (('*'|'/') unary)*
+ *   unary   := '-' unary | primary
+ *   primary := NUMBER | NAME | NAME '(' args ')' | '(' expr ')'
+ *
+ * Functions: IF(cond, a, b)  MIN(..)  MAX(..)  ABS(x)  ROUND(x[, digits])  PCT(a, b) = a / b * 100
+ *            PREV(term)      -> the term's value in the comparison (previous) period
+ * Growth %   : (fraud - PREV(fraud)) / PREV(fraud) * 100
+ */
+
+type BinOp = '+' | '-' | '*' | '/' | '>' | '<' | '>=' | '<=' | '==' | '!=';
+type Ast =
+  | { t: 'num'; v: number }
+  | { t: 'ref'; name: string }
+  | { t: 'neg'; a: Ast }
+  | { t: 'bin'; op: BinOp; a: Ast; b: Ast }
+  | { t: 'call'; fn: string; args: Ast[] };
+
+type ParseResult =
+  | { ok: true; ast: Ast; refs: string[] }
+  | { ok: false; error: string; pos: number };
+
+const MAX_LEN = 500;
+const MAX_DEPTH = 40;
+const FUNCS: Record<string, [number, number]> = {
+  IF: [3, 3],
+  MIN: [1, 8],
+  MAX: [1, 8],
+  ABS: [1, 1],
+  ROUND: [1, 2],
+  PCT: [2, 2],
+  PREV: [1, 1],
+};
+
+type Tok = {
+  k: 'num' | 'name' | 'op' | 'lp' | 'rp' | 'comma' | 'end';
+  s: string;
+  pos: number;
+};
+
+function tokenize(src: string): Tok[] | { error: string; pos: number } {
+  const out: Tok[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (/[0-9.]/.test(c)) {
+      let j = i;
+      while (j < src.length && /[0-9.]/.test(src[j])) j++;
+      const s = src.slice(i, j);
+      if (!/^(\d+\.?\d*|\.\d+)$/.test(s))
+        return { error: `"${s}" is not a valid number.`, pos: i };
+      out.push({ k: 'num', s, pos: i });
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i;
+      while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j++;
+      out.push({ k: 'name', s: src.slice(i, j), pos: i });
+      i = j;
+      continue;
+    }
+    const two = src.slice(i, i + 2);
+    if (['>=', '<=', '==', '!='].includes(two)) {
+      out.push({ k: 'op', s: two, pos: i });
+      i += 2;
+      continue;
+    }
+    if ('+-*/><'.includes(c)) out.push({ k: 'op', s: c, pos: i });
+    else if (c === '(') out.push({ k: 'lp', s: c, pos: i });
+    else if (c === ')') out.push({ k: 'rp', s: c, pos: i });
+    else if (c === ',') out.push({ k: 'comma', s: c, pos: i });
+    else return { error: `Unexpected character "${c}".`, pos: i };
+    i++;
+  }
+  out.push({ k: 'end', s: '', pos: src.length });
+  return out;
+}
+
+function parseFormula(src: string): ParseResult {
+  if (!src.trim()) return { ok: false, error: 'Enter a formula.', pos: 0 };
+  if (src.length > MAX_LEN)
+    return {
+      ok: false,
+      error: `Formulas are limited to ${MAX_LEN} characters.`,
+      pos: MAX_LEN,
+    };
+  const toks = tokenize(src);
+  if (!Array.isArray(toks)) return { ok: false, ...toks };
+  let p = 0;
+  const refs = new Set<string>();
+  class ParseError extends Error {
+    constructor(
+      m: string,
+      public pos: number
+    ) {
+      super(m);
+    }
+  }
+  const peek = () => toks[p];
+  const eat = () => toks[p++];
+  const expect = (k: Tok['k'], what: string) => {
+    if (peek().k !== k) throw new ParseError(`Expected ${what}.`, peek().pos);
+    return eat();
+  };
+  const parseExpr = (d: number): Ast => {
+    if (d > MAX_DEPTH)
+      throw new ParseError('The formula is nested too deeply.', peek().pos);
+    return parseCompare(d);
+  };
+  const parseCompare = (d: number): Ast => {
+    const a = parseSum(d);
+    const t = peek();
+    if (t.k === 'op' && ['>', '<', '>=', '<=', '==', '!='].includes(t.s)) {
+      eat();
+      return { t: 'bin', op: t.s as BinOp, a, b: parseSum(d) };
+    }
+    return a;
+  };
+  const parseSum = (d: number): Ast => {
+    let a = parseProduct(d);
+    while (peek().k === 'op' && (peek().s === '+' || peek().s === '-')) {
+      const op = eat().s as BinOp;
+      a = { t: 'bin', op, a, b: parseProduct(d) };
+    }
+    return a;
+  };
+  const parseProduct = (d: number): Ast => {
+    let a = parseUnary(d);
+    while (peek().k === 'op' && (peek().s === '*' || peek().s === '/')) {
+      const op = eat().s as BinOp;
+      a = { t: 'bin', op, a, b: parseUnary(d) };
+    }
+    return a;
+  };
+  const parseUnary = (d: number): Ast => {
+    if (peek().k === 'op' && peek().s === '-') {
+      eat();
+      return { t: 'neg', a: parseUnary(d + 1) };
+    }
+    return parsePrimary(d);
+  };
+  const parsePrimary = (d: number): Ast => {
+    const t = eat();
+    if (t.k === 'num') return { t: 'num', v: Number(t.s) };
+    if (t.k === 'lp') {
+      const e = parseExpr(d + 1);
+      expect('rp', '")"');
+      return e;
+    }
+    if (t.k === 'name') {
+      if (peek().k === 'lp') {
+        const fn = t.s.toUpperCase();
+        const spec = FUNCS[fn];
+        if (!spec)
+          throw new ParseError(
+            `Unknown function "${t.s}". Available: ${Object.keys(FUNCS).join(', ')}.`,
+            t.pos
+          );
+        eat();
+        const args: Ast[] = [];
+        if (peek().k !== 'rp') {
+          args.push(parseExpr(d + 1));
+          while (peek().k === 'comma') {
+            eat();
+            args.push(parseExpr(d + 1));
+          }
+        }
+        expect('rp', '")"');
+        if (args.length < spec[0] || args.length > spec[1])
+          throw new ParseError(
+            `${fn} takes ${spec[0] === spec[1] ? spec[0] : `${spec[0]}–${spec[1]}`} argument(s), got ${args.length}.`,
+            t.pos
+          );
+        if (fn === 'PREV' && args[0].t !== 'ref')
+          throw new ParseError(
+            'PREV() takes a single term, e.g. PREV(fraud).',
+            t.pos
+          );
+        return { t: 'call', fn, args };
+      }
+      refs.add(t.s);
+      return { t: 'ref', name: t.s };
+    }
+    if (t.k === 'end')
+      throw new ParseError('The formula ends unexpectedly.', t.pos);
+    throw new ParseError(`Unexpected "${t.s}".`, t.pos);
+  };
+  try {
+    const ast = parseExpr(0);
+    if (peek().k !== 'end')
+      throw new ParseError(`Unexpected "${peek().s}".`, peek().pos);
+    return { ok: true, ast, refs: [...refs] };
+  } catch (e) {
+    if (e instanceof ParseError)
+      return { ok: false, error: e.message, pos: e.pos };
+    throw e;
+  }
+}
+
+interface FormulaEnv {
+  cur: Record<string, number>;
+  prev?: Record<string, number> | null;
+}
+
+/** Evaluates to a finite number, or null when undefined (division by zero, missing term, no comparison data). */
+function evalFormula(ast: Ast, env: FormulaEnv): number | null {
+  const ev = (n: Ast): number | null => {
+    switch (n.t) {
+      case 'num':
+        return n.v;
+      case 'ref': {
+        const v = env.cur[n.name];
+        return typeof v === 'number' && Number.isFinite(v) ? v : null;
+      }
+      case 'neg': {
+        const v = ev(n.a);
+        return v === null ? null : -v;
+      }
+      case 'bin': {
+        const a = ev(n.a);
+        const b = ev(n.b);
+        if (a === null || b === null) return null;
+        switch (n.op) {
+          case '+':
+            return a + b;
+          case '-':
+            return a - b;
+          case '*':
+            return a * b;
+          case '/':
+            return b === 0 ? null : a / b;
+          case '>':
+            return a > b ? 1 : 0;
+          case '<':
+            return a < b ? 1 : 0;
+          case '>=':
+            return a >= b ? 1 : 0;
+          case '<=':
+            return a <= b ? 1 : 0;
+          case '==':
+            return a === b ? 1 : 0;
+          case '!=':
+            return a !== b ? 1 : 0;
+        }
+        return null;
+      }
+      case 'call': {
+        if (n.fn === 'PREV') {
+          const r = n.args[0];
+          const v = r.t === 'ref' ? env.prev?.[r.name] : undefined;
+          return typeof v === 'number' && Number.isFinite(v) ? v : null;
+        }
+        if (n.fn === 'IF') {
+          const c = ev(n.args[0]);
+          if (c === null) return null;
+          return ev(c !== 0 ? n.args[1] : n.args[2]);
+        }
+        const vals = n.args.map(ev);
+        if (vals.some((v) => v === null)) return null;
+        const xs = vals as number[];
+        switch (n.fn) {
+          case 'MIN':
+            return Math.min(...xs);
+          case 'MAX':
+            return Math.max(...xs);
+          case 'ABS':
+            return Math.abs(xs[0]);
+          case 'ROUND': {
+            const m = 10 ** Math.max(0, Math.min(10, Math.trunc(xs[1] ?? 0)));
+            return Math.round(xs[0] * m) / m;
+          }
+          case 'PCT':
+            return xs[1] === 0 ? null : (xs[0] / xs[1]) * 100;
+        }
+        return null;
+      }
+    }
+  };
+  const r = ev(ast);
+  return r !== null && Number.isFinite(r) ? r : null;
+}
+
+/** Terms referenced through PREV(): the backend must also aggregate these for the comparison window. */
+function prevRefs(ast: Ast): string[] {
+  const out = new Set<string>();
+  const walk = (n: Ast) => {
+    if (n.t === 'call') {
+      if (n.fn === 'PREV' && n.args[0].t === 'ref') out.add(n.args[0].name);
+      n.args.forEach(walk);
+    } else if (n.t === 'bin') {
+      walk(n.a);
+      walk(n.b);
+    } else if (n.t === 'neg') walk(n.a);
+  };
+  walk(ast);
+  return [...out];
+}
+
+/** Round-trips an AST to readable text (used to show a formula in a read-only summary). */
+function printFormula(n: Ast): string {
+  switch (n.t) {
+    case 'num':
+      return String(n.v);
+    case 'ref':
+      return n.name;
+    case 'neg':
+      return `-${printFormula(n.a)}`;
+    case 'bin':
+      return `(${printFormula(n.a)} ${n.op} ${printFormula(n.b)})`;
+    case 'call':
+      return `${n.fn}(${n.args.map(printFormula).join(', ')})`;
+  }
+}
+
+/* ---------------- registry.ts ---------------- */
+/**
+ * Widget registry
+ * ----------------------------------------------------------------------------
+ * A widget is described by ONE descriptor: metadata, how to create it, what data it needs (as queries),
+ * how to validate it, how to render it, how it is configured, how it exports and how it interacts.
+ *
+ * Adding a new widget (AI insight, forecast, anomaly detection, Sankey, network graph...) means writing one
+ * descriptor and calling `registerWidget`. The builder, compiler, validator, canvas, inspector and exporters
+ * discover everything through the registry; none of them has a `switch (kind)`.
+ *
+ * The five original widgets (kpi, chart, table, text, insight) keep their existing React views inside
+ * ReportBuilder.tsx; they are registered there so they appear in the same catalogue.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Minimal structural views of host types (so this file has no runtime dependency on the monolith)
+ * ------------------------------------------------------------------------- */
+interface FieldInfo {
+  key: string;
+  label: string;
+  type:
+    | 'text'
+    | 'category'
+    | 'number'
+    | 'decimal'
+    | 'currency'
+    | 'boolean'
+    | 'date'
+    | 'datetime';
+  group: string;
+  order?: string[];
+  currency?: string;
+  unit?: string;
+  sensitive?: boolean;
+  metric?: unknown;
+  derived?: boolean;
+}
+interface SourceInfo {
+  id: string;
+  name: string;
+  recordLabel: string;
+  dateField: string;
+  fields: FieldInfo[];
+}
+
+type WidgetCategory =
+  | 'executive'
+  | 'charts'
+  | 'analytical'
+  | 'risk'
+  | 'investigation'
+  | 'geography'
+  | 'relationship'
+  | 'content';
+
+const CATEGORY_LABEL: Record<WidgetCategory, string> = {
+  executive: 'Executive',
+  charts: 'Charts',
+  analytical: 'Analytical',
+  risk: 'Fraud & risk',
+  investigation: 'Investigation',
+  geography: 'Geography',
+  relationship: 'Relationship',
+  content: 'Content',
+};
+
+type IconType = React.ComponentType<{ className?: string }>;
+
+/**
+ * Widget kinds provided by the registry (closed union keeps TypeScript narrowing precise for the original
+ * five kinds). Third-party / future widgets use the `ext:` prefix, e.g. `ext:sankey`, `ext:forecast`.
+ */
+type BuiltinExtKind =
+  | 'section'
+  | 'kpiGroup'
+  | 'kri'
+  | 'execSummary'
+  | 'periodCompare'
+  | 'detectionFunnel'
+  | 'riskGauge'
+  | 'riskMatrix'
+  | 'aging'
+  | 'pareto'
+  | 'histogram'
+  | 'waterfall'
+  | 'combo'
+  | 'boxplot'
+  | 'bubble'
+  | 'summaryTable'
+  | 'geoTiles'
+  | 'networkGraph';
+type ExtKind = BuiltinExtKind | `ext:${string}`;
+
+/** Every registry widget has at least this shape; kind-specific config lives alongside. */
+interface RegistryWidget {
+  id: string;
+  kind: string;
+  title: string;
+  note?: string;
+  span: 3 | 4 | 6 | 8 | 12;
+  height: 'sm' | 'md' | 'lg';
+  pageBreak?: boolean;
+  filters: { id: string; field: string; op: string; value: string }[];
+  /** Name of a DrillPath in the report definition (drill-down hierarchy). */
+  drillPathId?: string;
+  [config: string]: unknown;
+}
+
+/* ---------------------------------------------------------------------------
+ * Validation
+ * ------------------------------------------------------------------------- */
+type IssueSeverity = 'error' | 'warning' | 'info';
+interface ValidationIssue {
+  id: string;
+  severity: IssueSeverity;
+  code: string;
+  /** Actionable, specific message. */
+  message: string;
+  widgetId?: string;
+  /** Where the user should go to fix it. */
+  fix?: 'data' | 'design' | 'period' | 'filters' | 'output';
+}
+
+interface ValidateCtx {
+  source: SourceInfo;
+  fieldMap: Map<string, FieldInfo>;
+  sources: SourceInfo[];
+  capabilities: ProviderCapabilities;
+}
+
+/* ---------------------------------------------------------------------------
+ * Data requirements
+ * ------------------------------------------------------------------------- */
+/** A widget's query minus everything the compiler fills in (period, filters, ids). */
+type QuerySpec = Partial<
+  Omit<
+    ReportQuery,
+    'id' | 'widgetId' | 'label' | 'period' | 'comparePeriod' | 'filters'
+  >
+> &
+  Pick<ReportQuery, 'shape'> & {
+    /** Result key suffix: results are keyed `${widgetId}` ('' suffix) or `${widgetId}#${suffix}`. */
+    suffix?: string;
+    label?: string;
+    /** Query a different source than the report's (detection funnel stages). */
+    sourceId?: string;
+    /** Extra conditions on top of report / section / widget filters. */
+    extraFilters?: QueryFilter[];
+    /** Request previous-period values (only honoured when the report compares periods). */
+    compare?: boolean;
+  };
+
+interface QueryCtx {
+  source: SourceInfo;
+  fieldMap: Map<string, FieldInfo>;
+  period: ResolvedPeriod | null;
+  autoBucket: 'day' | 'week' | 'month';
+}
+
+/* ---------------------------------------------------------------------------
+ * Configuration schema (drives the generic inspector; progressive disclosure via `advanced`)
+ * ------------------------------------------------------------------------- */
+type Base = {
+  key: string;
+  label: string;
+  hint?: string;
+  advanced?: boolean;
+  showIf?: (w: RegistryWidget) => boolean;
+};
+type ConfigField =
+  | (Base & { type: 'text'; placeholder?: string; multiline?: boolean })
+  | (Base & { type: 'number'; min?: number; max?: number; step?: number })
+  | (Base & { type: 'toggle' })
+  | (Base & { type: 'select'; options: { value: string; label: string }[] })
+  | (Base & {
+      type: 'field';
+      accept: 'dimension' | 'category' | 'date' | 'numeric' | 'measure' | 'any';
+      optional?: boolean;
+      /** key of a sibling `source` property whose fields to offer */ sourceFrom?: string;
+    })
+  | (Base & { type: 'source' })
+  | (Base & { type: 'agg'; fieldKey?: string })
+  | (Base & {
+      type: 'list';
+      item: ConfigField[];
+      max: number;
+      min?: number;
+      addLabel: string;
+      make: () => Record<string, unknown>;
+      itemLabel?: (it: Record<string, unknown>, i: number) => string;
+    });
+
+/* ---------------------------------------------------------------------------
+ * Rendering
+ * ------------------------------------------------------------------------- */
+type ResultStatus = 'ok' | 'loading' | 'error' | 'empty' | 'missing';
+
+interface WidgetEnv {
+  mode: 'preview' | 'final';
+  source: SourceInfo;
+  fieldMap: Map<string, FieldInfo>;
+  colors: string[];
+  currency: string;
+  /** Report compares against a previous period (final) — preview never has deltas. */
+  compare: boolean;
+  period: ResolvedPeriod | null;
+  vars: Record<string, string>;
+  /** Host-provided number formatting so widgets never re-implement decimal / currency rules. */
+  fmt: (
+    value: number,
+    agg: string,
+    field?: string,
+    style?: 'compact' | 'full'
+  ) => string;
+  fmtPct: (value: number, digits?: number) => string;
+  /** Cross-filter on a value (single-active; clicking again clears). */
+  onPick?: (field: string, value: string) => void;
+  /** Open a drill-through to the underlying records for these conditions. */
+  onDrillThrough?: (
+    widgetId: string,
+    filters: QueryFilter[],
+    sourceId?: string
+  ) => void;
+  onExpand?: (id: string) => void;
+  active?: { field: string; value: string } | null;
+}
+
+interface WidgetRenderProps<W extends RegistryWidget = RegistryWidget> {
+  widget: W;
+  /** Results keyed by suffix ('' = primary). */
+  results: Record<string, QueryResult | undefined>;
+  status: ResultStatus;
+  error?: string;
+  env: WidgetEnv;
+}
+
+/* ---------------------------------------------------------------------------
+ * Descriptor
+ * ------------------------------------------------------------------------- */
+interface CreateCtx {
+  source: SourceInfo;
+  fields: FieldInfo[]; // the report's selected fields (+ derived)
+  sources: SourceInfo[];
+}
+
+interface WidgetDescriptor<W extends RegistryWidget = RegistryWidget> {
+  kind: string;
+  label: string;
+  hint: string;
+  category: WidgetCategory;
+  icon: IconType;
+  /** 'planned' widgets are listed as "coming soon" and cannot be added. */
+  maturity?: 'stable' | 'beta' | 'planned';
+  /** Only offered when the provider has this capability (graph, geo). */
+  requiresCapability?: keyof ProviderCapabilities;
+  /** Create with smart defaults from the source's fields, or return a reason it cannot be created. */
+  create(ctx: CreateCtx): W | { unavailable: string };
+  requirements(w: W, ctx: QueryCtx): QuerySpec[];
+  validate(w: W, ctx: ValidateCtx): ValidationIssue[];
+  /** Omitted for the five original widgets, which the host renders with its existing views. */
+  render?: React.ComponentType<WidgetRenderProps<W>>;
+  config: ConfigField[];
+  /** Does a click on this widget set a cross-filter / can it drill? */
+  interactions?: { crossFilter?: boolean; drill?: boolean };
+  /** Cross-filtered by other widgets? default true. The widget that EMITS a filter on field X ignores X. */
+  skipsCrossFilter?: (w: W, xf: { field: string; value: string }) => boolean;
+  /** How the widget is represented in exports. */
+  exportAs: 'visual' | 'table' | 'text' | 'none';
+  /** Tabular form of the widget's data for CSV / Excel / expand-table. */
+  toTable?: (
+    w: W,
+    results: Record<string, QueryResult | undefined>,
+    env: WidgetEnv
+  ) => { headers: string[]; rows: (string | number)[][] } | null;
+  /** Drop or repair references to removed fields. Return null to remove the widget. */
+  reconcile?: (w: W, keys: Set<string>) => W | null;
+  /** Page-structure widgets (sections) carry filters for the widgets below them and have no data. */
+  structural?: boolean;
+}
+
+/* ---------------------------------------------------------------------------
+ * Registry
+ * ------------------------------------------------------------------------- */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const REGISTRY = new Map<string, WidgetDescriptor<any>>();
+
+function registerWidget<W extends RegistryWidget>(
+  d: WidgetDescriptor<W>
+): void {
+  REGISTRY.set(d.kind, d as unknown as WidgetDescriptor);
+}
+const getWidget = (kind: string): WidgetDescriptor | undefined =>
+  REGISTRY.get(kind);
+const hasWidget = (kind: string) => REGISTRY.has(kind);
+const widgetKinds = () => [...REGISTRY.keys()];
+function listWidgets(
+  opts: { category?: WidgetCategory; capabilities?: ProviderCapabilities } = {}
+): WidgetDescriptor[] {
+  return [...REGISTRY.values()].filter(
+    (d) =>
+      (!opts.category || d.category === opts.category) &&
+      (!d.requiresCapability || opts.capabilities?.[d.requiresCapability])
+  );
+}
+/** Test helper. */
+const __resetRegistry = () => REGISTRY.clear();
+
+/* ---------------------------------------------------------------------------
+ * Helpers used by descriptors
+ * ------------------------------------------------------------------------- */
+const isNumericType = (t: FieldInfo['type']) =>
+  t === 'number' || t === 'decimal' || t === 'currency';
+const isDateInfoType = (t: FieldInfo['type']) =>
+  t === 'date' || t === 'datetime';
+const isDimensionType = (t: FieldInfo['type']) =>
+  t === 'category' || t === 'boolean' || isDateInfoType(t);
+
+const issue = (
+  severity: IssueSeverity,
+  code: string,
+  message: string,
+  widgetId?: string,
+  fix: ValidationIssue['fix'] = 'design'
+): ValidationIssue => ({
+  id: `${widgetId ?? 'report'}:${code}`,
+  severity,
+  code,
+  message,
+  widgetId,
+  fix,
+});
+
+/** Common "field exists" check producing an actionable message. */
+function requireField(
+  w: RegistryWidget,
+  prop: string,
+  ctx: ValidateCtx,
+  what: string,
+  accept: (f: FieldInfo) => boolean = () => true
+): ValidationIssue | null {
+  const key = w[prop];
+  if (typeof key !== 'string' || !key)
+    return issue(
+      'error',
+      `missing-${prop}`,
+      `${describeWidget(w)} requires ${what}. Choose one in the inspector.`,
+      w.id
+    );
+  const f = ctx.fieldMap.get(key);
+  if (!f)
+    return issue(
+      'error',
+      `unknown-${prop}`,
+      `${describeWidget(w)}: the field "${key}" is no longer available. Pick another ${what}.`,
+      w.id
+    );
+  if (!accept(f))
+    return issue(
+      'error',
+      `bad-${prop}`,
+      `${describeWidget(w)}: "${f.label}" cannot be used as ${what}.`,
+      w.id
+    );
+  return null;
+}
+const describeWidget = (w: { kind: string; title: string }) => {
+  const d = REGISTRY.get(w.kind);
+  return `${d?.label ?? w.kind} "${w.title || 'Untitled'}"`;
+};
+
+/* ---------------- compiler.ts ---------------- */
+/**
+ * Report compiler
+ * ----------------------------------------------------------------------------
+ * Turns a report definition into the minimal set of backend queries needed to render it.
+ *
+ *   widgets ──(registry.requirements)──▶ query specs
+ *   + period / comparison               ┐
+ *   + report filters                    │
+ *   + section filters (header widgets)  ├─▶ ReportQuery[]  ──dedupe──▶ unique queries to execute
+ *   + widget filters                    │
+ *   + cross-filter / drill state        ┘
+ *
+ * Pure and deterministic: the same definition + period always compile to the same queries (and the same hash),
+ * which is what makes a generated report reproducible and its queries cacheable.
+ */
+
+interface RuleLike {
+  field: string;
+  op: string;
+  value: string;
+}
+
+interface CompilableDefinition {
+  name: string;
+  sourceId: string;
+  schemaVersion: number;
+  timezone: string;
+  period: ReportPeriod;
+  filters: RuleLike[];
+  widgets: RegistryWidget[];
+  /** Calculated metric definitions (key -> def) sent to the server with queries that use them. */
+  metrics?: { key: string }[];
+  derived?: { key: string }[];
+  createdAt?: string;
+}
+
+interface CompileInput {
+  definition: CompilableDefinition;
+  sources: SourceInfo[];
+  /** Field catalogue (incl. derived fields and mt_* metric pseudo-fields) for the report's source. */
+  fieldMap: Map<string, FieldInfo>;
+  today: string;
+  fiscalYearStartMonth?: number;
+  crossFilter?: { field: string; value: string } | null;
+  runId: string;
+  user?: string;
+  tenantId?: string;
+}
+
+interface CompiledReport {
+  request: ReportRunRequest;
+  /** One per widget requirement (+ the record-count query). */
+  queries: ReportQuery[];
+  /** Unique queries actually sent. */
+  unique: ReportQuery[];
+  /** queryId -> id of the unique query whose result it shares. */
+  aliasOf: Record<string, string>;
+  period: ResolvedPeriod | null;
+  comparePeriod: ResolvedPeriod | null;
+  /** Non-fatal observations (e.g. a report filter that does not apply to a funnel stage's source). */
+  notes: string[];
+}
+
+const RECORDS_QUERY_ID = '__records';
+const resultKey = (widgetId: string, suffix = '') =>
+  suffix ? `${widgetId}#${suffix}` : widgetId;
+
+const toQueryFilters = (rules: RuleLike[]): QueryFilter[] =>
+  rules
+    .filter((r) => r.field && r.value !== '')
+    .map((r) => ({ field: r.field, op: r.op as QueryOp, value: r.value }));
+
+function bucketForDays(days: number): 'day' | 'week' | 'month' {
+  return days <= 35 ? 'day' : days <= 100 ? 'week' : 'month';
+}
+
+/**
+ * Section widgets carry filters for every widget after them until the next section.
+ * Returns widgets with those filters merged in front of their own (structural widgets pass through).
+ */
+function applySectionFilters<W extends RegistryWidget>(widgets: W[]): W[] {
+  let inherited: W['filters'] = [];
+  return widgets.map((w) => {
+    if (getWidget(w.kind)?.structural) {
+      inherited = w.filters ?? [];
+      return w;
+    }
+    return inherited.length
+      ? ({ ...w, filters: [...inherited, ...(w.filters ?? [])] } as W)
+      : w;
+  });
+}
+
+/** Definition hash for reproducibility: ignores volatile properties (createdAt). */
+function definitionHash(def: CompilableDefinition): string {
+  const { createdAt: _c, ...rest } = def;
+  return hashString(stableStringify(rest));
+}
+
+function compileReport(input: CompileInput): CompiledReport {
+  const { definition: def, sources, fieldMap, crossFilter } = input;
+  const ropts: ResolveOptions = {
+    today: input.today,
+    fiscalYearStartMonth: input.fiscalYearStartMonth,
+  };
+  const period = resolvePeriod(def.period, ropts);
+  const comparePeriod = resolveComparison(period, def.period.compare, ropts);
+  const source = sources.find((s) => s.id === def.sourceId);
+  if (!source) throw new Error(`Unknown data source "${def.sourceId}".`);
+  const notes: string[] = [];
+  const autoBucket = period ? bucketForDays(period.days) : 'month';
+  const reportFilters = toQueryFilters(def.filters);
+  const metricKeys = new Set((def.metrics ?? []).map((m) => m.key));
+  const derivedKeys = new Set((def.derived ?? []).map((d) => d.key));
+
+  const fieldsOf = (sourceId: string): Set<string> | null => {
+    if (sourceId === source.id) return null; // report source: everything in fieldMap (incl. derived/metrics) is valid
+    const s = sources.find((x) => x.id === sourceId);
+    return s ? new Set(s.fields.map((f) => f.key)) : new Set();
+  };
+
+  const queries: ReportQuery[] = [];
+  const widgets = applySectionFilters(def.widgets);
+
+  for (const w of widgets) {
+    const d = getWidget(w.kind);
+    if (!d || d.structural) continue;
+    const specs = d.requirements(w, { source, fieldMap, period, autoBucket });
+    for (const spec of specs) {
+      const { suffix, label, sourceId, extraFilters, compare, ...rest } = spec;
+      const sid = sourceId ?? source.id;
+      const known = fieldsOf(sid);
+      const skipXf =
+        !crossFilter || (d.skipsCrossFilter?.(w, crossFilter) ?? false);
+      let filters = [
+        ...reportFilters,
+        ...toQueryFilters(w.filters as RuleLike[]),
+        ...(skipXf || !crossFilter
+          ? []
+          : [
+              {
+                field: crossFilter.field,
+                op: 'eq' as const,
+                value: crossFilter.value,
+              },
+            ]),
+        ...(extraFilters ?? []),
+      ];
+      if (known) {
+        const dropped = filters.filter((f) => !known.has(f.field));
+        if (dropped.length)
+          notes.push(
+            `${w.title}: filter on ${[...new Set(dropped.map((x) => x.field))].join(', ')} does not apply to ${sources.find((s) => s.id === sid)?.name ?? sid} and was ignored.`
+          );
+        filters = filters.filter((f) => known.has(f.field));
+      }
+      const bucketed = (rest.dimensions ?? []).map((dim) => ({
+        ...dim,
+        bucket: dim.bucket === 'auto' ? autoBucket : dim.bucket,
+      }));
+      const used = new Set<string>([
+        ...bucketed.map((x) => x.field),
+        ...(rest.measures ?? []).map((m) => m.field ?? ''),
+        ...filters.map((f) => f.field),
+        ...(rest.columns ?? []),
+      ]);
+      const q: ReportQuery = {
+        ...rest,
+        id: resultKey(w.id, suffix),
+        widgetId: w.id,
+        label: label ?? w.title,
+        sourceId: sid,
+        period,
+        comparePeriod: compare && comparePeriod ? comparePeriod : undefined,
+        filters,
+        dimensions: bucketed,
+        measures: rest.measures ?? [],
+        spark: rest.spark === 'auto' ? autoBucket : rest.spark,
+      };
+      if (sid === source.id) {
+        const m = [...used].filter((k) => metricKeys.has(k));
+        if (m.length)
+          q.metrics = Object.fromEntries(
+            m.map((k) => [
+              k,
+              (def.metrics as { key: string }[]).find((x) => x.key === k),
+            ])
+          );
+        const dv = [...used].filter((k) => derivedKeys.has(k));
+        if (dv.length)
+          q.derived = (def.derived as { key: string }[]).filter(
+            (x) => derivedKeys.has(x.key) && dv.includes(x.key)
+          );
+      }
+      queries.push(q);
+    }
+  }
+
+  // Exact record count for the report header ("Records: 2,483,291"): period + report filters only.
+  queries.push({
+    id: RECORDS_QUERY_ID,
+    widgetId: RECORDS_QUERY_ID,
+    label: 'Records in scope',
+    sourceId: source.id,
+    shape: 'scalar',
+    period,
+    filters: reportFilters,
+    dimensions: [],
+    measures: [{ id: 'm0', agg: 'count' }],
+  });
+
+  // De-duplicate identical queries (several widgets often ask for the same aggregate).
+  const aliasOf: Record<string, string> = {};
+  const seen = new Map<string, string>();
+  const unique: ReportQuery[] = [];
+  for (const q of queries) {
+    const fp = queryFingerprint(q);
+    const prior = seen.get(fp);
+    if (prior) aliasOf[q.id] = prior;
+    else {
+      seen.set(fp, q.id);
+      aliasOf[q.id] = q.id;
+      unique.push(q);
+    }
+  }
+
+  return {
+    request: {
+      runId: input.runId,
+      definition: {
+        name: def.name,
+        schemaVersion: def.schemaVersion,
+        hash: definitionHash(def),
+        sourceId: def.sourceId,
+      },
+      tenantId: input.tenantId,
+      requestedBy: input.user,
+      timezone: def.timezone,
+      period,
+      comparePeriod,
+      filters: reportFilters,
+      queries: unique,
+    },
+    queries,
+    unique,
+    aliasOf,
+    period,
+    comparePeriod,
+    notes: [...new Set(notes)],
+  };
+}
+
+/* ---------------- validation.ts ---------------- */
+/**
+ * Pre-generation validation. Every message names the widget / field and says what to do.
+ *   ✗ "Invalid configuration."
+ *   ✓ "KPI card "Fraud rate" requires a measure field. Choose one in the inspector."
+ */
+
+interface ValidateInput {
+  name: string;
+  sourceId: string;
+  period: ReportPeriod;
+  filters: RuleLike[];
+  widgets: RegistryWidget[];
+  schedule?: { frequency: string; recipients: string };
+  format?: ExportFormat;
+  sources: SourceInfo[];
+  fieldMap: Map<string, FieldInfo>;
+  capabilities: ProviderCapabilities;
+  /** Capabilities the host allows for this user (UI hint; the backend re-checks). */
+  canExport?: boolean;
+  canViewSensitive?: boolean;
+  today: string;
+}
+
+const isNum = (s: string) => s.trim() !== '' && Number.isFinite(Number(s));
+
+/** Validates one filter rule; returns a message or null. */
+function filterProblem(
+  r: RuleLike,
+  fieldMap: Map<string, FieldInfo>
+): string | null {
+  const f = fieldMap.get(r.field);
+  if (!f) return `the field "${r.field}" is not available`;
+  const numeric =
+    f.type === 'number' || f.type === 'decimal' || f.type === 'currency';
+  if (r.op === 'between') {
+    const [a, b] = r.value.split('|');
+    if (numeric) {
+      if (!isNum(a ?? '') || !isNum(b ?? ''))
+        return `"${f.label}" needs a low and a high number`;
+      if (Number(a) > Number(b))
+        return `the "${f.label}" range starts above its end`;
+    } else if ((a ?? '') > (b ?? ''))
+      return `the "${f.label}" range starts after it ends`;
+  } else if (r.op === 'in') {
+    try {
+      const v = JSON.parse(r.value);
+      if (!Array.isArray(v) || v.length === 0)
+        return `select at least one "${f.label}" value`;
+    } catch {
+      return `the "${f.label}" selection is malformed`;
+    }
+  } else if (
+    numeric &&
+    ['gt', 'lt', 'eq', 'neq'].includes(r.op) &&
+    !isNum(r.value)
+  ) {
+    return `"${f.label}" needs a numeric value (got "${r.value}")`;
+  } else if (
+    (r.op === 'atleast' || r.op === 'atmost') &&
+    f.order &&
+    !f.order.includes(r.value)
+  ) {
+    return `"${r.value}" is not a level of "${f.label}"`;
+  }
+  return null;
+}
+
+function validateReport(i: ValidateInput): ValidationIssue[] {
+  const out: ValidationIssue[] = [];
+  const source = i.sources.find((s) => s.id === i.sourceId);
+
+  if (!source)
+    out.push(
+      issue(
+        'error',
+        'no-source',
+        'The report has no valid data source. Go back to Data and choose one.',
+        undefined,
+        'data'
+      )
+    );
+  if (!i.name.trim())
+    out.push(
+      issue(
+        'error',
+        'no-name',
+        'Give the report a name; it appears on the cover and in the export file name.',
+        undefined,
+        'data'
+      )
+    );
+
+  // Period
+  const pe = periodError(i.period);
+  if (pe) out.push(issue('error', 'period', pe, undefined, 'period'));
+  else {
+    const p = resolvePeriod(i.period, { today: i.today });
+    if (p && p.from > i.today)
+      out.push(
+        issue(
+          'warning',
+          'period-future',
+          'The reporting period is entirely in the future; the report will contain no data.',
+          undefined,
+          'period'
+        )
+      );
+    if (!p)
+      out.push(
+        issue(
+          'info',
+          'period-all',
+          'No date limit is set. Generating "All time" over a large history can take several minutes.',
+          undefined,
+          'period'
+        )
+      );
+  }
+
+  // Filters
+  i.filters.forEach((r, n) => {
+    if (!r.field || r.value === '') return;
+    const p = filterProblem(r, i.fieldMap);
+    if (p)
+      out.push({
+        ...issue(
+          'error',
+          'filter',
+          `Report filter ${n + 1}: ${p}. Fix or remove it.`,
+          undefined,
+          'filters'
+        ),
+        id: `report:filter:${n}`,
+      });
+  });
+
+  // Widgets
+  const content = i.widgets.filter((w) => !getWidget(w.kind)?.structural);
+  if (content.length === 0)
+    out.push(
+      issue(
+        'error',
+        'empty',
+        'The report is empty. Add at least one widget or start from a template.',
+        undefined,
+        'design'
+      )
+    );
+
+  for (const w of applySectionFilters(i.widgets)) {
+    const d = getWidget(w.kind);
+    if (!d) {
+      out.push(
+        issue(
+          'error',
+          'unknown-kind',
+          `"${w.title || w.kind}" uses a widget type (${w.kind}) that is not installed. Remove it or install the extension that provides it.`,
+          w.id
+        )
+      );
+      continue;
+    }
+    if (d.maturity === 'planned')
+      out.push(
+        issue(
+          'error',
+          'planned',
+          `${describeWidget(w)} is not available yet. Remove it before generating.`,
+          w.id
+        )
+      );
+    if (d.requiresCapability && !i.capabilities[d.requiresCapability])
+      out.push(
+        issue(
+          'error',
+          'capability',
+          `${describeWidget(w)} needs data your connected backend does not provide yet (${String(d.requiresCapability)}). Remove it or ask your administrator to enable it.`,
+          w.id
+        )
+      );
+    (w.filters ?? []).forEach((r, n) => {
+      if (!r.field || r.value === '') return;
+      const p = filterProblem(r as RuleLike, i.fieldMap);
+      if (p)
+        out.push({
+          ...issue(
+            'error',
+            'widget-filter',
+            `${describeWidget(w)}: filter ${n + 1}: ${p}.`,
+            w.id
+          ),
+          id: `${w.id}:filter:${n}`,
+        });
+    });
+    if (source)
+      out.push(
+        ...d.validate(w, {
+          source,
+          fieldMap: i.fieldMap,
+          sources: i.sources,
+          capabilities: i.capabilities,
+        })
+      );
+  }
+
+  // Schedule & output
+  if (i.schedule && i.schedule.frequency !== 'none') {
+    const rcpts = i.schedule.recipients
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (rcpts.length === 0)
+      out.push(
+        issue(
+          'error',
+          'schedule',
+          'A schedule needs at least one recipient. Add an e-mail address or set it to on-demand.',
+          undefined,
+          'output'
+        )
+      );
+    const bad = rcpts.find((x) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+    if (bad)
+      out.push(
+        issue(
+          'error',
+          'schedule-email',
+          `"${bad}" is not a valid e-mail address.`,
+          undefined,
+          'output'
+        )
+      );
+  }
+  if (i.canExport === false)
+    out.push(
+      issue(
+        'error',
+        'permission-export',
+        'You do not have permission to export reports. Ask your administrator for the export entitlement.',
+        undefined,
+        'output'
+      )
+    );
+  if (
+    i.format &&
+    i.format !== 'pdf' &&
+    i.format !== 'csv' &&
+    !i.capabilities.export?.includes(i.format)
+  )
+    out.push(
+      issue(
+        'error',
+        'format',
+        `${i.format.toUpperCase()} export is not enabled for this backend. Choose PDF or CSV, or enable it in the report data provider.`,
+        undefined,
+        'output'
+      )
+    );
+  if (i.canViewSensitive === false && content.some((w) => w.kind === 'table'))
+    out.push(
+      issue(
+        'info',
+        'masked',
+        'Sensitive fields (names, account numbers) will appear masked in tables and exports.',
+        undefined,
+        'output'
+      )
+    );
+
+  // De-duplicate by id (a widget can produce the same issue twice)
+  const seen = new Set<string>();
+  return out.filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)));
+}
+
+const hasErrors = (xs: ValidationIssue[]) =>
+  xs.some((x) => x.severity === 'error');
+const countBySeverity = (xs: ValidationIssue[]) => ({
+  error: xs.filter((x) => x.severity === 'error').length,
+  warning: xs.filter((x) => x.severity === 'warning').length,
+  info: xs.filter((x) => x.severity === 'info').length,
+});
+
+/* ---------------- runEngine.ts ---------------- */
+/**
+ * Report run engine
+ * ----------------------------------------------------------------------------
+ *   compile ─▶ [ provider.execute (chunked, parallel, retried) ]  or  [ submit ▶ poll ▶ fetchResult ]
+ *           ─▶ merge ▶ fan duplicate queries back out ▶ run metadata
+ *
+ * `executeRun` is pure async (injectable sleep/clock) so it is unit-testable. `useReportRun` wraps it for React.
+ * Supports: progress, cancellation (AbortSignal + provider.cancel), retry, partial results, background jobs,
+ * and cheap re-execution of a subset of queries (`refine`, used by cross-filtering).
+ */
+
+type StageId =
+  | 'validate'
+  | 'filters'
+  | 'fetch'
+  | 'calculate'
+  | 'build'
+  | 'finalize';
+const STAGES: { id: StageId; label: string; span: [number, number] }[] = [
+  { id: 'validate', label: 'Validating report', span: [0, 0.05] },
+  { id: 'filters', label: 'Applying filters', span: [0.05, 0.1] },
+  { id: 'fetch', label: 'Fetching data', span: [0.1, 0.72] },
+  { id: 'calculate', label: 'Calculating metrics', span: [0.72, 0.85] },
+  { id: 'build', label: 'Building visualizations', span: [0.85, 0.95] },
+  { id: 'finalize', label: 'Preparing final report', span: [0.95, 1] },
+];
+
+interface RunResult {
+  runId: string;
+  /** Results for EVERY query id (duplicates share the same object). */
+  results: Record<string, QueryResult>;
+  failures: QueryFailure[];
+  meta: ReportRunMetadata;
+  /** True when the report's scope matched zero records. */
+  empty: boolean;
+  partial: boolean;
+  compiled: CompiledReport;
+}
+
+interface Progress {
+  stage: StageId;
+  /** 0..1 overall */
+  progress: number;
+  message?: string;
+}
+
+interface RunContext {
+  reportName: string;
+  sourceName: string;
+  user: string;
+  filterLabels: string[];
+  viewFilterLabels: string[];
+  /** Injectable for tests. */
+  now?: () => number;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  chunkSize?: number;
+  concurrency?: number;
+  maxRetries?: number;
+  /** Give up on a background job after this long. */
+  jobTimeoutMs?: number;
+}
+
+class RunError extends Error {
+  constructor(
+    message: string,
+    public retryable = true
+  ) {
+    super(message);
+    this.name = 'RunError';
+  }
+}
+const isAbort = (e: unknown) => (e as { name?: string })?.name === 'AbortError';
+
+const defaultSleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted)
+      return reject(new DOMException('Aborted', 'AbortError'));
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t);
+        reject(new DOMException('Aborted', 'AbortError'));
+      },
+      { once: true }
+    );
+  });
+
+const within = (stage: StageId, f: number) => {
+  const s = STAGES.find((x) => x.id === stage)!;
+  return s.span[0] + (s.span[1] - s.span[0]) * Math.max(0, Math.min(1, f));
+};
+
+const chunk = <T,>(xs: T[], n: number): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+  return out;
+};
+
+/** Execute `queries` through the provider. Returns merged results + failures. */
+async function fetchQueries(
+  provider: ReportDataProvider,
+  request: ReportRunRequest,
+  queries: ReportQuery[],
+  ctx: RunContext,
+  signal: AbortSignal,
+  onProgress: (f: number, message?: string) => void
+): Promise<BatchResult> {
+  const sleep = ctx.sleep ?? defaultSleep;
+  const now = ctx.now ?? Date.now;
+
+  /* ---- background job path ---- */
+  if (provider.submit && provider.poll && provider.fetchResult) {
+    const { jobId } = await provider.submit(
+      { ...request, queries },
+      { signal }
+    );
+    const started = now();
+    let wait = 500;
+    try {
+      for (;;) {
+        await sleep(wait, signal);
+        wait = Math.min(3000, Math.round(wait * 1.5));
+        const st = await provider.poll(jobId, { signal });
+        onProgress(st.progress ?? 0, st.message);
+        if (st.state === 'succeeded')
+          return await provider.fetchResult(jobId, { signal });
+        if (st.state === 'failed')
+          throw new RunError(
+            st.message || 'The report job failed on the server.',
+            true
+          );
+        if (st.state === 'cancelled')
+          throw new DOMException('Aborted', 'AbortError');
+        if (now() - started > (ctx.jobTimeoutMs ?? 30 * 60_000))
+          throw new RunError(
+            'The report took too long to generate. Narrow the period or filters, or try again later.',
+            true
+          );
+      }
+    } catch (e) {
+      if (isAbort(e) || signal.aborted)
+        await provider.cancel?.(jobId).catch(() => undefined);
+      throw e;
+    }
+  }
+
+  /* ---- synchronous batch path ---- */
+  if (!provider.execute)
+    throw new RunError(
+      'The data provider cannot execute reports (no execute or job API).',
+      false
+    );
+  const batches = chunk(queries, ctx.chunkSize ?? 6);
+  const merged: BatchResult = {
+    results: {},
+    failures: [],
+    meta: { recordsMatched: null },
+  };
+  let done = 0;
+  const maxRetries = ctx.maxRetries ?? 2;
+  const runBatch = async (qs: ReportQuery[]) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const r = await provider.execute!(request, qs, { signal });
+        Object.assign(merged.results, r.results);
+        merged.failures.push(...r.failures);
+        merged.meta = {
+          ...merged.meta,
+          ...r.meta,
+          recordsMatched: r.meta.recordsMatched ?? merged.meta.recordsMatched,
+          partial: merged.meta.partial || r.meta.partial,
+          warnings: [
+            ...(merged.meta.warnings ?? []),
+            ...(r.meta.warnings ?? []),
+          ],
+        };
+        return;
+      } catch (e) {
+        if (isAbort(e) || signal.aborted) throw e;
+        const retryable = !(e instanceof RunError) || e.retryable;
+        if (!retryable || attempt >= maxRetries) {
+          // Degrade to partial: report which queries failed rather than failing the whole report.
+          const msg = e instanceof Error ? e.message : 'Query failed';
+          merged.failures.push(
+            ...qs.map((q) => ({ queryId: q.id, message: msg, retryable }))
+          );
+          return;
+        }
+        await sleep(300 * 2 ** attempt, signal);
+      }
+    }
+  };
+  const conc = Math.max(1, ctx.concurrency ?? 2);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(conc, batches.length) }, async () => {
+      while (next < batches.length) {
+        const mine = batches[next++];
+        await runBatch(mine);
+        done++;
+        onProgress(done / batches.length);
+      }
+    })
+  );
+  return merged;
+}
+
+/** Full run: fetch, fan out duplicates, build metadata. */
+async function executeRun(
+  provider: ReportDataProvider,
+  compiled: CompiledReport,
+  ctx: RunContext,
+  signal: AbortSignal,
+  onProgress: (p: Progress) => void
+): Promise<RunResult> {
+  const now = ctx.now ?? Date.now;
+  const t0 = now();
+  const emit = (stage: StageId, f: number, message?: string) =>
+    onProgress({ stage, progress: within(stage, f), message });
+  const tick = async (stage: StageId) => {
+    emit(stage, 1);
+    await Promise.resolve();
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+  };
+
+  emit('validate', 0);
+  await tick('validate');
+  emit('filters', 0);
+  await tick('filters');
+  emit('fetch', 0);
+  const batch = await fetchQueries(
+    provider,
+    compiled.request,
+    compiled.unique,
+    ctx,
+    signal,
+    (f, m) => emit('fetch', f, m)
+  );
+  emit('calculate', 0.5);
+  await tick('calculate');
+
+  // Fan duplicate queries back out to every id that asked for them.
+  const results: Record<string, QueryResult> = {};
+  const failures: QueryFailure[] = [...batch.failures];
+  for (const q of compiled.queries) {
+    const owner = compiled.aliasOf[q.id];
+    const r = batch.results[owner];
+    if (r) results[q.id] = r;
+    else if (!failures.some((f) => f.queryId === owner))
+      failures.push({
+        queryId: owner,
+        message: 'The server returned no result for this query.',
+        retryable: true,
+      });
+  }
+  for (const f of batch.failures)
+    for (const [id, owner] of Object.entries(compiled.aliasOf))
+      if (owner === f.queryId && id !== f.queryId)
+        failures.push({ ...f, queryId: id });
+
+  emit('build', 0.5);
+  await tick('build');
+
+  const rec = results[RECORDS_QUERY_ID] as ScalarResult | undefined;
+  const recordsMatched = rec?.values?.[0] ?? batch.meta.recordsMatched ?? null;
+  const widgetQueries = compiled.queries.filter(
+    (q) => q.id !== RECORDS_QUERY_ID
+  );
+  const failedWidgets = new Set(
+    failures.filter((f) => f.queryId !== RECORDS_QUERY_ID).map((f) => f.queryId)
+  );
+  if (
+    widgetQueries.length > 0 &&
+    failedWidgets.size >= widgetQueries.length &&
+    !Object.keys(results).some((k) => k !== RECORDS_QUERY_ID)
+  )
+    throw new RunError(
+      failures[0]?.message ?? 'No part of the report could be generated.',
+      failures.every((f) => f.retryable)
+    );
+
+  const warnings = [...compiled.notes, ...(batch.meta.warnings ?? [])];
+  const partial = !!batch.meta.partial || failedWidgets.size > 0;
+  if (failedWidgets.size > 0)
+    warnings.push(
+      `${failedWidgets.size} widget(s) could not be calculated and are marked in the report.`
+    );
+
+  const meta: ReportRunMetadata = {
+    runId: compiled.request.runId,
+    dataStatus: 'actual',
+    reportName: ctx.reportName,
+    definitionHash: compiled.request.definition.hash,
+    schemaVersion: compiled.request.definition.schemaVersion,
+    sourceId: compiled.request.definition.sourceId,
+    sourceName: ctx.sourceName,
+    datasetVersion: batch.meta.datasetVersion,
+    dataAsOf: batch.meta.dataAsOf,
+    period: compiled.period,
+    comparePeriod: compiled.comparePeriod,
+    filters: ctx.filterLabels,
+    viewFilters: ctx.viewFilterLabels,
+    generatedAt: new Date(now()).toISOString(),
+    generatedBy: ctx.user,
+    tenantId: compiled.request.tenantId,
+    timezone: compiled.request.timezone,
+    recordsMatched,
+    queryCount: compiled.unique.length,
+    durationMs: now() - t0,
+    partial,
+    warnings,
+  };
+  emit('finalize', 1);
+  return {
+    runId: meta.runId,
+    results,
+    failures,
+    meta,
+    empty: recordsMatched === 0,
+    partial,
+    compiled,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * React hook
+ * ------------------------------------------------------------------------- */
+type RunPhase = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+interface RunState {
+  phase: RunPhase;
+  stage: StageId | null;
+  progress: number;
+  message?: string;
+  startedAt?: number;
+  /** Rough time remaining in ms (null until enough progress to estimate). */
+  etaMs: number | null;
+  error?: { message: string; retryable: boolean };
+  result?: RunResult;
+  /** A cross-filter refresh is in flight (result stays visible). */
+  refining: boolean;
+}
+const IDLE: RunState = {
+  phase: 'idle',
+  stage: null,
+  progress: 0,
+  etaMs: null,
+  refining: false,
+};
+
+function useReportRun(provider: ReportDataProvider) {
+  const [state, setState] = useState<RunState>(IDLE);
+  const abortRef = useRef<AbortController | null>(null);
+  const lastRef = useRef<{ compiled: CompiledReport; ctx: RunContext } | null>(
+    null
+  );
+  const providerRef = useRef(provider);
+  providerRef.current = provider;
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const start = useCallback(
+    async (compiled: CompiledReport, ctx: RunContext) => {
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      lastRef.current = { compiled, ctx };
+      const t0 = Date.now();
+      setState({ ...IDLE, phase: 'running', stage: 'validate', startedAt: t0 });
+      try {
+        const result = await executeRun(
+          providerRef.current,
+          compiled,
+          ctx,
+          ctrl.signal,
+          (p) => {
+            if (ctrl.signal.aborted) return;
+            const elapsed = Date.now() - t0;
+            setState((s) => ({
+              ...s,
+              stage: p.stage,
+              progress: p.progress,
+              message: p.message,
+              etaMs:
+                p.progress > 0.15 && p.progress < 1
+                  ? Math.round((elapsed / p.progress) * (1 - p.progress))
+                  : null,
+            }));
+          }
+        );
+        if (ctrl.signal.aborted) return;
+        setState({
+          ...IDLE,
+          phase: 'succeeded',
+          progress: 1,
+          stage: 'finalize',
+          result,
+        });
+      } catch (e) {
+        if (isAbort(e) || ctrl.signal.aborted) {
+          setState({ ...IDLE, phase: 'cancelled' });
+          return;
+        }
+        setState({
+          ...IDLE,
+          phase: 'failed',
+          error: {
+            message:
+              e instanceof Error ? e.message : 'Report generation failed.',
+            retryable: e instanceof RunError ? e.retryable : true,
+          },
+        });
+      }
+    },
+    []
+  );
+
+  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  const retry = useCallback(() => {
+    const l = lastRef.current;
+    if (l) void start(l.compiled, l.ctx);
+  }, [start]);
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    lastRef.current = null;
+    setState(IDLE);
+  }, []);
+
+  /** Re-run only some queries against the existing result (cross-filter / drill). Keeps the report visible. */
+  const refine = useCallback(
+    async (
+      compiled: CompiledReport,
+      queryIds: string[],
+      viewFilters: string[]
+    ) => {
+      const cur = stateRef.current.result;
+      const l = lastRef.current;
+      if (!cur || !l) return;
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      setState((s) => ({ ...s, refining: true }));
+      try {
+        const wanted = new Set(
+          queryIds.map((id) => compiled.aliasOf[id] ?? id)
+        );
+        const qs = compiled.unique.filter((q) => wanted.has(q.id));
+        const batch = await fetchQueries(
+          providerRef.current,
+          compiled.request,
+          qs,
+          l.ctx,
+          ctrl.signal,
+          () => undefined
+        );
+        if (ctrl.signal.aborted) return;
+        const results = { ...cur.results };
+        const failures = cur.failures.filter(
+          (f) => !queryIds.includes(f.queryId)
+        );
+        for (const id of queryIds) {
+          const r = batch.results[compiled.aliasOf[id] ?? id];
+          if (r) results[id] = r;
+          else delete results[id];
+        }
+        for (const f of batch.failures)
+          for (const id of queryIds)
+            if ((compiled.aliasOf[id] ?? id) === f.queryId)
+              failures.push({ ...f, queryId: id });
+        setState((s) => ({
+          ...s,
+          refining: false,
+          result: s.result && {
+            ...s.result,
+            results,
+            failures,
+            compiled,
+            meta: { ...s.result.meta, viewFilters },
+          },
+        }));
+      } catch (e) {
+        if (isAbort(e) || ctrl.signal.aborted) return;
+        setState((s) => ({ ...s, refining: false }));
+      }
+    },
+    []
+  );
+
+  return { state, start, cancel, retry, reset, refine };
+}
+
+/* ---------------- legacyDescriptors.ts ---------------- */
+/**
+ * Registry descriptors for the original widgets (kpi, chart, table, text, insight).
+ * Their React views stay in ReportBuilder.tsx (`render` is intentionally omitted); this file adds what the
+ * registry needs: the QUERIES each one requires, validation, and interaction rules.
+ */
+
+type RW = RegistryWidget;
+const AGGS_NEEDING_FIELD = new Set([
+  'sum',
+  'avg',
+  'min',
+  'max',
+  'distinct',
+  'yes',
+  'rate',
+  'metric',
+]);
+const AGG_NOUN: Record<string, string> = {
+  sum: 'a numeric field to add up',
+  avg: 'a numeric field to average',
+  min: 'a numeric field',
+  max: 'a numeric field',
+  distinct: 'a field to count distinct values of',
+  yes: 'a Yes/No field',
+  rate: 'a Yes/No field',
+  metric: 'a calculated metric',
+};
+
+/** A measure is required for every aggregation except plain "count". */
+function measureIssues(w: RW, ctx: ValidateCtx): ValidationIssue[] {
+  const agg = String(w.agg ?? 'count');
+  if (!AGGS_NEEDING_FIELD.has(agg)) return [];
+  const i = requireField(
+    w,
+    'field',
+    ctx,
+    `a measure (${AGG_NOUN[agg] ?? 'a field'})`
+  );
+  if (i) return [i];
+  const f = ctx.fieldMap.get(String(w.field))!;
+  if ((agg === 'sum' || agg === 'avg') && !isNumericType(f.type) && !f.metric)
+    return [
+      issue(
+        'error',
+        'bad-measure',
+        `${describeWidget(w)}: "${f.label}" is not numeric, so it cannot be ${agg === 'sum' ? 'summed' : 'averaged'}. Pick a numeric field or change the calculation to Count.`,
+        w.id
+      ),
+    ];
+  return [];
+}
+
+const measure = (w: RW) => ({
+  id: 'm0',
+  agg: String(w.agg ?? 'count') as QueryAgg,
+  field: w.field as string | undefined,
+});
+
+const kpi: WidgetDescriptor = {
+  kind: 'kpi',
+  label: 'KPI card',
+  hint: 'One headline number with trend and target',
+  category: 'executive',
+  icon: Hash,
+  exportAs: 'visual',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  requirements: (w) => [
+    {
+      shape: 'scalar',
+      measures: [measure(w)],
+      compare: true,
+      spark: w.showSparkline ? 'auto' : undefined,
+    },
+  ],
+  validate: (w, ctx) => measureIssues(w, ctx),
+  interactions: {},
+};
+
+const chart: WidgetDescriptor = {
+  kind: 'chart',
+  label: 'Chart',
+  hint: 'Bar, line, area, donut, scatter, heatmap, pivot',
+  category: 'charts',
+  icon: BarChart3,
+  exportAs: 'visual',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  interactions: { crossFilter: true, drill: true },
+  skipsCrossFilter: (w, xf) =>
+    w.chartType !== 'scatter' && w.groupBy === xf.field,
+  requirements: (w) => {
+    if (w.chartType === 'scatter')
+      return [
+        {
+          shape: 'points',
+          measures: [],
+          points: {
+            x: String(w.xField ?? ''),
+            y: String(w.field ?? ''),
+            colour: (w.breakBy as string) || undefined,
+            max: 1500,
+          },
+        },
+      ];
+    const sort = w.sort as string | undefined;
+    const dims = [
+      {
+        field: String(w.groupBy),
+        bucket: ((w.bucket as string) ?? 'auto') as 'auto',
+      },
+    ];
+    if (w.breakBy) dims.push({ field: String(w.breakBy), bucket: 'auto' });
+    return [
+      {
+        shape: 'grouped',
+        dimensions: dims,
+        measures: [measure(w)],
+        limit: Number(w.topN ?? 6),
+        others: !!w.others,
+        seriesLimit: 6,
+        sort:
+          sort === 'valueDesc'
+            ? { by: 'measure', dir: 'desc' }
+            : sort === 'valueAsc'
+              ? { by: 'measure', dir: 'asc' }
+              : sort === 'label'
+                ? { by: 'label', dir: 'asc' }
+                : undefined,
+      },
+    ];
+  },
+  validate: (w, ctx) => {
+    const out: ValidationIssue[] = [];
+    if (w.chartType === 'scatter') {
+      const x = requireField(w, 'xField', ctx, 'a numeric X-axis field', (f) =>
+        isNumericType(f.type)
+      );
+      const y = requireField(w, 'field', ctx, 'a numeric Y-axis field', (f) =>
+        isNumericType(f.type)
+      );
+      return [x, y].filter((i): i is ValidationIssue => !!i);
+    }
+    const g = requireField(w, 'groupBy', ctx, 'a dimension to group by');
+    if (g) out.push(g);
+    else {
+      const f = ctx.fieldMap.get(String(w.groupBy))!;
+      if (
+        (w.chartType === 'doughnut' || w.chartType === 'pie') &&
+        isDateInfoType(f.type)
+      )
+        out.push(
+          issue(
+            'warning',
+            'pie-date',
+            `${describeWidget(w)}: a pie/donut over dates is hard to read. Use a line or column chart for time.`,
+            w.id
+          )
+        );
+    }
+    if (
+      (w.chartType === 'stacked' ||
+        w.chartType === 'heatmap' ||
+        w.chartType === 'pivot') &&
+      !w.breakBy
+    )
+      out.push(
+        issue(
+          'error',
+          'missing-breakBy',
+          `${describeWidget(w)} requires a second dimension ("Break down by") to ${w.chartType === 'stacked' ? 'stack' : 'fill the grid'}.`,
+          w.id
+        )
+      );
+    return [...out, ...measureIssues(w, ctx)];
+  },
+};
+
+const table: WidgetDescriptor = {
+  kind: 'table',
+  label: 'Table',
+  hint: 'Record-level detail',
+  category: 'analytical',
+  icon: Table2,
+  exportAs: 'table',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  requirements: (w, ctx) => {
+    const cols = (w.columns as string[]) ?? [];
+    const sortBy = w.sortBy as string | undefined;
+    return [
+      {
+        shape: 'records',
+        measures: [],
+        columns: cols,
+        orderBy: sortBy
+          ? { field: sortBy, dir: (w.sortDir as 'asc') ?? 'desc' }
+          : undefined,
+        limit: Number(w.limit ?? 25),
+        totalsFor: w.showTotals
+          ? cols.filter((c) => {
+              const f = ctx.fieldMap.get(c);
+              return f && isNumericType(f.type);
+            })
+          : undefined,
+      },
+    ];
+  },
+  validate: (w, ctx) => {
+    const cols = (w.columns as string[]) ?? [];
+    if (cols.length === 0)
+      return [
+        issue(
+          'error',
+          'no-columns',
+          `${describeWidget(w)} has no columns. Choose at least one in the inspector.`,
+          w.id
+        ),
+      ];
+    const gone = cols.filter((c) => !ctx.fieldMap.has(c));
+    return gone.length
+      ? [
+          issue(
+            'error',
+            'unknown-columns',
+            `${describeWidget(w)} uses fields that no longer exist (${gone.join(', ')}). Remove them from its columns.`,
+            w.id
+          ),
+        ]
+      : [];
+  },
+};
+
+const text: WidgetDescriptor = {
+  kind: 'text',
+  label: 'Commentary',
+  hint: 'Headings, narrative and callouts',
+  category: 'content',
+  icon: FileText,
+  exportAs: 'text',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  requirements: () => [],
+  validate: (w) =>
+    String(w.text ?? '').trim()
+      ? []
+      : [
+          issue(
+            'warning',
+            'empty-text',
+            `${describeWidget(w)} is empty and will print as a blank block.`,
+            w.id
+          ),
+        ],
+};
+
+const insight: WidgetDescriptor = {
+  kind: 'insight',
+  label: 'Key insights',
+  hint: 'Auto-written findings',
+  category: 'executive',
+  icon: Lightbulb,
+  exportAs: 'text',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [
+        {
+          field: String(w.groupBy),
+          bucket: ((w.bucket as string) ?? 'auto') as 'auto',
+        },
+      ],
+      measures: [measure(w)],
+      limit: 50,
+      compare: true,
+    },
+    { suffix: 'total', shape: 'scalar', measures: [measure(w)], compare: true },
+  ],
+  validate: (w, ctx) => {
+    const g = requireField(w, 'groupBy', ctx, 'a dimension to analyse');
+    return [...(g ? [g] : []), ...measureIssues(w, ctx)];
+  },
+};
+
+function registerLegacyWidgets() {
+  [kpi, chart, table, text, insight].forEach((d) => {
+    if (!getWidget(d.kind)) registerWidget(d);
+  });
+}
+
+/* ---------------- widgets/shared.tsx ---------------- */
+/** Helpers shared by the registry widgets. */
+
+const newId = () => uuidv4();
+const mkExt = (
+  kind: string,
+  title: string,
+  over: Record<string, unknown> = {}
+): RegistryWidget =>
+  ({
+    id: newId(),
+    kind,
+    title,
+    span: 6,
+    height: 'md',
+    filters: [],
+    ...over,
+  }) as RegistryWidget;
+
+const catOf = (fs: FieldInfo[]) => fs.filter((f) => f.type === 'category');
+const numOf = (fs: FieldInfo[]) => fs.filter((f) => isNumericType(f.type));
+
+/** Smart defaults: first ordinal category, first category, money, any number, boolean, date. */
+function defaultsOf(ctx: CreateCtx) {
+  const fs = ctx.fields.length ? ctx.fields : ctx.source.fields;
+  const cats = catOf(fs).sort((a, b) => Number(!!b.order) - Number(!!a.order));
+  const money = fs.find((f) => f.type === 'currency');
+  const num = money ?? numOf(fs)[0];
+  return {
+    cat: cats[0],
+    cat2: cats[1],
+    ordinal: cats.find((c) => c.order),
+    money,
+    num,
+    bool: fs.find((f) => f.type === 'boolean'),
+    date: fs.find((f) => isDateInfoType(f.type)),
+    score:
+      fs.find((f) => /score/i.test(f.key) && isNumericType(f.type)) ??
+      numOf(fs).find((f) => f.type === 'number'),
+  };
+}
+const defaultMeasure = (ctx: CreateCtx) => {
+  const d = defaultsOf(ctx);
+  return d.money
+    ? { agg: 'sum', field: d.money.key }
+    : { agg: 'count', field: undefined };
+};
+
+const ratio = (n: number, d: number) => (d ? (n / d) * 100 : 0);
+
+/** Change vs previous period: points for rates, % otherwise. null when there is no comparison. */
+function deltaOf(agg: string, cur: number, prev: number | undefined | null) {
+  if (prev === undefined || prev === null) return null;
+  const pts = agg === 'rate';
+  const v = pts
+    ? cur - prev
+    : prev === 0
+      ? null
+      : ((cur - prev) / Math.abs(prev)) * 100;
+  return v === null
+    ? null
+    : {
+        value: v,
+        text: `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}${pts ? ' pts' : '%'}`,
+        up: v >= 0,
+      };
+}
+
+type Rag = 'ok' | 'warn' | 'breach';
+function ragOf(
+  v: number,
+  warn: number | undefined,
+  breach: number | undefined,
+  lowerIsBetter: boolean
+): Rag | null {
+  if (warn === undefined && breach === undefined) return null;
+  if (lowerIsBetter)
+    return breach !== undefined && v >= breach
+      ? 'breach'
+      : warn !== undefined && v >= warn
+        ? 'warn'
+        : 'ok';
+  return breach !== undefined && v <= breach
+    ? 'breach'
+    : warn !== undefined && v <= warn
+      ? 'warn'
+      : 'ok';
+}
+const RAG_STYLE: Record<Rag, { bg: string; fg: string; label: string }> = {
+  ok: { bg: '#dcfce7', fg: '#166534', label: 'Within appetite' },
+  warn: { bg: '#fef3c7', fg: '#92400e', label: 'Warning' },
+  breach: { bg: '#fee2e2', fg: '#991b1b', label: 'Breach' },
+};
+const RagPill: React.FC<{ rag: Rag }> = ({ rag }) => (
+  <span
+    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+    style={{ background: RAG_STYLE[rag].bg, color: RAG_STYLE[rag].fg }}
+  >
+    <span aria-hidden="true">
+      {rag === 'ok' ? '●' : rag === 'warn' ? '▲' : '■'}
+    </span>
+    {RAG_STYLE[rag].label}
+  </span>
+);
+
+const WidgetEmpty: React.FC<{ text?: string }> = ({
+  text = 'No data for the current scope.',
+}) => {
+  const t = useT();
+  return <p className={`py-8 text-center text-xs ${t.muted}`}>{text}</p>;
+};
+/** Standard loading / error / empty handling so each widget only renders the happy path. */
+const Gate: React.FC<{
+  status: string;
+  error?: string;
+  children: React.ReactNode;
+}> = ({ status, error, children }) => {
+  const t = useT();
+  if (status === 'error')
+    return (
+      <p role="alert" className="py-6 text-center text-xs text-red-600">
+        Could not be calculated{error ? `: ${error}` : ''}
+      </p>
+    );
+  if (status === 'loading')
+    return (
+      <div
+        className={`h-24 animate-pulse rounded-lg ${t.skeleton}`}
+        role="status"
+        aria-label="Loading"
+      />
+    );
+  return <>{children}</>;
+};
+
+const grouped = (r: QueryResult | undefined) =>
+  r && r.shape === 'grouped' ? r : undefined;
+const scalar = (r: QueryResult | undefined) =>
+  r && r.shape === 'scalar' ? r : undefined;
+
+const labelOf = (env: WidgetEnv, key?: string) =>
+  key ? (env.fieldMap.get(key)?.label ?? key) : '';
+const measureName = (env: WidgetEnv, agg: string, field?: string) =>
+  agg === 'count' || !field
+    ? 'Count'
+    : `${agg === 'sum' ? 'Total' : agg === 'avg' ? 'Average' : agg === 'rate' ? 'Rate of' : agg === 'distinct' ? 'Distinct' : agg} ${labelOf(env, field).toLowerCase()}`;
+
+const AGG_CHOICES = [
+  { value: 'count', label: 'Count' },
+  { value: 'sum', label: 'Sum' },
+  { value: 'avg', label: 'Average' },
+  { value: 'min', label: 'Min' },
+  { value: 'max', label: 'Max' },
+  { value: 'distinct', label: 'Distinct count' },
+  { value: 'rate', label: 'Rate (% yes)' },
+  { value: 'metric', label: 'Calculated metric' },
+];
+
+/* ---------------- widgets/executive.tsx ---------------- */
+/** Executive widgets: section header, KPI group, KRI panel, executive summary, period comparison. */
+
+type Item = {
+  label: string;
+  agg: QueryAgg;
+  field?: string;
+  lowerIsBetter?: boolean;
+  warn?: number;
+  breach?: number;
+};
+const itemsOf = (w: RegistryWidget) => (w.items as Item[]) ?? [];
+const itemMeasures = (items: Item[]) =>
+  items.map((it, i) => ({
+    id: `m${i}`,
+    agg: it.agg ?? 'count',
+    field: it.field,
+  }));
+const itemIssues = (
+  w: RegistryWidget,
+  ctx: ValidateCtx,
+  min = 1
+): ValidationIssue[] => {
+  const items = itemsOf(w);
+  if (items.length < min)
+    return [
+      issue(
+        'error',
+        'no-items',
+        `${describeWidget(w)} needs at least ${min} metric. Add one in the inspector.`,
+        w.id
+      ),
+    ];
+  return items.flatMap((it, i) => {
+    if (!it.label?.trim())
+      return [
+        issue(
+          'warning',
+          `item-label-${i}`,
+          `${describeWidget(w)}: metric ${i + 1} has no label.`,
+          w.id
+        ),
+      ];
+    return measureIssues(
+      {
+        ...w,
+        agg: it.agg,
+        field: it.field,
+        title: `${w.title} › ${it.label}`,
+      } as RegistryWidget,
+      ctx
+    ).map((x) => ({ ...x, id: `${w.id}:i${i}:${x.code}` }));
+  });
+};
+const itemSchema = (extra: ConfigField[] = []): ConfigField[] => [
+  { type: 'text', key: 'label', label: 'Label' },
+  { type: 'agg', key: 'agg', label: 'Calculation' },
+  {
+    type: 'field',
+    key: 'field',
+    label: 'Measure',
+    accept: 'measure',
+    optional: true,
+  },
+  {
+    type: 'toggle',
+    key: 'lowerIsBetter',
+    label: 'Lower is better',
+    advanced: false,
+  },
+  ...extra,
+];
+const makeItem = (): Record<string, unknown> => ({
+  label: 'New metric',
+  agg: 'count',
+  lowerIsBetter: true,
+});
+
+/* ---- Section header ---- */
+const SectionRender: WidgetDescriptor['render'] = ({ widget }) => {
+  const t = useT();
+  return (
+    <div className="rb-avoid">
+      <h2 className={`text-lg font-bold tracking-tight ${t.text}`}>
+        {widget.title}
+      </h2>
+      {widget.subtitle ? (
+        <p className={`mt-0.5 text-sm ${t.muted}`}>{String(widget.subtitle)}</p>
+      ) : null}
+    </div>
+  );
+};
+registerWidget({
+  kind: 'section',
+  label: 'Section header',
+  hint: 'Heading; its filters apply to every widget below it',
+  category: 'content',
+  icon: Heading,
+  structural: true,
+  exportAs: 'text',
+  requirements: () => [],
+  validate: () => [],
+  create: () =>
+    mkExt('section', 'New section', { span: 12, height: 'sm', subtitle: '' }),
+  config: [{ type: 'text', key: 'subtitle', label: 'Subtitle' }],
+  render: SectionRender,
+});
+
+/* ---- KPI group ---- */
+const KpiGroupRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const items = itemsOf(widget);
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <div
+          className="grid gap-3"
+          style={{
+            gridTemplateColumns: `repeat(${Math.min(items.length, 4)}, minmax(0,1fr))`,
+          }}
+        >
+          {items.map((it, i) => {
+            const v = r.values[i] ?? 0;
+            const d = env.compare ? deltaOf(it.agg, v, r.prev?.[i]) : null;
+            const good = d ? d.up === !it.lowerIsBetter : null;
+            return (
+              <div
+                key={i}
+                className={`rb-avoid rounded-lg border p-3 ${t.inset}`}
+              >
+                <p
+                  className={`text-[11px] font-semibold uppercase tracking-wide ${t.muted}`}
+                >
+                  {it.label}
+                </p>
+                <p className={`mt-1 text-2xl font-bold tabular-nums ${t.text}`}>
+                  {env.fmt(v, it.agg, it.field)}
+                </p>
+                {d ? (
+                  <p
+                    className={`mt-0.5 flex items-center gap-1 text-xs font-medium ${good ? 'text-emerald-600' : 'text-red-600'}`}
+                  >
+                    {d.up ? (
+                      <ArrowUpRight className="h-3 w-3" />
+                    ) : (
+                      <ArrowDownRight className="h-3 w-3" />
+                    )}{' '}
+                    {d.text} <span className={t.muted}>vs prior</span>
+                  </p>
+                ) : (
+                  <p className={`mt-0.5 text-[11px] ${t.muted}`}>
+                    {env.mode === 'preview'
+                      ? 'Comparison appears in the generated report'
+                      : 'No comparison'}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'kpiGroup',
+  label: 'KPI group',
+  hint: 'A row of related headline metrics',
+  category: 'executive',
+  icon: LayoutGrid,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const m = defaultMeasure(ctx);
+    return mkExt('kpiGroup', 'Headline metrics', {
+      span: 12,
+      height: 'sm',
+      items: [
+        {
+          label: `Total ${ctx.source.recordLabel}`,
+          agg: 'count',
+          lowerIsBetter: true,
+        },
+        {
+          label: 'Value at risk',
+          agg: m.agg,
+          field: m.field,
+          lowerIsBetter: true,
+        },
+      ],
+    });
+  },
+  requirements: (w) => [
+    { shape: 'scalar', measures: itemMeasures(itemsOf(w)), compare: true },
+  ],
+  validate: (w, ctx) => itemIssues(w, ctx),
+  config: [
+    {
+      type: 'list',
+      key: 'items',
+      label: 'Metric',
+      max: 6,
+      addLabel: 'Add metric',
+      make: makeItem,
+      item: itemSchema(),
+      itemLabel: (it) => String(it.label ?? ''),
+    },
+  ],
+  toTable: (w, rs, env) => {
+    const r = scalar(rs['']);
+    return r
+      ? {
+          headers: ['Metric', 'Value', 'Previous'],
+          rows: itemsOf(w).map((it, i) => [
+            it.label,
+            r.values[i] ?? 0,
+            r.prev?.[i] ?? '',
+          ]),
+        }
+      : null;
+  },
+  render: KpiGroupRender,
+} as WidgetDescriptor);
+
+/* ---- KRI / threshold panel ---- */
+const KriRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const items = itemsOf(widget);
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <table className="w-full text-left text-xs">
+          <caption className="sr-only">{widget.title}</caption>
+          <thead>
+            <tr className={`${t.inset} ${t.muted}`}>
+              {[
+                'Indicator',
+                'Actual',
+                'Warning',
+                'Breach',
+                'Status',
+                'Trend',
+              ].map((h) => (
+                <th key={h} scope="col" className="px-2 py-1.5 font-medium">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it, i) => {
+              const v = r.values[i] ?? 0;
+              const rag = ragOf(v, it.warn, it.breach, !!it.lowerIsBetter);
+              const d = env.compare ? deltaOf(it.agg, v, r.prev?.[i]) : null;
+              const show = (x?: number) =>
+                x === undefined ? '—' : env.fmt(x, it.agg, it.field);
+              return (
+                <tr
+                  key={i}
+                  className={`border-b last:border-b-0 ${t.line} ${t.body}`}
+                >
+                  <th scope="row" className={`px-2 py-2 font-medium ${t.text}`}>
+                    {it.label}
+                  </th>
+                  <td className="px-2 py-2 font-semibold tabular-nums">
+                    {env.fmt(v, it.agg, it.field)}
+                  </td>
+                  <td className="px-2 py-2 tabular-nums">{show(it.warn)}</td>
+                  <td className="px-2 py-2 tabular-nums">{show(it.breach)}</td>
+                  <td className="px-2 py-2">
+                    {rag ? (
+                      <RagPill rag={rag} />
+                    ) : (
+                      <span className={t.muted}>No threshold</span>
+                    )}
+                  </td>
+                  <td
+                    className={`px-2 py-2 tabular-nums ${d ? (d.up === !it.lowerIsBetter ? 'text-emerald-600' : 'text-red-600') : t.muted}`}
+                  >
+                    {d ? d.text : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'kri',
+  label: 'Risk indicators (KRI)',
+  hint: 'Metrics vs warning / breach thresholds with RAG status',
+  category: 'risk',
+  icon: Gauge,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    return mkExt('kri', 'Key risk indicators', {
+      span: 12,
+      items: [
+        {
+          label: 'Total ' + ctx.source.recordLabel,
+          agg: 'count',
+          lowerIsBetter: true,
+          warn: 500,
+          breach: 1000,
+        },
+        ...(d.bool
+          ? [
+              {
+                label: `${d.bool.label} rate`,
+                agg: 'rate',
+                field: d.bool.key,
+                lowerIsBetter: true,
+                warn: 20,
+                breach: 35,
+              },
+            ]
+          : []),
+      ],
+    });
+  },
+  requirements: (w) => [
+    { shape: 'scalar', measures: itemMeasures(itemsOf(w)), compare: true },
+  ],
+  validate: (w, ctx) => {
+    const out = itemIssues(w, ctx);
+    itemsOf(w).forEach((it, i) => {
+      if (
+        it.warn !== undefined &&
+        it.breach !== undefined &&
+        (it.lowerIsBetter ? it.warn > it.breach : it.warn < it.breach)
+      )
+        out.push(
+          issue(
+            'error',
+            `thr-${i}`,
+            `${describeWidget(w)}: "${it.label}" has its warning level beyond its breach level. ${it.lowerIsBetter ? 'Warning must be below breach' : 'Warning must be above breach'} when ${it.lowerIsBetter ? 'lower' : 'higher'} is better.`,
+            w.id
+          )
+        );
+    });
+    return out;
+  },
+  config: [
+    {
+      type: 'list',
+      key: 'items',
+      label: 'Indicator',
+      max: 8,
+      addLabel: 'Add indicator',
+      make: makeItem,
+      item: itemSchema([
+        { type: 'number', key: 'warn', label: 'Warning at' },
+        { type: 'number', key: 'breach', label: 'Breach at' },
+      ]),
+      itemLabel: (it) => String(it.label ?? ''),
+    },
+  ],
+  toTable: (w, rs) => {
+    const r = scalar(rs['']);
+    return r
+      ? {
+          headers: ['Indicator', 'Actual', 'Warning', 'Breach', 'Status'],
+          rows: itemsOf(w).map((it, i) => [
+            it.label,
+            r.values[i] ?? 0,
+            it.warn ?? '',
+            it.breach ?? '',
+            ragOf(r.values[i] ?? 0, it.warn, it.breach, !!it.lowerIsBetter) ??
+              '',
+          ]),
+        }
+      : null;
+  },
+  render: KriRender,
+} as WidgetDescriptor);
+
+/* ---- Executive summary: auto-written headline + findings + management commentary ---- */
+const ExecRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const items = itemsOf(widget);
+  const lines = r
+    ? items.map((it, i) => {
+        const v = r.values[i] ?? 0;
+        const d = env.compare ? deltaOf(it.agg, v, r.prev?.[i]) : null;
+        const good = d ? d.up === !it.lowerIsBetter : null;
+        return {
+          it,
+          text: `${it.label} was ${env.fmt(v, it.agg, it.field)}${d ? `, ${d.up ? 'up' : 'down'} ${d.text.replace(/^[+−]/, '')} on the prior period` : ''}.`,
+          good,
+          mag: d ? Math.abs(d.value) : 0,
+        };
+      })
+    : [];
+  const worst = [...lines]
+    .filter((l) => l.good === false)
+    .sort((a, b) => b.mag - a.mag)[0];
+  const best = [...lines]
+    .filter((l) => l.good === true)
+    .sort((a, b) => b.mag - a.mag)[0];
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <p
+              className={`text-[11px] font-bold uppercase tracking-wider ${t.muted}`}
+            >
+              Headlines
+            </p>
+            <ul className="mt-1 space-y-1.5">
+              {lines.map((l, i) => (
+                <li
+                  key={i}
+                  className={`flex gap-2 text-sm leading-snug ${t.body}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{
+                      background:
+                        l.good === null
+                          ? env.colors[0]
+                          : l.good
+                            ? '#16a34a'
+                            : '#dc2626',
+                    }}
+                  />
+                  {l.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {(worst || best) && (
+            <div>
+              <p
+                className={`text-[11px] font-bold uppercase tracking-wider ${t.muted}`}
+              >
+                Key findings
+              </p>
+              <ul className="mt-1 space-y-1">
+                {worst && (
+                  <li className="text-sm text-red-700">
+                    Needs attention: {worst.it.label} moved against target the
+                    most.
+                  </li>
+                )}
+                {best && (
+                  <li className="text-sm text-emerald-700">
+                    Improving: {best.it.label} shows the strongest favourable
+                    change.
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+          {String(widget.commentary ?? '').trim() && (
+            <div
+              className={`rounded-lg border-l-4 p-3 ${t.inset}`}
+              style={{ borderLeftColor: env.colors[0] }}
+            >
+              <p
+                className={`text-[11px] font-bold uppercase tracking-wider ${t.muted}`}
+              >
+                Management commentary
+              </p>
+              <p className={`mt-1 whitespace-pre-wrap text-sm ${t.body}`}>
+                {String(widget.commentary)}
+              </p>
+            </div>
+          )}
+          {!env.compare && (
+            <p className={`text-[11px] ${t.muted}`}>
+              {env.mode === 'preview'
+                ? 'Period-over-period wording is added when the report is generated.'
+                : ''}
+            </p>
+          )}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'execSummary',
+  label: 'Executive summary',
+  hint: 'Auto-written headlines, findings and your commentary',
+  category: 'executive',
+  icon: ScrollText,
+  exportAs: 'text',
+  interactions: {},
+  create: (ctx) => {
+    const m = defaultMeasure(ctx);
+    return mkExt('execSummary', 'Executive summary', {
+      span: 12,
+      commentary: '',
+      items: [
+        {
+          label: `Total ${ctx.source.recordLabel}`,
+          agg: 'count',
+          lowerIsBetter: true,
+        },
+        {
+          label: 'Value at risk',
+          agg: m.agg,
+          field: m.field,
+          lowerIsBetter: true,
+        },
+      ],
+    });
+  },
+  requirements: (w) => [
+    { shape: 'scalar', measures: itemMeasures(itemsOf(w)), compare: true },
+  ],
+  validate: (w, ctx) => itemIssues(w, ctx),
+  config: [
+    {
+      type: 'list',
+      key: 'items',
+      label: 'Metric',
+      max: 5,
+      addLabel: 'Add metric',
+      make: makeItem,
+      item: itemSchema(),
+      itemLabel: (it) => String(it.label ?? ''),
+    },
+    {
+      type: 'text',
+      key: 'commentary',
+      label: 'Management commentary',
+      multiline: true,
+      hint: 'Your own narrative, shown under the auto-written findings.',
+    },
+  ],
+  toTable: (w, rs) => {
+    const r = scalar(rs['']);
+    return r
+      ? {
+          headers: ['Metric', 'Value'],
+          rows: itemsOf(w).map((it, i) => [it.label, r.values[i] ?? 0]),
+        }
+      : null;
+  },
+  render: ExecRender,
+} as WidgetDescriptor);
+
+/* ---- Period-over-period by dimension ---- */
+const PeriodRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const agg = String(widget.agg ?? 'count');
+  const field = widget.field as string | undefined;
+  const max = Math.max(
+    1,
+    ...(g?.groups ?? []).flatMap((x) => [x.values[0] ?? 0, x.prev?.[0] ?? 0])
+  );
+  return (
+    <Gate status={status} error={error}>
+      {!g || g.groups.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-2">
+          {!env.compare && (
+            <p className={`text-[11px] ${t.muted}`}>
+              {env.mode === 'preview'
+                ? 'Previous-period bars appear in the generated report.'
+                : 'Enable a comparison period to see change.'}
+            </p>
+          )}
+          {g.groups.map((x) => {
+            const cur = x.values[0] ?? 0,
+              prev = x.prev?.[0];
+            const d = env.compare ? deltaOf(agg, cur, prev) : null;
+            return (
+              <div
+                key={x.key}
+                className="rb-avoid grid grid-cols-[120px_1fr_auto] items-center gap-2 text-xs"
+              >
+                <span className={`truncate ${t.body}`}>{x.label ?? x.key}</span>
+                <div className="space-y-0.5" aria-hidden="true">
+                  <div
+                    className="h-2 rounded"
+                    style={{
+                      width: `${(cur / max) * 100}%`,
+                      background: env.colors[0],
+                    }}
+                  />
+                  {env.compare && (
+                    <div
+                      className="h-1.5 rounded opacity-50"
+                      style={{
+                        width: `${((prev ?? 0) / max) * 100}%`,
+                        background: env.colors[1 % env.colors.length],
+                      }}
+                    />
+                  )}
+                </div>
+                <span className={`tabular-nums ${t.text}`}>
+                  {env.fmt(cur, agg, field, 'compact')}
+                  {d && (
+                    <span
+                      className={`ml-2 font-medium ${d.up ? 'text-red-600' : 'text-emerald-600'}`}
+                    >
+                      {d.text}
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'periodCompare',
+  label: 'Period comparison',
+  hint: 'Current vs previous period by category',
+  category: 'executive',
+  icon: BarChart2,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const m = defaultMeasure(ctx);
+    return d.cat
+      ? mkExt('periodCompare', `${d.cat.label}: this period vs prior`, {
+          groupBy: d.cat.key,
+          agg: m.agg,
+          field: m.field,
+          topN: 6,
+        })
+      : { unavailable: 'Needs a category field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: Number(w.topN ?? 6),
+      compare: true,
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a category to compare by'),
+      ...measureIssues(w, ctx),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'groupBy', label: 'Compare by', accept: 'category' },
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Show top',
+      min: 2,
+      max: 20,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Group', 'Current', 'Previous'],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            x.values[0] ?? 0,
+            x.prev?.[0] ?? '',
+          ]),
+        }
+      : null;
+  },
+  render: PeriodRender,
+} as WidgetDescriptor);
+
+void AGG_CHOICES;
+void labelOf;
+
+/* ---------------- widgets/risk.tsx ---------------- */
+/** Fraud & risk widgets: detection funnel, risk gauge, risk matrix, aging/SLA, geographic tiles, network graph (extension point). */
+
+/* ---------------- Detection funnel ---------------- */
+type Stage = {
+  label: string;
+  sourceId?: string;
+  agg: QueryAgg;
+  field?: string;
+  whereField?: string;
+  whereOp?: QueryOp;
+  whereValue?: string;
+};
+const stagesOf = (w: { [k: string]: unknown }) => (w.stages as Stage[]) ?? [];
+const stageFilters = (s: Stage): QueryFilter[] =>
+  s.whereField && s.whereValue
+    ? [{ field: s.whereField, op: s.whereOp ?? 'eq', value: s.whereValue }]
+    : [];
+
+const FunnelRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const stages = stagesOf(widget);
+  const vals = stages.map((_, i) => scalar(results[`s${i}`])?.values[0]);
+  const ready = vals.every((v) => v !== undefined);
+  const counts = stages.map((s, i) =>
+    s.agg === 'count' || s.agg === 'distinct' ? (vals[i] ?? 0) : null
+  );
+  const top = Math.max(1, ...counts.filter((c): c is number => c !== null));
+  let prevCount: number | null = null;
+  return (
+    <Gate status={status} error={error}>
+      {!ready ? (
+        <WidgetEmpty />
+      ) : (
+        <ol className="space-y-1.5" aria-label="Detection funnel">
+          {stages.map((s, i) => {
+            const v = vals[i] ?? 0;
+            const isCount = counts[i] !== null;
+            const conv =
+              isCount && prevCount !== null && prevCount > 0
+                ? (v / prevCount) * 100
+                : null;
+            if (isCount) prevCount = v;
+            const pct = isCount ? Math.max(3, (v / top) * 100) : 0;
+            const body = (
+              <>
+                <span
+                  className={`w-36 shrink-0 truncate text-left text-xs ${t.body}`}
+                >
+                  {s.label}
+                </span>
+                <span className="relative h-7 flex-1">
+                  {isCount ? (
+                    <span
+                      className="absolute inset-y-0 left-0 rounded"
+                      style={{
+                        width: `${pct}%`,
+                        background: env.colors[i % env.colors.length],
+                        opacity: 0.9,
+                      }}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <span
+                      className={`absolute inset-y-0 left-0 flex items-center text-[11px] ${t.muted}`}
+                    >
+                      value
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={`w-24 shrink-0 text-right text-xs font-semibold tabular-nums ${t.text}`}
+                >
+                  {env.fmt(v, s.agg, s.field, 'compact')}
+                </span>
+                <span
+                  className={`w-14 shrink-0 text-right text-[11px] tabular-nums ${t.muted}`}
+                >
+                  {conv !== null ? `${conv.toFixed(1)}%` : ''}
+                </span>
+              </>
+            );
+            return (
+              <li key={i} className="rb-avoid">
+                {env.onDrillThrough ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      env.onDrillThrough!(
+                        widget.id,
+                        stageFilters(s),
+                        s.sourceId
+                      )
+                    }
+                    title="Open the records in this stage"
+                    className={`flex w-full items-center gap-2 rounded-md px-1 py-0.5 ${t.hover}`}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2 px-1 py-0.5">
+                    {body}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+          <li className={`pt-1 text-[11px] ${t.muted}`}>
+            Percentages show conversion from the previous count stage.
+            {env.mode === 'preview'
+              ? ' Preview values come from small samples and are not comparable between stages.'
+              : ''}
+          </li>
+        </ol>
+      )}
+    </Gate>
+  );
+};
+const fStage = (
+  label: string,
+  sourceId: string | undefined,
+  agg: QueryAgg,
+  field?: string,
+  where?: [string, string]
+): Stage => ({
+  label,
+  sourceId,
+  agg,
+  field,
+  whereField: where?.[0],
+  whereOp: 'eq',
+  whereValue: where?.[1],
+});
+registerWidget({
+  kind: 'detectionFunnel',
+  label: 'Detection funnel',
+  hint: 'Transactions → alerts → cases → confirmed fraud → loss',
+  category: 'risk',
+  icon: FunnelIcon,
+  exportAs: 'table',
+  interactions: { drill: true },
+  create: (ctx) => {
+    const has = (id: string) => ctx.sources.some((s) => s.id === id);
+    const stages: Stage[] =
+      has('transactions') && has('alerts') && has('cases')
+        ? [
+            fStage('Transactions', 'transactions', 'count'),
+            fStage('Alerts raised', 'alerts', 'count'),
+            fStage('Escalated alerts', 'alerts', 'count', undefined, [
+              'is_escalated',
+              'Yes',
+            ]),
+            fStage('Cases opened', 'cases', 'count'),
+            fStage('Confirmed fraud', 'cases', 'count', undefined, [
+              'status',
+              'Confirmed fraud',
+            ]),
+            fStage('Confirmed loss', 'cases', 'sum', 'amt_aed', [
+              'status',
+              'Confirmed fraud',
+            ]),
+            fStage('Recovered', 'cases', 'sum', 'recovered_aed'),
+          ]
+        : [
+            fStage(`All ${ctx.source.recordLabel}`, undefined, 'count'),
+            fStage('Stage 2', undefined, 'count'),
+          ];
+    return mkExt('detectionFunnel', 'Fraud detection funnel', {
+      span: 12,
+      height: 'lg',
+      stages,
+    });
+  },
+  requirements: (w) =>
+    stagesOf(w).map((s, i) => ({
+      suffix: `s${i}`,
+      label: s.label,
+      shape: 'scalar' as const,
+      sourceId: s.sourceId,
+      measures: [{ id: 'm0', agg: s.agg, field: s.field }],
+      extraFilters: stageFilters(s),
+    })),
+  validate: (w, ctx) => {
+    const st = stagesOf(w);
+    const out: ValidationIssue[] =
+      st.length < 2
+        ? [
+            issue(
+              'error',
+              'few-stages',
+              `${describeWidget(w)} needs at least two stages.`,
+              w.id
+            ),
+          ]
+        : [];
+    st.forEach((s, i) => {
+      const src = s.sourceId
+        ? ctx.sources.find((x) => x.id === s.sourceId)
+        : ctx.source;
+      if (!src)
+        return void out.push(
+          issue(
+            'error',
+            `stage-src-${i}`,
+            `${describeWidget(w)}: stage "${s.label}" uses a data source that no longer exists.`,
+            w.id
+          )
+        );
+      const keys = new Set(src.fields.map((f) => f.key));
+      if (s.agg !== 'count' && (!s.field || !keys.has(s.field)))
+        out.push(
+          issue(
+            'error',
+            `stage-m-${i}`,
+            `${describeWidget(w)}: stage "${s.label}" needs a measure field in ${src.name}.`,
+            w.id
+          )
+        );
+      if (s.whereField && !keys.has(s.whereField))
+        out.push(
+          issue(
+            'error',
+            `stage-w-${i}`,
+            `${describeWidget(w)}: stage "${s.label}" filters on "${s.whereField}", which is not in ${src.name}.`,
+            w.id
+          )
+        );
+    });
+    return out;
+  },
+  config: [
+    {
+      type: 'list',
+      key: 'stages',
+      label: 'Stage',
+      min: 2,
+      max: 10,
+      addLabel: 'Add stage',
+      itemLabel: (it) => String(it.label ?? ''),
+      make: () => ({ label: 'New stage', agg: 'count' }),
+      item: [
+        { type: 'text', key: 'label', label: 'Stage name' },
+        { type: 'source', key: 'sourceId', label: 'Data' },
+        { type: 'agg', key: 'agg', label: 'Counts' },
+        {
+          type: 'field',
+          key: 'field',
+          label: 'Measure',
+          accept: 'measure',
+          optional: true,
+          sourceFrom: 'sourceId',
+        },
+        {
+          type: 'field',
+          key: 'whereField',
+          label: 'Only where',
+          accept: 'dimension',
+          optional: true,
+          sourceFrom: 'sourceId',
+          advanced: false,
+        },
+        { type: 'text', key: 'whereValue', label: 'equals' },
+      ],
+    },
+  ],
+  toTable: (w, rs) => ({
+    headers: ['Stage', 'Value'],
+    rows: stagesOf(w).map((s, i) => [
+      s.label,
+      scalar(rs[`s${i}`])?.values[0] ?? 0,
+    ]),
+  }),
+  render: FunnelRender,
+} as WidgetDescriptor);
+
+/* ---------------- Risk gauge ---------------- */
+const arc = (cx: number, cy: number, r: number, a0: number, a1: number) => {
+  const p = (a: number) => [
+    cx + r * Math.cos(Math.PI - a * Math.PI),
+    cy - r * Math.sin(Math.PI - a * Math.PI),
+  ];
+  const [x0, y0] = p(a0),
+    [x1, y1] = p(a1);
+  return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`;
+};
+const GaugeRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const min = Number(widget.min ?? 0),
+    max = Number(widget.max ?? 100);
+  const warn = widget.warn as number | undefined,
+    breach = widget.breach as number | undefined,
+    low = !!widget.lowerIsBetter;
+  const v = r?.values[0] ?? 0;
+  const f = (x: number) =>
+    Math.max(0, Math.min(1, (x - min) / (max - min || 1)));
+  const bands = low
+    ? [
+        [0, warn ?? breach ?? max, '#16a34a'],
+        [warn ?? breach ?? max, breach ?? max, '#f59e0b'],
+        [breach ?? max, max, '#dc2626'],
+      ]
+    : [
+        [min, breach ?? min, '#dc2626'],
+        [breach ?? min, warn ?? min, '#f59e0b'],
+        [warn ?? min, max, '#16a34a'],
+      ];
+  const rag = ragOf(v, warn, breach, low);
+  const ang = f(v);
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid mx-auto max-w-[260px] text-center">
+          <svg
+            viewBox="0 0 200 120"
+            role="img"
+            aria-label={`${widget.title}: ${env.fmt(v, String(widget.agg ?? 'count'), widget.field as string | undefined)}${rag ? `, ${rag}` : ''}`}
+          >
+            {bands.map(([a, b, c], i) =>
+              Number(b) > Number(a) ? (
+                <path
+                  key={i}
+                  d={arc(100, 100, 80, f(Number(a)), f(Number(b)))}
+                  stroke={String(c)}
+                  strokeWidth="16"
+                  fill="none"
+                />
+              ) : null
+            )}
+            <line
+              x1="100"
+              y1="100"
+              x2={100 + 62 * Math.cos(Math.PI - ang * Math.PI)}
+              y2={100 - 62 * Math.sin(Math.PI - ang * Math.PI)}
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+            />
+            <circle cx="100" cy="100" r="6" fill="currentColor" />
+            <text
+              x="20"
+              y="116"
+              fontSize="9"
+              fill="currentColor"
+              opacity=".6"
+              textAnchor="middle"
+            >
+              {min}
+            </text>
+            <text
+              x="180"
+              y="116"
+              fontSize="9"
+              fill="currentColor"
+              opacity=".6"
+              textAnchor="middle"
+            >
+              {max}
+            </text>
+          </svg>
+          <figcaption
+            className={`-mt-2 text-2xl font-bold tabular-nums ${t.text}`}
+          >
+            {env.fmt(
+              v,
+              String(widget.agg ?? 'count'),
+              widget.field as string | undefined
+            )}
+          </figcaption>
+          <p className={`text-[11px] ${t.muted}`}>
+            {rag === 'breach'
+              ? 'Breach'
+              : rag === 'warn'
+                ? 'Warning'
+                : rag === 'ok'
+                  ? 'Within appetite'
+                  : 'No thresholds set'}
+          </p>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'riskGauge',
+  label: 'Risk gauge',
+  hint: 'One metric against warning / breach bands',
+  category: 'risk',
+  icon: Gauge,
+  exportAs: 'visual',
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const f = d.score ?? d.num;
+    return mkExt('riskGauge', 'Average risk score', {
+      span: 4,
+      agg: 'avg',
+      field: f?.key,
+      min: 0,
+      max: 100,
+      warn: 50,
+      breach: 75,
+      lowerIsBetter: true,
+    });
+  },
+  requirements: (w) => [
+    {
+      shape: 'scalar',
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'avg') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      compare: true,
+    },
+  ],
+  validate: (w, ctx) => {
+    const out = measureIssues(w, ctx);
+    if (Number(w.max) <= Number(w.min))
+      out.push(
+        issue(
+          'error',
+          'range',
+          `${describeWidget(w)}: the maximum must be greater than the minimum.`,
+          w.id
+        )
+      );
+    return out;
+  },
+  config: [
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+    { type: 'number', key: 'warn', label: 'Warning at' },
+    { type: 'number', key: 'breach', label: 'Breach at' },
+    { type: 'toggle', key: 'lowerIsBetter', label: 'Lower is better' },
+    { type: 'number', key: 'min', label: 'Scale minimum', advanced: true },
+    { type: 'number', key: 'max', label: 'Scale maximum', advanced: true },
+  ],
+  toTable: (w, rs) => {
+    const r = scalar(rs['']);
+    return r
+      ? { headers: ['Metric', 'Value'], rows: [[w.title, r.values[0] ?? 0]] }
+      : null;
+  },
+  render: GaugeRender,
+} as WidgetDescriptor);
+
+/* ---------------- Risk matrix ---------------- */
+const heat = (z: number) =>
+  `hsl(${Math.round(120 - 120 * z)} 70% ${Math.round(88 - 28 * z)}%)`;
+const MatrixRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const rf = env.fieldMap.get(String(widget.rowField)),
+    cf = env.fieldMap.get(String(widget.colField));
+  const agg = String(widget.agg ?? 'count'),
+    field = widget.field as string | undefined;
+  const cell = (gk: string, sk: string) =>
+    g?.cells?.[cellKeyOf(gk, sk)]?.[0] ?? 0;
+  const ordinal = !!rf?.order && !!cf?.order;
+  const vmax = Math.max(
+    1,
+    ...(g?.groups ?? []).flatMap((x) =>
+      (g?.series ?? []).map((s) => cell(x.key, s.key))
+    )
+  );
+  return (
+    <Gate status={status} error={error}>
+      {!g || g.groups.length === 0 || !g.series?.length ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-separate border-spacing-1 text-center text-xs">
+            <caption className="sr-only">{widget.title}</caption>
+            <thead>
+              <tr>
+                <th className={`p-1 text-left text-[11px] ${t.muted}`}>
+                  {rf?.label} \ {cf?.label}
+                </th>
+                {g.series.map((s) => (
+                  <th
+                    key={s.key}
+                    scope="col"
+                    className={`p-1 font-medium ${t.body}`}
+                  >
+                    {s.label ?? s.key}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {g.groups.map((row, ri) => (
+                <tr key={row.key}>
+                  <th
+                    scope="row"
+                    className={`p-1 text-left font-medium ${t.body}`}
+                  >
+                    {row.label ?? row.key}
+                  </th>
+                  {g.series!.map((s, ci) => {
+                    const v = cell(row.key, s.key);
+                    const z = ordinal
+                      ? ((g.groups.length - 1 - ri) /
+                          Math.max(1, g.groups.length - 1) +
+                          (g.series!.length - 1 - ci) /
+                            Math.max(1, g.series!.length - 1)) /
+                        2
+                      : v / vmax;
+                    return (
+                      <td key={s.key}>
+                        <button
+                          type="button"
+                          disabled={!env.onPick}
+                          onClick={() =>
+                            env.onPick?.(String(widget.rowField), row.key)
+                          }
+                          aria-label={`${row.label ?? row.key}, ${s.label ?? s.key}: ${env.fmt(v, agg, field)}`}
+                          className="h-11 w-full rounded font-semibold tabular-nums text-slate-900 disabled:cursor-default"
+                          style={{
+                            background: v === 0 ? 'transparent' : heat(z),
+                            border: v === 0 ? '1px dashed #cbd5e1' : 'none',
+                          }}
+                        >
+                          {v === 0 ? '' : env.fmt(v, agg, field, 'compact')}
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className={`mt-1 text-[11px] ${t.muted}`}>
+            {ordinal
+              ? 'Colour shows the risk zone (position in both ranked scales); the number is the measure.'
+              : 'Colour intensity shows the measure.'}
+          </p>
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'riskMatrix',
+  label: 'Risk matrix',
+  hint: 'Two ranked dimensions as a coloured grid (e.g. severity × likelihood)',
+  category: 'risk',
+  icon: Grid3x3,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.rowField === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const m = defaultMeasure(ctx);
+    const a = d.ordinal ?? d.cat;
+    const b =
+      ctx.fields.find(
+        (f) => f.type === 'category' && f.key !== a?.key && f.order
+      ) ?? ctx.fields.find((f) => f.type === 'category' && f.key !== a?.key);
+    return a && b
+      ? mkExt('riskMatrix', `Risk matrix: ${a.label} × ${b.label}`, {
+          rowField: a.key,
+          colField: b.key,
+          agg: m.agg,
+          field: m.field,
+        })
+      : { unavailable: 'Needs two category fields.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [
+        { field: String(w.rowField) },
+        { field: String(w.colField) },
+      ],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: 8,
+      seriesLimit: 8,
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'rowField', ctx, 'a row dimension'),
+      requireField(w, 'colField', ctx, 'a column dimension'),
+      ...measureIssues(w, ctx),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'rowField', label: 'Rows', accept: 'category' },
+    { type: 'field', key: 'colField', label: 'Columns', accept: 'category' },
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g?.series
+      ? {
+          headers: ['', ...g.series.map((s) => s.label ?? s.key)],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            ...g.series!.map(
+              (s) => g.cells?.[cellKeyOf(x.key, s.key)]?.[0] ?? 0
+            ),
+          ]),
+        }
+      : null;
+  },
+  render: MatrixRender,
+} as WidgetDescriptor);
+
+/* ---------------- Aging / SLA ---------------- */
+const parseEdges = (s: unknown): number[] =>
+  [
+    ...new Set(
+      String(s ?? '')
+        .split(/[,\s]+/)
+        .map(Number)
+        .filter((n) => Number.isFinite(n))
+    ),
+  ].sort((a, b) => a - b);
+const AgingRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const sla = widget.slaDays as number | undefined;
+  const agg = String(widget.agg ?? 'count'),
+    field = widget.field as string | undefined;
+  const lower = (label: string) =>
+    /^\s*[<≤]/.test(label)
+      ? -Infinity
+      : Number((label.match(/-?\d+(\.\d+)?/) ?? ['0'])[0]);
+  const rows = (g?.groups ?? []).map((x) => ({
+    ...x,
+    v: x.values[0] ?? 0,
+    late: sla !== undefined && lower(String(x.label ?? x.key)) >= sla,
+  }));
+  const total = rows.reduce((a, x) => a + x.v, 0),
+    lateTotal = rows.filter((x) => x.late).reduce((a, x) => a + x.v, 0);
+  const max = Math.max(1, ...rows.map((x) => x.v));
+  return (
+    <Gate status={status} error={error}>
+      {!g || rows.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-2">
+          {sla !== undefined && (
+            <p className={`text-xs ${t.body}`}>
+              <strong
+                className={lateTotal ? 'text-red-600' : 'text-emerald-600'}
+              >
+                {total ? ((lateTotal / total) * 100).toFixed(1) : '0.0'}%
+              </strong>{' '}
+              beyond the {sla}-day SLA (
+              {env.fmt(lateTotal, agg, field, 'compact')} of{' '}
+              {env.fmt(total, agg, field, 'compact')})
+            </p>
+          )}
+          {rows.map((x) => (
+            <div
+              key={x.key}
+              className="rb-avoid grid grid-cols-[96px_1fr_auto] items-center gap-2 text-xs"
+            >
+              <span className={t.body}>{x.label ?? x.key}</span>
+              <span className={`h-4 rounded ${t.skeleton}`}>
+                <span
+                  className="block h-4 rounded"
+                  style={{
+                    width: `${(x.v / max) * 100}%`,
+                    background: x.late ? '#dc2626' : env.colors[0],
+                  }}
+                />
+              </span>
+              <span className={`tabular-nums ${t.text}`}>
+                {env.fmt(x.v, agg, field, 'compact')}
+                {x.late && (
+                  <span className="ml-1 text-[10px] font-semibold text-red-600">
+                    SLA
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'aging',
+  label: 'Aging & SLA',
+  hint: 'Open items by age bucket with SLA breach highlighted',
+  category: 'investigation',
+  icon: Clock,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const f =
+      ctx.fields.find(
+        (x) => /days|age/i.test(x.key) && isNumericType(x.type)
+      ) ??
+      ctx.source.fields.find(
+        (x) => /days|age/i.test(x.key) && isNumericType(x.type)
+      );
+    return f
+      ? mkExt('aging', 'Case aging', {
+          ageField: f.key,
+          edges: '1, 3, 7, 14, 30',
+          slaDays: 14,
+          agg: 'count',
+        })
+      : {
+          unavailable: 'Needs a numeric "age in days" field (e.g. days_open).',
+        };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.ageField), bands: parseEdges(w.edges) }],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: 20,
+      sort: { by: 'rank', dir: 'asc' },
+    },
+  ],
+  validate: (w, ctx) => {
+    const out = [
+      requireField(w, 'ageField', ctx, 'a numeric age field (days)', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x);
+    if (parseEdges(w.edges).length === 0)
+      out.push(
+        issue(
+          'error',
+          'edges',
+          `${describeWidget(w)} needs bucket boundaries, e.g. "1, 3, 7, 14, 30".`,
+          w.id
+        )
+      );
+    return [...out, ...measureIssues(w, ctx)];
+  },
+  config: [
+    {
+      type: 'field',
+      key: 'ageField',
+      label: 'Age (days) field',
+      accept: 'numeric',
+    },
+    {
+      type: 'text',
+      key: 'edges',
+      label: 'Bucket boundaries (days)',
+      placeholder: '1, 3, 7, 14, 30',
+    },
+    { type: 'number', key: 'slaDays', label: 'SLA (days)' },
+    { type: 'agg', key: 'agg', label: 'Calculation', advanced: true },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Age', 'Value'],
+          rows: g.groups.map((x) => [x.label ?? x.key, x.values[0] ?? 0]),
+        }
+      : null;
+  },
+  render: AgingRender,
+} as WidgetDescriptor);
+
+/* ---------------- Geographic tiles (layout registry; swap in a real map via the `geo` capability) ---------------- */
+const GEO_LAYOUTS: Record<
+  string,
+  { label: string; cells: Record<string, [number, number]> }
+> = {
+  'world-regions': {
+    label: 'World regions',
+    cells: {
+      'north america': [0, 0],
+      latam: [1, 1],
+      emea: [0, 2],
+      'middle east': [1, 3],
+      apac: [0, 4],
+    },
+  },
+  uae: {
+    label: 'UAE emirates',
+    cells: {
+      'abu dhabi': [0, 0],
+      dubai: [0, 1],
+      sharjah: [0, 2],
+      ajman: [1, 1],
+      'umm al quwain': [1, 2],
+      'ras al khaimah': [0, 3],
+      fujairah: [1, 3],
+    },
+  },
+};
+const GeoRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const agg = String(widget.agg ?? 'count'),
+    field = widget.field as string | undefined;
+  const layout = GEO_LAYOUTS[String(widget.layout)];
+  const max = Math.max(1, ...(g?.groups ?? []).map((x) => x.values[0] ?? 0));
+  const items = (g?.groups ?? []).filter((x) => x.key !== '__others');
+  const placed = layout
+    ? items.filter((x) => layout.cells[String(x.label ?? x.key).toLowerCase()])
+    : [];
+  const rest = items.filter((x) => !placed.includes(x));
+  const rowsN =
+    Math.max(
+      0,
+      ...placed.map(
+        (x) => layout!.cells[String(x.label ?? x.key).toLowerCase()][0]
+      )
+    ) + 1;
+  const tile = (x: (typeof items)[number], style?: React.CSSProperties) => {
+    const v = x.values[0] ?? 0,
+      a = 0.15 + 0.85 * (v / max),
+      act =
+        env.active?.field === String(widget.groupBy) &&
+        env.active.value === x.key;
+    return (
+      <button
+        key={x.key}
+        type="button"
+        style={{
+          ...style,
+          background: env.colors[0],
+          backgroundImage: `linear-gradient(rgba(255,255,255,${1 - a}),rgba(255,255,255,${1 - a}))`,
+        }}
+        disabled={!env.onPick}
+        onClick={() => env.onPick?.(String(widget.groupBy), x.key)}
+        aria-pressed={act}
+        aria-label={`${x.label ?? x.key}: ${env.fmt(v, agg, field)}`}
+        className={`flex min-h-[64px] flex-col items-center justify-center rounded-lg p-1 text-center text-slate-900 ${act ? 'ring-2 ring-slate-900' : ''} disabled:cursor-default`}
+      >
+        <span className="text-[11px] font-semibold">{x.label ?? x.key}</span>
+        <span className="text-sm font-bold tabular-nums">
+          {env.fmt(v, agg, field, 'compact')}
+        </span>
+      </button>
+    );
+  };
+  return (
+    <Gate status={status} error={error}>
+      {!g || items.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-2">
+          {layout && placed.length > 0 && (
+            <div
+              className="grid gap-1.5"
+              style={{
+                gridTemplateColumns: `repeat(${Math.max(...placed.map((x) => layout.cells[String(x.label ?? x.key).toLowerCase()][1])) + 1}, minmax(0,1fr))`,
+                gridTemplateRows: `repeat(${rowsN}, auto)`,
+              }}
+            >
+              {placed.map((x) => {
+                const [r, c] =
+                  layout.cells[String(x.label ?? x.key).toLowerCase()];
+                return tile(x, { gridRow: r + 1, gridColumn: c + 1 });
+              })}
+            </div>
+          )}
+          {rest.length > 0 && (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-1.5">
+              {rest.map((x) => tile(x))}
+            </div>
+          )}
+          <p className={`text-[11px] ${t.muted}`}>
+            Tile map: position is schematic, colour intensity shows the measure.
+          </p>
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'geoTiles',
+  label: 'Geographic risk',
+  hint: 'Regional risk as a tile map (click to filter)',
+  category: 'geography',
+  icon: MapIcon,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const f =
+      ctx.fields.find(
+        (x) =>
+          /region|country|branch|emirate|city/i.test(x.key) &&
+          x.type === 'category'
+      ) ??
+      ctx.source.fields.find(
+        (x) =>
+          /region|country|branch|emirate|city/i.test(x.key) &&
+          x.type === 'category'
+      );
+    const m = defaultMeasure(ctx);
+    return f
+      ? mkExt(
+          'geoTiles',
+          `${m.agg === 'count' ? 'Volume' : 'Exposure'} by ${f.label.toLowerCase()}`,
+          {
+            groupBy: f.key,
+            agg: m.agg,
+            field: m.field,
+            layout: 'world-regions',
+          }
+        )
+      : { unavailable: 'Needs a region / country / branch field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: 30,
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a geographic field'),
+      ...measureIssues(w, ctx),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    {
+      type: 'field',
+      key: 'groupBy',
+      label: 'Location field',
+      accept: 'category',
+    },
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+    {
+      type: 'select',
+      key: 'layout',
+      label: 'Tile layout',
+      advanced: true,
+      options: [
+        { value: 'auto', label: 'Automatic grid' },
+        ...Object.entries(GEO_LAYOUTS).map(([value, l]) => ({
+          value,
+          label: l.label,
+        })),
+      ],
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: [String(w.groupBy), 'Value'],
+          rows: g.groups.map((x) => [x.label ?? x.key, x.values[0] ?? 0]),
+        }
+      : null;
+  },
+  render: GeoRender,
+} as WidgetDescriptor);
+
+/* ---------------- Network graph: extension point (needs the provider's `graph` capability) ---------------- */
+registerWidget({
+  kind: 'networkGraph',
+  label: 'Network graph',
+  hint: 'Customer → account → device → IP → merchant relationships',
+  category: 'relationship',
+  icon: Share2,
+  maturity: 'planned',
+  requiresCapability: 'graph',
+  exportAs: 'visual',
+  create: () => ({
+    unavailable:
+      'Relationship analysis needs a graph-capable backend (provider.capabilities.graph).',
+  }),
+  requirements: () => [],
+  validate: (w) => [
+    issue(
+      'error',
+      'planned',
+      `${describeWidget(w)} is not available yet.`,
+      w.id
+    ),
+  ],
+  config: [],
+  render: () => (
+    <WidgetEmpty text="Network graph requires a graph-enabled data provider." />
+  ),
+} as WidgetDescriptor);
+
+void labelOf;
+
+/* ---------------- widgets/analytic.tsx ---------------- */
+/** Analytical widgets: Pareto, histogram, waterfall, combo, box plot, summary/ranking table, bubble. */
+
+const agg = (w: RegistryWidget, k = 'agg') =>
+  String(w[k] ?? 'count') as QueryAgg;
+const meas = (w: RegistryWidget, id = 'm0', a = 'agg', f = 'field') => ({
+  id,
+  agg: agg(w, a),
+  field: w[f] as string | undefined,
+});
+const catMeasure: ConfigField[] = [
+  { type: 'field', key: 'groupBy', label: 'Group by', accept: 'category' },
+  { type: 'agg', key: 'agg', label: 'Calculation' },
+  {
+    type: 'field',
+    key: 'field',
+    label: 'Measure',
+    accept: 'measure',
+    optional: true,
+  },
+];
+const catValidate = (
+  w: RegistryWidget,
+  ctx: Parameters<WidgetDescriptor['validate']>[1]
+) =>
+  [
+    requireField(w, 'groupBy', ctx, 'a category to group by'),
+    ...measureIssues(w, ctx),
+  ].filter((x): x is ValidationIssue => !!x);
+const catCreate =
+  (
+    kind: string,
+    title: (l: string) => string,
+    extra: Record<string, unknown> = {}
+  ): WidgetDescriptor['create'] =>
+  (ctx) => {
+    const d = defaultsOf(ctx),
+      m = defaultMeasure(ctx);
+    return d.cat
+      ? mkExt(kind, title(d.cat.label), {
+          groupBy: d.cat.key,
+          agg: m.agg,
+          field: m.field,
+          ...extra,
+        })
+      : { unavailable: 'Needs a category field.' };
+  };
+const trunc = (s: string, n = 12) =>
+  s.length > n ? `${s.slice(0, n - 1)}…` : s;
+const W = 600,
+  H = 240,
+  PL = 44,
+  PR = 44,
+  PT = 14,
+  PB = 40;
+
+/* ---- Pareto ---- */
+const ParetoRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const a = agg(widget),
+    f = widget.field as string | undefined;
+  const rows = g?.groups ?? [];
+  const total =
+    g?.grand[0] || rows.reduce((s, x) => s + (x.values[0] ?? 0), 0) || 1;
+  let run = 0;
+  const pts = rows.map((x) => ({ x, cum: (run += x.values[0] ?? 0) / total }));
+  const max = Math.max(1, ...rows.map((x) => x.values[0] ?? 0));
+  const bw = (W - PL - PR) / Math.max(1, rows.length);
+  const n80 = pts.findIndex((p) => p.cum >= 0.8) + 1;
+  const top3 = pts[Math.min(2, pts.length - 1)]?.cum ?? 0;
+  const y = (v: number) => PT + (H - PT - PB) * (1 - v);
+  return (
+    <Gate status={status} error={error}>
+      {rows.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={`Pareto: top 3 account for ${(top3 * 100).toFixed(0)}% of the total`}
+            className="w-full"
+          >
+            {[0, 0.5, 1].map((v) => (
+              <g key={v}>
+                <line
+                  x1={PL}
+                  x2={W - PR}
+                  y1={y(v)}
+                  y2={y(v)}
+                  stroke="currentColor"
+                  opacity=".1"
+                />
+                <text
+                  x={W - PR + 4}
+                  y={y(v) + 3}
+                  fontSize="9"
+                  fill="currentColor"
+                  opacity=".6"
+                >
+                  {v * 100}%
+                </text>
+              </g>
+            ))}
+            <line
+              x1={PL}
+              x2={W - PR}
+              y1={y(0.8)}
+              y2={y(0.8)}
+              stroke="#dc2626"
+              strokeDasharray="4 3"
+              opacity=".7"
+            />
+            {rows.map((x, i) => {
+              const v = x.values[0] ?? 0,
+                h = (H - PT - PB) * (v / max);
+              return (
+                <g key={x.key}>
+                  <rect
+                    x={PL + i * bw + 4}
+                    y={H - PB - h}
+                    width={Math.max(2, bw - 8)}
+                    height={h}
+                    fill={env.colors[0]}
+                    rx="2"
+                  />
+                  <text
+                    x={PL + i * bw + bw / 2}
+                    y={H - PB + 13}
+                    fontSize="9"
+                    textAnchor="middle"
+                    fill="currentColor"
+                    opacity=".75"
+                  >
+                    {trunc(x.label ?? x.key, Math.max(6, Math.floor(bw / 5)))}
+                  </text>
+                </g>
+              );
+            })}
+            <polyline
+              fill="none"
+              stroke={env.colors[1 % env.colors.length]}
+              strokeWidth="2"
+              points={pts
+                .map((p, i) => `${PL + i * bw + bw / 2},${y(p.cum)}`)
+                .join(' ')}
+            />
+            {pts.map((p, i) => (
+              <circle
+                key={i}
+                cx={PL + i * bw + bw / 2}
+                cy={y(p.cum)}
+                r="3"
+                fill={env.colors[1 % env.colors.length]}
+              />
+            ))}
+            <text
+              x={PL - 4}
+              y={PT + 8}
+              fontSize="9"
+              textAnchor="end"
+              fill="currentColor"
+              opacity=".6"
+            >
+              {env.fmt(max, a, f, 'compact')}
+            </text>
+          </svg>
+          <figcaption className={`text-xs ${t.body}`}>
+            Top 3 account for <strong>{(top3 * 100).toFixed(0)}%</strong>
+            {n80 > 0 && (
+              <>
+                {' '}
+                · {n80} of {g!.totalGroups} categories reach 80%
+              </>
+            )}
+            . Concentration is high when few categories drive most of the total.
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'pareto',
+  label: 'Pareto / concentration',
+  hint: 'Which few categories drive most of the total (80/20)',
+  category: 'analytical',
+  icon: TrendingUp,
+  exportAs: 'table',
+  interactions: {},
+  create: catCreate('pareto', (l) => `${l} concentration (Pareto)`, {
+    topN: 10,
+  }),
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [meas(w)],
+      limit: Number(w.topN ?? 10),
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: catValidate,
+  config: [
+    ...catMeasure,
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Categories shown',
+      min: 3,
+      max: 20,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Category', 'Value'],
+          rows: g.groups.map((x) => [x.label ?? x.key, x.values[0] ?? 0]),
+        }
+      : null;
+  },
+  render: ParetoRender,
+} as WidgetDescriptor);
+
+/* ---- Histogram ---- */
+const HistRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = results[''];
+  const h = r && r.shape === 'histogram' ? r : undefined;
+  const max = Math.max(1, ...(h?.bins ?? []).map((b) => b.count));
+  const bw = (W - PL - 10) / Math.max(1, h?.bins.length ?? 1);
+  const fx = (v: number) =>
+    env.fmt(v, 'avg', widget.field as string | undefined, 'compact');
+  return (
+    <Gate status={status} error={error}>
+      {!h || h.total === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={`Distribution of ${env.fieldMap.get(String(widget.field))?.label}`}
+            className="w-full"
+          >
+            {h.bins.map((b, i) => {
+              const hh = (H - PT - PB) * (b.count / max);
+              return (
+                <g key={i}>
+                  <rect
+                    x={PL + i * bw + 1}
+                    y={H - PB - hh}
+                    width={Math.max(1, bw - 2)}
+                    height={hh}
+                    fill={env.colors[0]}
+                  />
+                  <title>{`${fx(b.from)} – ${fx(b.to)}: ${b.count}`}</title>
+                </g>
+              );
+            })}
+            <text
+              x={PL}
+              y={H - PB + 14}
+              fontSize="9"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {fx(h.summary.min)}
+            </text>
+            <text
+              x={W - 10}
+              y={H - PB + 14}
+              fontSize="9"
+              textAnchor="end"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {fx(h.summary.max)}
+            </text>
+            <text
+              x={PL - 4}
+              y={PT + 8}
+              fontSize="9"
+              textAnchor="end"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {max}
+            </text>
+          </svg>
+          <figcaption className={`flex flex-wrap gap-x-4 text-xs ${t.body}`}>
+            <span>n = {h.total.toLocaleString()}</span>
+            <span>Mean {fx(h.summary.mean)}</span>
+            <span>Median {fx(h.summary.p50)}</span>
+            <span>P90 {fx(h.summary.p90)}</span>
+            <span>P99 {fx(h.summary.p99)}</span>
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'histogram',
+  label: 'Histogram / distribution',
+  hint: 'Shape of a numeric field (risk score, amount) with percentiles',
+  category: 'analytical',
+  icon: BarChart3,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const f = d.score ?? d.num;
+    return f
+      ? mkExt('histogram', `${f.label} distribution`, {
+          field: f.key,
+          bins: 20,
+        })
+      : { unavailable: 'Needs a numeric field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'histogram',
+      measures: [],
+      bins: {
+        field: String(w.field),
+        count: Math.max(5, Math.min(60, Number(w.bins ?? 20))),
+      },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'field', ctx, 'a numeric field', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'field', label: 'Field', accept: 'numeric' },
+    {
+      type: 'number',
+      key: 'bins',
+      label: 'Bins',
+      min: 5,
+      max: 60,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const r = rs[''];
+    return r && r.shape === 'histogram'
+      ? {
+          headers: ['From', 'To', 'Count'],
+          rows: r.bins.map((b) => [b.from, b.to, b.count]),
+        }
+      : null;
+  },
+  render: HistRender,
+} as WidgetDescriptor);
+
+/* ---- Waterfall (what drove the change) ---- */
+const WaterfallRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const a = agg(widget),
+    f = widget.field as string | undefined;
+  if (status === 'ok' && (!g?.prevGrand || !env.compare))
+    return (
+      <WidgetEmpty
+        text={
+          env.mode === 'preview'
+            ? 'The change bridge needs a comparison period and appears in the generated report.'
+            : 'Turn on a comparison period to see what drove the change.'
+        }
+      />
+    );
+  const start = g?.prevGrand?.[0] ?? 0,
+    end = g?.grand[0] ?? 0;
+  const steps = (g?.groups ?? []).map((x) => ({
+    label: x.label ?? x.key,
+    d: (x.values[0] ?? 0) - (x.prev?.[0] ?? 0),
+  }));
+  const other = end - start - steps.reduce((s, x) => s + x.d, 0);
+  if (Math.abs(other) > 1e-9) steps.push({ label: 'Other', d: other });
+  const bars: {
+    label: string;
+    from: number;
+    to: number;
+    kind: 'total' | 'up' | 'down';
+  }[] = [{ label: 'Previous', from: 0, to: start, kind: 'total' }];
+  let cur = start;
+  steps.forEach((s) => {
+    bars.push({
+      label: s.label,
+      from: cur,
+      to: cur + s.d,
+      kind: s.d >= 0 ? 'up' : 'down',
+    });
+    cur += s.d;
+  });
+  bars.push({ label: 'Current', from: 0, to: end, kind: 'total' });
+  const hi = Math.max(1e-9, ...bars.flatMap((b) => [b.from, b.to])),
+    lo = Math.min(0, ...bars.flatMap((b) => [b.from, b.to]));
+  const y = (v: number) => PT + (H - PT - PB) * (1 - (v - lo) / (hi - lo || 1));
+  const bw = (W - PL - 10) / bars.length;
+  const lowerBetter = widget.lowerIsBetter !== false;
+  return (
+    <Gate status={status} error={error}>
+      <figure className="rb-avoid">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          role="img"
+          aria-label={`Change from ${env.fmt(start, a, f, 'compact')} to ${env.fmt(end, a, f, 'compact')}`}
+          className="w-full"
+        >
+          <line
+            x1={PL}
+            x2={W - 10}
+            y1={y(0)}
+            y2={y(0)}
+            stroke="currentColor"
+            opacity=".25"
+          />
+          {bars.map((b, i) => {
+            const y0 = y(Math.max(b.from, b.to)),
+              h = Math.max(2, Math.abs(y(b.from) - y(b.to)));
+            const good = b.kind === 'up' ? !lowerBetter : lowerBetter;
+            const fill =
+              b.kind === 'total' ? env.colors[0] : good ? '#16a34a' : '#dc2626';
+            return (
+              <g key={i}>
+                <rect
+                  x={PL + i * bw + 5}
+                  y={y0}
+                  width={Math.max(2, bw - 10)}
+                  height={h}
+                  fill={fill}
+                  rx="2"
+                />
+                <text
+                  x={PL + i * bw + bw / 2}
+                  y={y0 - 3}
+                  fontSize="9"
+                  textAnchor="middle"
+                  fill="currentColor"
+                >
+                  {b.kind === 'total'
+                    ? env.fmt(b.to, a, f, 'compact')
+                    : `${b.to >= b.from ? '+' : '−'}${env.fmt(Math.abs(b.to - b.from), a, f, 'compact')}`}
+                </text>
+                <text
+                  x={PL + i * bw + bw / 2}
+                  y={H - PB + 13}
+                  fontSize="9"
+                  textAnchor="middle"
+                  fill="currentColor"
+                  opacity=".75"
+                >
+                  {trunc(b.label, Math.max(6, Math.floor(bw / 5)))}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+        <figcaption className={`text-xs ${t.muted}`}>
+          Bridge from the previous period to the current period by{' '}
+          {env.fieldMap.get(String(widget.groupBy))?.label.toLowerCase()}. Red =
+          adverse, green = favourable.
+        </figcaption>
+      </figure>
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'waterfall',
+  label: 'Waterfall (change drivers)',
+  hint: 'What drove the change between periods',
+  category: 'executive',
+  icon: Waves,
+  exportAs: 'table',
+  interactions: {},
+  create: catCreate(
+    'waterfall',
+    (l) => `Change drivers by ${l.toLowerCase()}`,
+    { topN: 6, lowerIsBetter: true }
+  ),
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [meas(w)],
+      limit: Number(w.topN ?? 6),
+      compare: true,
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: catValidate,
+  config: [
+    ...catMeasure,
+    { type: 'toggle', key: 'lowerIsBetter', label: 'An increase is adverse' },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Drivers shown',
+      min: 2,
+      max: 12,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Driver', 'Current', 'Previous', 'Change'],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            x.values[0] ?? 0,
+            x.prev?.[0] ?? 0,
+            (x.values[0] ?? 0) - (x.prev?.[0] ?? 0),
+          ]),
+        }
+      : null;
+  },
+  render: WaterfallRender,
+} as WidgetDescriptor);
+
+/* ---- Combo: bars + line on a second axis ---- */
+const ComboRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const rows = g?.groups ?? [];
+  const a1 = agg(widget),
+    f1 = widget.field as string | undefined,
+    a2 = agg(widget, 'agg2'),
+    f2 = widget.field2 as string | undefined;
+  const m1 = Math.max(1e-9, ...rows.map((x) => x.values[0] ?? 0)),
+    m2 = Math.max(1e-9, ...rows.map((x) => x.values[1] ?? 0));
+  const bw = (W - PL - PR) / Math.max(1, rows.length);
+  const y = (v: number, m: number) => PT + (H - PT - PB) * (1 - v / m);
+  return (
+    <Gate status={status} error={error}>
+      {rows.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={widget.title}
+            className="w-full"
+          >
+            {rows.map((x, i) => {
+              const v = x.values[0] ?? 0;
+              return (
+                <g key={x.key}>
+                  <rect
+                    x={PL + i * bw + 3}
+                    y={y(v, m1)}
+                    width={Math.max(2, bw - 6)}
+                    height={H - PB - y(v, m1)}
+                    fill={env.colors[0]}
+                    rx="2"
+                  />
+                  {(rows.length <= 12 ||
+                    i % Math.ceil(rows.length / 12) === 0) && (
+                    <text
+                      x={PL + i * bw + bw / 2}
+                      y={H - PB + 13}
+                      fontSize="9"
+                      textAnchor="middle"
+                      fill="currentColor"
+                      opacity=".75"
+                    >
+                      {trunc(x.label ?? x.key, 9)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+            <polyline
+              fill="none"
+              stroke={env.colors[1 % env.colors.length]}
+              strokeWidth="2.5"
+              points={rows
+                .map(
+                  (x, i) => `${PL + i * bw + bw / 2},${y(x.values[1] ?? 0, m2)}`
+                )
+                .join(' ')}
+            />
+            {rows.map((x, i) => (
+              <circle
+                key={i}
+                cx={PL + i * bw + bw / 2}
+                cy={y(x.values[1] ?? 0, m2)}
+                r="3"
+                fill={env.colors[1 % env.colors.length]}
+              />
+            ))}
+            <text
+              x={PL - 4}
+              y={PT + 8}
+              fontSize="9"
+              textAnchor="end"
+              fill={env.colors[0]}
+            >
+              {env.fmt(m1, a1, f1, 'compact')}
+            </text>
+            <text
+              x={W - PR + 4}
+              y={PT + 8}
+              fontSize="9"
+              fill={env.colors[1 % env.colors.length]}
+            >
+              {env.fmt(m2, a2, f2, 'compact')}
+            </text>
+          </svg>
+          <figcaption className={`flex gap-4 text-xs ${t.body}`}>
+            <span>
+              <i
+                className="mr-1 inline-block h-2 w-3"
+                style={{ background: env.colors[0] }}
+              />
+              {String(widget.label1 ?? 'Bars')} (left axis)
+            </span>
+            <span>
+              <i
+                className="mr-1 inline-block h-0.5 w-3 align-middle"
+                style={{ background: env.colors[1 % env.colors.length] }}
+              />
+              {String(widget.label2 ?? 'Line')} (right axis)
+            </span>
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'combo',
+  label: 'Combo (bars + line)',
+  hint: 'Volume bars with a rate line on a second axis',
+  category: 'charts',
+  icon: LineChart,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const by = d.date ?? d.cat;
+    return by
+      ? mkExt('combo', `Volume and rate by ${by.label.toLowerCase()}`, {
+          groupBy: by.key,
+          agg: 'count',
+          label1: 'Volume',
+          agg2: d.bool ? 'rate' : 'count',
+          field2: d.bool?.key,
+          label2: d.bool ? `${d.bool.label} rate` : 'Volume',
+          topN: 12,
+        })
+      : { unavailable: 'Needs a dimension.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy), bucket: 'auto' }],
+      measures: [meas(w), meas(w, 'm1', 'agg2', 'field2')],
+      limit: Number(w.topN ?? 12),
+      sort: { by: 'rank', dir: 'asc' },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a dimension for the x-axis'),
+      ...measureIssues(w, ctx),
+      ...measureIssues(
+        {
+          ...w,
+          agg: w.agg2,
+          field: w.field2,
+          title: `${w.title} (line)`,
+        } as RegistryWidget,
+        ctx
+      ).map((x) => ({ ...x, id: `${x.id}:2` })),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'groupBy', label: 'X-axis', accept: 'dimension' },
+    { type: 'text', key: 'label1', label: 'Bars label' },
+    { type: 'agg', key: 'agg', label: 'Bars calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Bars measure',
+      accept: 'measure',
+      optional: true,
+    },
+    { type: 'text', key: 'label2', label: 'Line label' },
+    { type: 'agg', key: 'agg2', label: 'Line calculation' },
+    {
+      type: 'field',
+      key: 'field2',
+      label: 'Line measure',
+      accept: 'measure',
+      optional: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: [
+            'Group',
+            String(w.label1 ?? 'Bars'),
+            String(w.label2 ?? 'Line'),
+          ],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            x.values[0] ?? 0,
+            x.values[1] ?? 0,
+          ]),
+        }
+      : null;
+  },
+  render: ComboRender,
+} as WidgetDescriptor);
+
+/* ---- Box plot ---- */
+const BoxRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = results[''];
+  const q = r && r.shape === 'quantiles' ? r.groups.filter((x) => x.n > 0) : [];
+  const f = widget.field as string | undefined;
+  const hi = Math.max(1e-9, ...q.map((x) => x.max)),
+    lo = Math.min(0, ...q.map((x) => x.min));
+  const x = (v: number) => 120 + (W - 130) * ((v - lo) / (hi - lo || 1));
+  const rh = Math.min(34, (H - 30) / Math.max(1, q.length));
+  return (
+    <Gate status={status} error={error}>
+      {q.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${Math.max(90, q.length * rh + 28)}`}
+            role="img"
+            aria-label={`Spread of ${env.fieldMap.get(String(f))?.label} by group`}
+            className="w-full"
+          >
+            {q.map((b, i) => {
+              const cy = 16 + i * rh + rh / 2;
+              return (
+                <g key={b.key}>
+                  <text
+                    x="114"
+                    y={cy + 3}
+                    fontSize="10"
+                    textAnchor="end"
+                    fill="currentColor"
+                    opacity=".85"
+                  >
+                    {trunc(b.label ?? b.key, 18)}
+                  </text>
+                  <line
+                    x1={x(b.min)}
+                    x2={x(b.max)}
+                    y1={cy}
+                    y2={cy}
+                    stroke="currentColor"
+                    opacity=".5"
+                  />
+                  <rect
+                    x={x(b.q1)}
+                    y={cy - rh * 0.3}
+                    width={Math.max(2, x(b.q3) - x(b.q1))}
+                    height={rh * 0.6}
+                    fill={env.colors[i % env.colors.length]}
+                    opacity=".75"
+                    rx="2"
+                  />
+                  <line
+                    x1={x(b.median)}
+                    x2={x(b.median)}
+                    y1={cy - rh * 0.3}
+                    y2={cy + rh * 0.3}
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  />
+                  {b.outliers > 0 && (
+                    <text
+                      x={x(b.max) + 4}
+                      y={cy + 3}
+                      fontSize="9"
+                      fill="#dc2626"
+                    >
+                      {b.outliers} outlier{b.outliers > 1 ? 's' : ''}
+                    </text>
+                  )}
+                  <title>{`${b.label ?? b.key}: min ${env.fmt(b.min, 'avg', f)}, Q1 ${env.fmt(b.q1, 'avg', f)}, median ${env.fmt(b.median, 'avg', f)}, Q3 ${env.fmt(b.q3, 'avg', f)}, max ${env.fmt(b.max, 'avg', f)}, n=${b.n}`}</title>
+                </g>
+              );
+            })}
+          </svg>
+          <figcaption className={`text-xs ${t.muted}`}>
+            Box = middle 50%, line = median, whiskers = min–max; outliers are
+            beyond 1.5 × IQR.
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'boxplot',
+  label: 'Box plot',
+  hint: 'Spread and outliers of a numeric field by category',
+  category: 'analytical',
+  icon: Sigma,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const f = d.score ?? d.num;
+    return d.cat && f
+      ? mkExt('boxplot', `${f.label} by ${d.cat.label.toLowerCase()}`, {
+          groupBy: d.cat.key,
+          field: f.key,
+          topN: 8,
+        })
+      : { unavailable: 'Needs a category and a numeric field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'quantiles',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [],
+      quantileField: String(w.field),
+      limit: Number(w.topN ?? 8),
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a category'),
+      requireField(w, 'field', ctx, 'a numeric field', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'groupBy', label: 'Group by', accept: 'category' },
+    { type: 'field', key: 'field', label: 'Numeric field', accept: 'numeric' },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Groups shown',
+      min: 2,
+      max: 15,
+      advanced: true,
+    },
+  ],
+  toTable: (_w, rs) => {
+    const r = rs[''];
+    return r && r.shape === 'quantiles'
+      ? {
+          headers: [
+            'Group',
+            'n',
+            'Min',
+            'Q1',
+            'Median',
+            'Q3',
+            'Max',
+            'Outliers',
+          ],
+          rows: r.groups.map((b) => [
+            b.label ?? b.key,
+            b.n,
+            b.min,
+            b.q1,
+            b.median,
+            b.q3,
+            b.max,
+            b.outliers,
+          ]),
+        }
+      : null;
+  },
+  render: BoxRender,
+} as WidgetDescriptor);
+
+/* ---- Summary / ranking table (rule performance, investigator workload, branch scorecard...) ---- */
+type Col = { label: string; agg: QueryAgg; field?: string };
+const colsOf = (w: RegistryWidget) => (w.measures as Col[]) ?? [];
+const SummaryRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const cols = colsOf(widget);
+  const maxes = cols.map((_, j) =>
+    Math.max(1e-9, ...(g?.groups ?? []).map((x) => Math.abs(x.values[j] ?? 0)))
+  );
+  return (
+    <Gate status={status} error={error}>
+      {!g || g.groups.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <caption className="sr-only">{widget.title}</caption>
+            <thead>
+              <tr className={`${t.inset} ${t.muted}`}>
+                <th className="px-2 py-1.5 font-medium">#</th>
+                <th scope="col" className="px-2 py-1.5 font-medium">
+                  {env.fieldMap.get(String(widget.groupBy))?.label}
+                </th>
+                {cols.map((c, j) => (
+                  <th
+                    key={j}
+                    scope="col"
+                    className="px-2 py-1.5 text-right font-medium"
+                  >
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {g.groups.map((x, i) => (
+                <tr
+                  key={x.key}
+                  className={`border-b last:border-b-0 ${t.line} ${t.body}`}
+                >
+                  <td className={`px-2 py-1.5 ${t.muted}`}>{i + 1}</td>
+                  <th
+                    scope="row"
+                    className={`px-2 py-1.5 font-medium ${t.text}`}
+                  >
+                    {env.onPick ? (
+                      <button
+                        type="button"
+                        className="text-left hover:underline"
+                        onClick={() =>
+                          env.onPick!(String(widget.groupBy), x.key)
+                        }
+                      >
+                        {x.label ?? x.key}
+                      </button>
+                    ) : (
+                      (x.label ?? x.key)
+                    )}
+                  </th>
+                  {cols.map((c, j) => {
+                    const v = x.values[j] ?? 0,
+                      p =
+                        widget.dataBars === false
+                          ? 0
+                          : (Math.abs(v) / maxes[j]) * 100;
+                    return (
+                      <td
+                        key={j}
+                        className="px-2 py-1.5 text-right tabular-nums"
+                        style={
+                          p
+                            ? {
+                                background: `linear-gradient(90deg, ${env.colors[j % env.colors.length]}26 ${p}%, transparent ${p}%)`,
+                              }
+                            : undefined
+                        }
+                      >
+                        {env.fmt(v, c.agg, c.field, 'compact')}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+            {widget.showTotal !== false && (
+              <tfoot>
+                <tr
+                  className={`border-t font-semibold ${t.lineStrong} ${t.text}`}
+                >
+                  <td />
+                  <td className="px-2 py-1.5">Total</td>
+                  {cols.map((c, j) => (
+                    <td key={j} className="px-2 py-1.5 text-right tabular-nums">
+                      {env.fmt(g.grand[j] ?? 0, c.agg, c.field, 'compact')}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+          {g.totalGroups > g.groups.length && (
+            <p className={`mt-1 text-[11px] ${t.muted}`}>
+              Showing {g.groups.length} of {g.totalGroups}.
+            </p>
+          )}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'summaryTable',
+  label: 'Ranking / summary table',
+  hint: 'Group by a dimension with several measures (rules, analysts, branches)',
+  category: 'analytical',
+  icon: ListOrdered,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx),
+      m = defaultMeasure(ctx);
+    return d.cat
+      ? mkExt('summaryTable', `${d.cat.label} ranking`, {
+          span: 12,
+          groupBy: d.cat.key,
+          topN: 10,
+          sortIndex: 0,
+          sortDir: 'desc',
+          showTotal: true,
+          dataBars: true,
+          measures: [
+            { label: ctx.source.recordLabel, agg: 'count' },
+            ...(m.field
+              ? [{ label: 'Amount', agg: m.agg, field: m.field }]
+              : []),
+          ],
+        })
+      : { unavailable: 'Needs a category field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: colsOf(w).map((c, i) => ({
+        id: `m${i}`,
+        agg: c.agg ?? 'count',
+        field: c.field,
+      })),
+      limit: Number(w.topN ?? 10),
+      others: false,
+      sort: {
+        by: 'measure',
+        index: Number(w.sortIndex ?? 0),
+        dir: (w.sortDir as 'asc') ?? 'desc',
+      },
+    },
+  ],
+  validate: (w, ctx) => {
+    const out = [requireField(w, 'groupBy', ctx, 'a category to rank')].filter(
+      (x): x is ValidationIssue => !!x
+    );
+    if (colsOf(w).length === 0)
+      out.push(
+        issue(
+          'error',
+          'no-measures',
+          `${describeWidget(w)} needs at least one measure column.`,
+          w.id
+        )
+      );
+    colsOf(w).forEach((c, i) =>
+      out.push(
+        ...measureIssues(
+          {
+            ...w,
+            agg: c.agg,
+            field: c.field,
+            title: `${w.title} › ${c.label}`,
+          } as RegistryWidget,
+          ctx
+        ).map((x) => ({ ...x, id: `${w.id}:c${i}:${x.code}` }))
+      )
+    );
+    return out;
+  },
+  config: [
+    { type: 'field', key: 'groupBy', label: 'Rank by', accept: 'category' },
+    {
+      type: 'list',
+      key: 'measures',
+      label: 'Column',
+      max: 6,
+      addLabel: 'Add column',
+      make: () => ({ label: 'New column', agg: 'count' }),
+      itemLabel: (it) => String(it.label ?? ''),
+      item: [
+        { type: 'text', key: 'label', label: 'Heading' },
+        { type: 'agg', key: 'agg', label: 'Calculation' },
+        {
+          type: 'field',
+          key: 'field',
+          label: 'Measure',
+          accept: 'measure',
+          optional: true,
+        },
+      ],
+    },
+    {
+      type: 'number',
+      key: 'sortIndex',
+      label: 'Sort by column # (0 = first)',
+      min: 0,
+      max: 5,
+      advanced: true,
+    },
+    {
+      type: 'select',
+      key: 'sortDir',
+      label: 'Order',
+      advanced: true,
+      options: [
+        { value: 'desc', label: 'Highest first' },
+        { value: 'asc', label: 'Lowest first' },
+      ],
+    },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Rows',
+      min: 3,
+      max: 50,
+      advanced: true,
+    },
+    { type: 'toggle', key: 'showTotal', label: 'Total row', advanced: true },
+    { type: 'toggle', key: 'dataBars', label: 'Data bars', advanced: true },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: [String(w.groupBy), ...colsOf(w).map((c) => c.label)],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            ...colsOf(w).map((_, j) => x.values[j] ?? 0),
+          ]),
+        }
+      : null;
+  },
+  render: SummaryRender,
+} as WidgetDescriptor);
+
+/* ---- Bubble ---- */
+const BubbleRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = results[''];
+  const p = r && r.shape === 'points' ? r : undefined;
+  const xs = p?.points.map((q) => q.x) ?? [],
+    ys = p?.points.map((q) => q.y) ?? [],
+    ss = p?.points.map((q) => q.size ?? 1) ?? [];
+  const [x0, x1, y0, y1, sm] = [
+    Math.min(...xs),
+    Math.max(...xs),
+    Math.min(...ys),
+    Math.max(...ys),
+    Math.max(1e-9, ...ss),
+  ];
+  const X = (v: number) => PL + (W - PL - 14) * ((v - x0) / (x1 - x0 || 1)),
+    Y = (v: number) => PT + (H - PT - PB) * (1 - (v - y0) / (y1 - y0 || 1));
+  return (
+    <Gate status={status} error={error}>
+      {!p || p.points.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={widget.title}
+            className="w-full"
+          >
+            <line
+              x1={PL}
+              x2={W - 14}
+              y1={H - PB}
+              y2={H - PB}
+              stroke="currentColor"
+              opacity=".3"
+            />
+            <line
+              x1={PL}
+              x2={PL}
+              y1={PT}
+              y2={H - PB}
+              stroke="currentColor"
+              opacity=".3"
+            />
+            {p.points.map((q, i) => (
+              <circle
+                key={i}
+                cx={X(q.x)}
+                cy={Y(q.y)}
+                r={4 + 14 * Math.sqrt((q.size ?? 1) / sm)}
+                fill={
+                  env.colors[
+                    Math.max(0, p.categories.indexOf(q.c ?? '')) %
+                      env.colors.length
+                  ]
+                }
+                opacity=".55"
+              />
+            ))}
+            <text
+              x={W / 2}
+              y={H - 6}
+              fontSize="10"
+              textAnchor="middle"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {env.fieldMap.get(String(widget.xField))?.label}
+            </text>
+            <text
+              x="10"
+              y={H / 2}
+              fontSize="10"
+              textAnchor="middle"
+              fill="currentColor"
+              opacity=".7"
+              transform={`rotate(-90 10 ${H / 2})`}
+            >
+              {env.fieldMap.get(String(widget.yField))?.label}
+            </text>
+          </svg>
+          <figcaption className={`text-xs ${t.muted}`}>
+            Bubble size ={' '}
+            {env.fieldMap.get(String(widget.sizeField))?.label ?? 'count'}.
+            {p.sampled
+              ? ` Sampled 1 in ${p.sampled} of ${p.total.toLocaleString()} records.`
+              : ''}
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'bubble',
+  label: 'Bubble chart',
+  hint: 'Three numeric measures: x, y and bubble size',
+  category: 'charts',
+  icon: Circle,
+  exportAs: 'visual',
+  interactions: {},
+  create: (ctx) => {
+    const n = (ctx.fields.length ? ctx.fields : ctx.source.fields).filter((f) =>
+      isNumericType(f.type)
+    );
+    const d = defaultsOf(ctx);
+    return n.length >= 2
+      ? mkExt('bubble', `${n[1].label} vs ${n[0].label}`, {
+          xField: n[0].key,
+          yField: n[1].key,
+          sizeField: n[2]?.key,
+          colour: d.cat?.key,
+        })
+      : { unavailable: 'Needs at least two numeric fields.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'points',
+      measures: [],
+      points: {
+        x: String(w.xField),
+        y: String(w.yField),
+        size: (w.sizeField as string) || undefined,
+        colour: (w.colour as string) || undefined,
+        max: 400,
+      },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'xField', ctx, 'a numeric X field', (f) =>
+        isNumericType(f.type)
+      ),
+      requireField(w, 'yField', ctx, 'a numeric Y field', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'xField', label: 'X axis', accept: 'numeric' },
+    { type: 'field', key: 'yField', label: 'Y axis', accept: 'numeric' },
+    {
+      type: 'field',
+      key: 'sizeField',
+      label: 'Bubble size',
+      accept: 'numeric',
+      optional: true,
+    },
+    {
+      type: 'field',
+      key: 'colour',
+      label: 'Colour by',
+      accept: 'category',
+      optional: true,
+    },
+  ],
+  render: BubbleRender,
+} as WidgetDescriptor);
+
+/* ---------------- components/PeriodPicker.tsx ---------------- */
+/**
+ * Reporting-period picker: presets (grouped), custom range, comparison mode, and a live preview of the
+ * concrete dates the backend will receive. Edits the ACTUAL report period only; the design-time preview
+ * sample is never filtered by it.
+ */
+
+const lbl = 'mb-1 block text-[11px] font-semibold';
+
+const PeriodPicker: React.FC<{
+  value: ReportPeriod;
+  onChange: (p: ReportPeriod) => void;
+  timezone: string;
+  fiscalYearStartMonth?: number;
+  compact?: boolean;
+}> = ({ value, onChange, timezone, fiscalYearStartMonth, compact }) => {
+  const t = useT();
+  const today = todayIn(timezone);
+  const err = periodError(value);
+  const { cur, cmp } = useMemo(() => {
+    const o = { today, fiscalYearStartMonth };
+    const c = resolvePeriod(value, o);
+    return { cur: c, cmp: resolveComparison(c, value.compare, o) };
+  }, [value, today, fiscalYearStartMonth]);
+  const field = `h-8 w-full rounded-lg border px-2 text-[13px] ${t.input} ${FOCUS}`;
+  return (
+    <div className="space-y-2">
+      <div>
+        <label className={`${lbl} ${t.muted}`} htmlFor="rb-period">
+          Report period
+        </label>
+        <select
+          id="rb-period"
+          className={field}
+          value={value.preset}
+          onChange={(e) =>
+            onChange({ ...value, preset: e.target.value as DatePreset })
+          }
+        >
+          {PRESET_GROUPS.map((g) => (
+            <optgroup key={g.label} label={g.label}>
+              {g.presets.map((p) => (
+                <option key={p} value={p}>
+                  {PRESET_LABEL[p]}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+      {value.preset === 'custom' && (
+        <div className="grid grid-cols-2 gap-2">
+          {(['from', 'to'] as const).map((k) => (
+            <div key={k}>
+              <label className={`${lbl} ${t.muted}`} htmlFor={`rb-period-${k}`}>
+                {k === 'from' ? 'From' : 'To'}
+              </label>
+              <input
+                id={`rb-period-${k}`}
+                type="date"
+                className={field}
+                value={value[k] ?? ''}
+                onChange={(e) => onChange({ ...value, [k]: e.target.value })}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      {!compact && value.preset !== 'all_time' && (
+        <div>
+          <label className={`${lbl} ${t.muted}`} htmlFor="rb-compare">
+            Compare with
+          </label>
+          <select
+            id="rb-compare"
+            className={field}
+            value={value.compare}
+            onChange={(e) =>
+              onChange({ ...value, compare: e.target.value as CompareMode })
+            }
+          >
+            {(Object.keys(COMPARE_LABEL) as CompareMode[]).map((k) => (
+              <option key={k} value={k}>
+                {COMPARE_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <p
+        role={err ? 'alert' : undefined}
+        className={`text-[11px] ${err ? 'text-red-600' : t.muted}`}
+      >
+        {err ?? (
+          <>
+            {describePeriod(cur)}
+            {cmp && <> · vs {describePeriod(cmp)}</>}
+          </>
+        )}
+      </p>
+    </div>
+  );
+};
+
+/* ---------------- components/RunPanel.tsx ---------------- */
+/**
+ * Preview vs actual-data UX.
+ *   PreviewBanner  : "you are designing on a small sample"
+ *   ActualBanner   : "this is the generated report" + traceability (period, records, filters, run id, data status)
+ *   RunDialog      : staged progress, ETA, cancel, retry, error
+ *   IssuesPanel    : pre-generation validation with jump-to-fix
+ */
+
+/* ---------------------------------------------------------------------------
+ * Preview banner
+ * ------------------------------------------------------------------------- */
+interface PreviewInfo {
+  limit: number;
+  loaded: number;
+  /** Rows in the whole source, when the backend reports it. */
+  total?: number;
+  from?: string;
+  to?: string;
+  loadedAt?: string;
+  sourceName: string;
+  recordLabel: string;
+}
+
+const fmtN = (n: number) => n.toLocaleString('en-US');
+const fmtDay = (s?: string) =>
+  s
+    ? new Date(`${s}T00:00:00Z`).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+      })
+    : '—';
+
+const PreviewBanner: React.FC<{
+  info: PreviewInfo;
+  options: number[];
+  onLimit: (n: number) => void;
+  onRefresh: () => void;
+  loading?: boolean;
+  periodLabel: string;
+}> = ({ info, options, onLimit, onRefresh, loading, periodLabel }) => {
+  const t = useT();
+  return (
+    <div
+      role="status"
+      className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950"
+      data-testid="preview-banner"
+    >
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+        <div className="min-w-[240px] flex-1">
+          <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider">
+            <span className="rounded bg-amber-500 px-1.5 py-0.5 text-white">
+              Preview mode
+            </span>
+            Design sample only
+          </p>
+          <p className="mt-1 text-[13px] font-semibold">
+            Showing the latest {fmtN(info.loaded)} {info.recordLabel} for report
+            design
+            {info.total
+              ? ` (of ${fmtN(info.total)} in ${info.sourceName})`
+              : ''}
+            .
+          </p>
+          <p className="mt-0.5 text-xs text-amber-900/80">
+            Numbers here are <strong>not</strong> the reporting period. Actual
+            report data is retrieved when you generate, using{' '}
+            <strong>{periodLabel}</strong> and your filters.
+          </p>
+        </div>
+        <dl className="grid grid-cols-2 gap-x-5 gap-y-0.5 text-[11px] text-amber-900/90">
+          <dt className="font-semibold">Sample spans</dt>
+          <dd>
+            {fmtDay(info.from)} → {fmtDay(info.to)}
+          </dd>
+          <dt className="font-semibold">Refreshed</dt>
+          <dd>
+            {info.loadedAt
+              ? new Date(info.loadedAt).toLocaleTimeString('en-GB')
+              : '—'}
+          </dd>
+        </dl>
+        <div className="flex items-end gap-2">
+          <label className="text-[11px] font-semibold">
+            Sample size
+            <select
+              className={`mt-0.5 block h-8 rounded-lg border border-amber-300 bg-white px-2 text-xs text-slate-900 ${FOCUS}`}
+              value={info.limit}
+              onChange={(e) => onLimit(Number(e.target.value))}
+              aria-label="Preview sample size"
+            >
+              {options.map((n) => (
+                <option key={n} value={n}>
+                  Latest {fmtN(n)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 text-xs font-medium text-slate-800 hover:bg-amber-100 disabled:opacity-60 ${FOCUS}`}
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+            />{' '}
+            Refresh
+          </button>
+        </div>
+      </div>
+      <span className="sr-only">{t.dark ? '' : ''}</span>
+    </div>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * Actual-report banner
+ * ------------------------------------------------------------------------- */
+const ActualBanner: React.FC<{
+  meta: ReportRunMetadata;
+  stale: boolean;
+  refining: boolean;
+  onRegenerate: () => void;
+  onBackToDesign: () => void;
+}> = ({ meta, stale, refining, onRegenerate, onBackToDesign }) => {
+  const t = useT();
+  return (
+    <div
+      role="status"
+      className={`rounded-xl border px-4 py-3 ${stale ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-emerald-300 bg-emerald-50 text-emerald-950'}`}
+      data-testid="actual-banner"
+    >
+      <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+        <div className="min-w-[200px]">
+          <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider">
+            <span
+              className={`rounded px-1.5 py-0.5 text-white ${stale ? 'bg-amber-600' : 'bg-emerald-600'}`}
+            >
+              {stale ? 'Out of date' : 'Report generated'}
+            </span>
+            {meta.partial && (
+              <span className="rounded bg-amber-500 px-1.5 py-0.5 text-white">
+                Partial data
+              </span>
+            )}
+          </p>
+          <p className="mt-1 flex items-center gap-1.5 text-[13px] font-semibold">
+            <ShieldCheck className="h-4 w-4" /> Actual data
+          </p>
+        </div>
+        <dl className="grid flex-1 grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs sm:grid-cols-[auto_1fr_auto_1fr]">
+          <dt className="font-semibold">Period</dt>
+          <dd>{describePeriod(meta.period)}</dd>
+          <dt className="font-semibold">Records</dt>
+          <dd className="tabular-nums">
+            {meta.recordsMatched === null ? '—' : fmtN(meta.recordsMatched)}
+          </dd>
+          <dt className="font-semibold">Filters</dt>
+          <dd>{meta.filters.length ? meta.filters.join(' · ') : 'None'}</dd>
+          <dt className="font-semibold">Generated</dt>
+          <dd>
+            {new Date(meta.generatedAt).toLocaleString('en-GB')} by{' '}
+            {meta.generatedBy}
+          </dd>
+          <dt className="font-semibold">Data as of</dt>
+          <dd>
+            {meta.dataAsOf
+              ? new Date(meta.dataAsOf).toLocaleString('en-GB')
+              : 'Not reported'}
+          </dd>
+          <dt className="font-semibold">Run</dt>
+          <dd className="font-mono text-[11px]">
+            {meta.runId.slice(0, 8)} · def {meta.definitionHash.slice(0, 8)}
+            {meta.datasetVersion ? ` · ${meta.datasetVersion}` : ''}
+          </dd>
+          {meta.viewFilters.length > 0 && (
+            <>
+              <dt className="font-semibold">View filter</dt>
+              <dd>
+                {meta.viewFilters.join(' · ')}
+                {refining ? ' (updating…)' : ''}
+              </dd>
+            </>
+          )}
+        </dl>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onBackToDesign}
+            className={`inline-flex h-8 items-center rounded-lg border px-2.5 text-xs font-medium ${t.btn} ${FOCUS}`}
+          >
+            Back to design
+          </button>
+          <button type="button" onClick={onRegenerate} className={PRIMARY_BTN}>
+            <RefreshCw className="h-3.5 w-3.5" /> Regenerate
+          </button>
+        </div>
+      </div>
+      {stale && (
+        <p className="mt-2 text-xs font-medium">
+          The report definition changed after this was generated. Regenerate
+          before exporting or sharing.
+        </p>
+      )}
+      {meta.warnings.length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs">
+          {meta.warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * Generation dialog
+ * ------------------------------------------------------------------------- */
+const fmtEta = (ms: number | null) => {
+  if (ms === null) return 'Estimating…';
+  const s = Math.max(1, Math.round(ms / 1000));
+  return s < 60
+    ? `About ${s}s remaining`
+    : `About ${Math.ceil(s / 60)} min remaining`;
+};
+
+const RunDialog: React.FC<{
+  state: RunState;
+  reportName: string;
+  onCancel: () => void;
+  onRetry: () => void;
+  onClose: () => void;
+}> = ({ state, reportName, onCancel, onRetry, onClose }) => {
+  const t = useT();
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => btn.current?.focus(), [state.phase]);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) =>
+      e.key === 'Escape' &&
+      (state.phase === 'running' ? onCancel() : onClose());
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [state.phase, onCancel, onClose]);
+  const idx = STAGES.findIndex((s) => s.id === state.stage);
+  const pct = Math.round(state.progress * 100);
+  const running = state.phase === 'running';
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rb-run-title"
+        className={`w-full max-w-md rounded-2xl border p-5 ${t.card} ${t.text}`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 id="rb-run-title" className="text-base font-bold">
+              {state.phase === 'failed'
+                ? 'Report could not be generated'
+                : state.phase === 'cancelled'
+                  ? 'Generation cancelled'
+                  : 'Generating report'}
+            </h2>
+            <p className={`mt-0.5 text-xs ${t.muted}`}>{reportName}</p>
+          </div>
+          {!running && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className={`rounded p-1 ${t.hover} ${FOCUS}`}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {running && (
+          <>
+            <ol className="mt-4 space-y-2" aria-label="Progress">
+              {STAGES.map((s, i) => {
+                const done =
+                  i < idx || (i === idx && state.progress >= s.span[1]);
+                const active = i === idx && !done;
+                return (
+                  <li
+                    key={s.id}
+                    className={`flex items-center gap-2 text-[13px] ${done ? t.text : active ? t.text : t.muted}`}
+                  >
+                    {done ? (
+                      <CheckCircle2
+                        className="h-4 w-4 text-emerald-600"
+                        aria-label="done"
+                      />
+                    ) : active ? (
+                      <Loader2
+                        className="h-4 w-4 animate-spin text-blue-600"
+                        aria-label="in progress"
+                      />
+                    ) : (
+                      <Circle
+                        className="h-4 w-4 opacity-40"
+                        aria-label="pending"
+                      />
+                    )}
+                    <span className={active ? 'font-semibold' : ''}>
+                      {s.label}
+                    </span>
+                    {active && s.id === 'fetch' && state.message && (
+                      <span className={`text-xs ${t.muted}`}>
+                        · {state.message}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="mt-4">
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                aria-label="Report generation progress"
+                className={`h-2 w-full overflow-hidden rounded-full ${t.skeleton}`}
+              >
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-[width] duration-300"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p
+                className={`mt-1.5 flex justify-between text-xs ${t.muted}`}
+                aria-live="polite"
+              >
+                <span>{pct}%</span>
+                <span>{fmtEta(state.etaMs)}</span>
+              </p>
+            </div>
+            <p className={`mt-3 text-xs ${t.muted}`}>
+              Large reports run on the server. You can cancel at any time;
+              nothing is exported until you choose to.
+            </p>
+            <div className="mt-4 flex justify-end">
+              <button
+                ref={btn}
+                type="button"
+                onClick={onCancel}
+                className={`inline-flex h-9 items-center rounded-lg border px-3 text-[13px] font-medium ${t.btn} ${FOCUS}`}
+              >
+                Cancel generation
+              </button>
+            </div>
+          </>
+        )}
+
+        {state.phase === 'failed' && (
+          <>
+            <div
+              role="alert"
+              className="mt-4 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800"
+            >
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-semibold">{state.error?.message}</p>
+                <p className="mt-0.5">
+                  {state.error?.retryable
+                    ? 'This looks temporary. You can try again.'
+                    : 'Retrying will not help; check the report configuration or permissions.'}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className={`inline-flex h-9 items-center rounded-lg border px-3 text-[13px] font-medium ${t.btn} ${FOCUS}`}
+              >
+                Back to design
+              </button>
+              {state.error?.retryable && (
+                <button
+                  ref={btn}
+                  type="button"
+                  onClick={onRetry}
+                  className={PRIMARY_BTN}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" /> Retry
+                </button>
+              )}
+            </div>
+          </>
+        )}
+
+        {state.phase === 'cancelled' && (
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className={`inline-flex h-9 items-center rounded-lg border px-3 text-[13px] font-medium ${t.btn} ${FOCUS}`}
+            >
+              Close
+            </button>
+            <button
+              ref={btn}
+              type="button"
+              onClick={onRetry}
+              className={PRIMARY_BTN}
+            >
+              Start again
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * Validation issues
+ * ------------------------------------------------------------------------- */
+const SEV = {
+  error: { icon: XCircle, cls: 'text-red-600', label: 'Error' },
+  warning: { icon: AlertTriangle, cls: 'text-amber-600', label: 'Warning' },
+  info: { icon: Info, cls: 'text-blue-600', label: 'Note' },
+} as const;
+
+const IssuesPanel: React.FC<{
+  issues: ValidationIssue[];
+  onJump: (issue: ValidationIssue) => void;
+}> = ({ issues, onJump }) => {
+  const t = useT();
+  if (issues.length === 0)
+    return (
+      <p className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+        <CheckCircle2 className="h-4 w-4" /> Ready to generate. No issues found.
+      </p>
+    );
+  const order = { error: 0, warning: 1, info: 2 } as const;
+  const sorted = [...issues].sort(
+    (a, b) => order[a.severity] - order[b.severity]
+  );
+  return (
+    <ul
+      className={`divide-y rounded-lg border ${t.lineStrong} ${t.line}`}
+      aria-label="Report checks"
+    >
+      {sorted.map((i) => {
+        const S = SEV[i.severity];
+        return (
+          <li key={i.id} className="flex items-start gap-2 px-3 py-2 text-xs">
+            <S.icon
+              className={`mt-0.5 h-4 w-4 shrink-0 ${S.cls}`}
+              aria-label={S.label}
+            />
+            <span className={`flex-1 ${t.body}`}>{i.message}</span>
+            {(i.widgetId || i.fix) && (
+              <button
+                type="button"
+                onClick={() => onJump(i)}
+                className={`shrink-0 rounded px-1.5 py-0.5 font-semibold text-blue-600 hover:underline ${FOCUS}`}
+              >
+                Fix
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
+
+/* ---------------- components/SchemaInspector.tsx ---------------- */
+/**
+ * Generic, schema-driven inspector for registry widgets. Basic options are always visible; `advanced` ones sit
+ * behind "More options" (progressive disclosure). Adding a widget never requires bespoke inspector UI.
+ */
+
+type Rec = Record<string, unknown>;
+const accepts = (a: string, f: FieldInfo) =>
+  a === 'any' ||
+  (a === 'category' && f.type === 'category') ||
+  (a === 'dimension' &&
+    (f.type === 'category' ||
+      f.type === 'boolean' ||
+      isDateInfoType(f.type))) ||
+  (a === 'date' && isDateInfoType(f.type)) ||
+  (a === 'numeric' && isNumericType(f.type)) ||
+  (a === 'measure' && (isNumericType(f.type) || f.type === 'boolean'));
+
+const FieldRow: React.FC<{
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+  id: string;
+}> = ({ label, hint, children, id }) => {
+  const t = useT();
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className={`mb-1 block text-[11px] font-semibold ${t.muted}`}
+      >
+        {label}
+      </label>
+      {children}
+      {hint && <p className={`mt-1 text-[11px] ${t.muted}`}>{hint}</p>}
+    </div>
+  );
+};
+
+const Fields: React.FC<{
+  schema: ConfigField[];
+  value: Rec;
+  onChange: (p: Rec, key?: string) => void;
+  fields: FieldInfo[];
+  sources: SourceInfo[];
+  widget: RegistryWidget;
+  path: string;
+}> = ({ schema, value, onChange, fields, sources, widget, path }) => {
+  const t = useT();
+  const input = `h-8 w-full rounded-lg border px-2 text-[13px] ${t.input} ${FOCUS}`;
+  return (
+    <div className="space-y-3">
+      {schema.map((f) => {
+        if (f.showIf && !f.showIf({ ...widget, ...value } as RegistryWidget))
+          return null;
+        const id = `${path}-${f.key}`;
+        const v = value[f.key];
+        const set = (x: unknown, k?: string) =>
+          onChange({ [f.key]: x }, k ? `${id}` : undefined);
+        switch (f.type) {
+          case 'text':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                {f.multiline ? (
+                  <textarea
+                    id={id}
+                    rows={4}
+                    className={`w-full rounded-lg border p-2 text-[13px] ${t.input} ${FOCUS}`}
+                    value={String(v ?? '')}
+                    placeholder={f.placeholder}
+                    onChange={(e) => set(e.target.value, 'k')}
+                  />
+                ) : (
+                  <input
+                    id={id}
+                    className={input}
+                    value={String(v ?? '')}
+                    placeholder={f.placeholder}
+                    onChange={(e) => set(e.target.value, 'k')}
+                  />
+                )}
+              </FieldRow>
+            );
+          case 'number':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <input
+                  id={id}
+                  type="number"
+                  className={input}
+                  min={f.min}
+                  max={f.max}
+                  step={f.step ?? 'any'}
+                  value={v === undefined || v === null ? '' : String(v)}
+                  onChange={(e) =>
+                    set(
+                      e.target.value === ''
+                        ? undefined
+                        : Number(e.target.value),
+                      'k'
+                    )
+                  }
+                />
+              </FieldRow>
+            );
+          case 'toggle':
+            return (
+              <label
+                key={f.key}
+                className={`flex items-center gap-2 text-[13px] ${t.body}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!v}
+                  onChange={(e) => set(e.target.checked)}
+                />{' '}
+                {f.label}
+              </label>
+            );
+          case 'select':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? '')}
+                  onChange={(e) => set(e.target.value)}
+                >
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          case 'source':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? '')}
+                  onChange={(e) =>
+                    onChange({
+                      [f.key]: e.target.value || undefined,
+                      ...(path.includes('#') ? {} : {}),
+                    })
+                  }
+                >
+                  <option value="">This report&apos;s data</option>
+                  {sources.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          case 'agg':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? 'count')}
+                  onChange={(e) => set(e.target.value)}
+                >
+                  {AGG_CHOICES.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          case 'field': {
+            const srcId = f.sourceFrom
+              ? (value[f.sourceFrom] as string | undefined)
+              : undefined;
+            const pool = srcId
+              ? (sources.find((s) => s.id === srcId)?.fields ?? [])
+              : fields;
+            const opts = pool.filter((x) => accepts(f.accept, x));
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? '')}
+                  onChange={(e) => set(e.target.value || undefined)}
+                >
+                  {(f.optional || !v) && (
+                    <option value="">{f.optional ? 'None' : 'Select…'}</option>
+                  )}
+                  {opts.map((o) => (
+                    <option key={o.key} value={o.key}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          }
+          case 'list': {
+            const items = (Array.isArray(v) ? v : []) as Rec[];
+            return (
+              <fieldset
+                key={f.key}
+                className={`space-y-2 rounded-lg border p-2 ${t.lineStrong}`}
+              >
+                <legend className={`px-1 text-[11px] font-semibold ${t.muted}`}>
+                  {f.label}
+                </legend>
+                {items.map((it, i) => (
+                  <div
+                    key={i}
+                    className={`space-y-2 rounded-lg border p-2 ${t.inset}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[11px] font-semibold ${t.body}`}>
+                        {f.itemLabel?.(it, i) ?? `${f.label} ${i + 1}`}
+                      </span>
+                      {items.length > (f.min ?? 1) && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${f.label} ${i + 1}`}
+                          onClick={() => set(items.filter((_, j) => j !== i))}
+                          className={`rounded p-1 ${t.hover} ${FOCUS}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <Fields
+                      schema={f.item}
+                      value={it}
+                      fields={fields}
+                      sources={sources}
+                      widget={widget}
+                      path={`${id}-${i}`}
+                      onChange={(p) =>
+                        set(items.map((x, j) => (j === i ? { ...x, ...p } : x)))
+                      }
+                    />
+                  </div>
+                ))}
+                {items.length < f.max && (
+                  <button
+                    type="button"
+                    onClick={() => set([...items, f.make()])}
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium ${t.btn} ${FOCUS}`}
+                  >
+                    <Plus className="h-3.5 w-3.5" /> {f.addLabel}
+                  </button>
+                )}
+              </fieldset>
+            );
+          }
+        }
+      })}
+    </div>
+  );
+};
+
+const SchemaInspector: React.FC<{
+  widget: RegistryWidget;
+  schema: ConfigField[];
+  fields: FieldInfo[];
+  sources: SourceInfo[];
+  onPatch: (p: Rec, coalesceKey?: string) => void;
+}> = ({ widget, schema, fields, sources, onPatch }) => {
+  const t = useT();
+  const [more, setMore] = useState(false);
+  const basic = schema.filter((f) => !f.advanced);
+  const adv = schema.filter((f) => f.advanced);
+  const common = {
+    value: widget as Rec,
+    fields,
+    sources,
+    widget,
+    onChange: (p: Rec, k?: string) =>
+      onPatch(p, k ? `${widget.id}-${Object.keys(p)[0]}` : undefined),
+  };
+  return (
+    <div className="space-y-3">
+      <Fields schema={basic} path={widget.id} {...common} />
+      {adv.length > 0 && (
+        <>
+          <button
+            type="button"
+            aria-expanded={more}
+            onClick={() => setMore((m) => !m)}
+            className={`text-xs font-semibold text-blue-600 hover:underline ${FOCUS}`}
+          >
+            {more ? 'Fewer options' : 'More options'}
+          </button>
+          {more && (
+            <Fields schema={adv} path={`${widget.id}-adv`} {...common} />
+          )}
+        </>
+      )}
+      <span className="sr-only">{t.dark ? '' : ''}</span>
+    </div>
+  );
+};
+
 /* ==========================================================================
  * Types
  * ======================================================================== */
@@ -214,8 +7210,8 @@ type FieldType =
   | 'date'
   | 'datetime';
 /** A normalised cell: decimals are canonical strings ("1234.50"), booleans are true/false, missing is null. */
-type Cell = string | number | boolean | null;
-type Row = Record<string, Cell>;
+export type Cell = string | number | boolean | null;
+export type Row = Record<string, Cell>;
 
 export interface FieldDef {
   key: string;
@@ -258,6 +7254,8 @@ export interface FieldDef {
 export interface RowLoadResult {
   rows: Row[];
   truncated: boolean;
+  /** Rows that exist in the source for this request (shown as "100 of N"). Optional. */
+  total?: number;
 }
 
 export interface LoadContext {
@@ -265,6 +7263,20 @@ export interface LoadContext {
   signal: AbortSignal;
   /** The client will not use more than this many rows. Return the MOST RECENT rows first. */
   maxRows: number;
+  /**
+   * 'preview'  design-time sample: return the latest `limit` rows (no date range).
+   * 'report'   the user clicked Generate: return the rows of the selected reporting period
+   *            (`fromDate`..`toDate`, inclusive, ISO yyyy-mm-dd; both undefined = all time).
+   * A source called without `purpose` behaves as 'preview'.
+   */
+  purpose?: 'preview' | 'report';
+  /** Preview sample size. */
+  limit?: number;
+  /** Reporting period (purpose === 'report'). Covers the comparison period too. */
+  fromDate?: string;
+  toDate?: string;
+  /** Report-level filters, so the API can filter server-side. The client re-applies them. */
+  filters?: { field: string; op: string; value: string }[];
 }
 
 export interface ReportSource {
@@ -630,7 +7642,7 @@ export interface GeneratePayload {
   definition: ReportDefinition;
   templateId?: string;
   /**
-   * The ACTUAL generated report. Aggregated results only: raw records are never sent from the browser.
+   * The ACTUAL generated report (metadata, compiled request and aggregated results).
    * Prefer re-rendering server-side from `run.meta.runId` (the server holds the full results).
    */
   run: {
@@ -638,6 +7650,23 @@ export interface GeneratePayload {
     request: ReportRunRequest;
     results: Record<string, QueryResult>;
   };
+  /**
+   * Ready-to-write tables of the ACTUAL report, one per widget that has tabular data, in report order.
+   * Use these to build Excel / CSV / PowerPoint files without interpreting `run.results`.
+   */
+  tables: {
+    widgetId: string;
+    title: string;
+    headers: string[];
+    rows: (string | number)[][];
+  }[];
+  /**
+   * Records of the ACTUAL report: rows of the selected period + report filters, fetched from the API when the
+   * report was generated (never the preview sample). Empty for PDF, or when the data provider does not expose
+   * `fetchExportRows` (then generate server-side from `run.request`). Capped at 100,000 (see `rowsTruncated`).
+   */
+  rows: Row[];
+  rowsTruncated?: boolean;
   columns: FieldDef[];
   format: OutputFormat;
   options: OutputOptions;
@@ -3007,36 +10036,82 @@ function runLocalQuery(
   return out;
 }
 
-/** Demo provider: simulates the backend over `source.loadRows()` (the full mock dataset, uncapped). */
+/**
+ * Default provider. It talks to each source's `loadRows` (e.g. your /reports/data API):
+ *  - PREVIEW: `loadRows({purpose:'preview', limit})`, once per design session, only the latest N rows.
+ *  - GENERATE: `loadRows({purpose:'report', fromDate, toDate, filters})`, called AGAIN for every Generate with the
+ *    reporting period the user chose (comparison period included), then aggregated here with the reference engine.
+ * For large datasets pass your own `provider` that aggregates on the server (see ReportDataProvider).
+ */
+const MAX_EXPORT_ROWS = 100000;
 function createLocalProvider(opts: {
   sources: ReportSource[];
   canViewSensitive: boolean;
   latencyMs?: number;
 }): ReportDataProvider {
-  const store = new Map<
-    string,
-    Promise<{ rows: Row[]; fields: FieldDef[]; src: ReportSource }>
-  >();
-  const load = (id: string, signal?: AbortSignal) => {
-    let p = store.get(id);
+  type Loaded = {
+    rows: Row[];
+    fields: FieldDef[];
+    src: ReportSource;
+    total?: number;
+    truncated: boolean;
+  };
+  const prep = (src: ReportSource, res: RowLoadResult | Row[]): Loaded => {
+    const r = Array.isArray(res) ? { rows: res, truncated: false } : res;
+    const raw = normalizeRows(r.rows, src.fields);
+    const rows = opts.canViewSensitive ? raw : maskSensitive(raw, src.fields);
+    return {
+      rows,
+      fields: enrichFields(src.fields, rows),
+      src,
+      total: (r as RowLoadResult).total,
+      truncated: !!r.truncated,
+    };
+  };
+  const srcOf = (id: string) => {
+    const s = opts.sources.find((x) => x.id === id);
+    if (!s) throw new Error(`Unknown source ${id}`);
+    return s;
+  };
+  /** One data fetch per (run, source): the first query of a run triggers the API call, the rest share it. */
+  const runLoads = new Map<string, Map<string, Promise<Loaded>>>();
+  const loadForRun = (
+    run: ReportRunRequest,
+    sourceId: string,
+    signal?: AbortSignal
+  ) => {
+    let perRun = runLoads.get(run.runId);
+    if (!perRun) {
+      perRun = new Map();
+      runLoads.set(run.runId, perRun);
+      while (runLoads.size > 3)
+        runLoads.delete(runLoads.keys().next().value as string);
+    }
+    let p = perRun.get(sourceId);
     if (!p) {
-      const src = opts.sources.find((s) => s.id === id);
-      if (!src) return Promise.reject(new Error(`Unknown source ${id}`));
+      const src = srcOf(sourceId);
+      // Rows for the period AND its comparison window, so period-over-period figures are exact.
+      const from = [run.period?.from, run.comparePeriod?.from]
+        .filter(Boolean)
+        .sort()[0] as string | undefined;
+      const to = [run.period?.to, run.comparePeriod?.to]
+        .filter(Boolean)
+        .sort()
+        .slice(-1)[0] as string | undefined;
+      const allTime = !run.period;
       p = Promise.resolve(
         src.loadRows({
           signal: signal ?? new AbortController().signal,
           maxRows: Number.MAX_SAFE_INTEGER,
+          purpose: 'report',
+          fromDate: allTime ? undefined : from,
+          toDate: allTime ? undefined : to,
+          filters: run.filters,
         })
       )
-        .then((r) => {
-          const raw = normalizeRows(Array.isArray(r) ? r : r.rows, src.fields);
-          const rows = opts.canViewSensitive
-            ? raw
-            : maskSensitive(raw, src.fields);
-          return { rows, fields: enrichFields(src.fields, rows), src };
-        })
-        .catch((e) => (store.delete(id), Promise.reject(e)));
-      store.set(id, p);
+        .then((r) => prep(src, r))
+        .catch((e) => (perRun!.delete(sourceId), Promise.reject(e)));
+      perRun.set(sourceId, p);
     }
     return p;
   };
@@ -3050,37 +10125,54 @@ function createLocalProvider(opts: {
         { once: true }
       );
     });
+  const fieldsFor = (
+    l: Loaded,
+    metrics: CalculatedMetric[],
+    derived: DerivedField[]
+  ) =>
+    applyDerived(l.rows, derived, [
+      ...l.fields,
+      ...metrics.map(metricField),
+      ...(l.src.metrics ?? []).map(metricField),
+    ]);
   return {
-    capabilities: { export: ['pdf', 'csv'] },
+    capabilities: { export: ['pdf', 'csv', 'xlsx'] },
     async loadPreview({ sourceId, limit, signal }) {
-      const { rows, src } = await load(sourceId, signal);
+      const src = srcOf(sourceId);
+      const l = prep(
+        src,
+        await src.loadRows({
+          signal: signal ?? new AbortController().signal,
+          maxRows: limit,
+          purpose: 'preview',
+          limit,
+        })
+      );
       const df = src.dateField;
-      const latest = [...rows]
+      const latest = [...l.rows]
         .sort((a, b) => String(b[df] ?? '').localeCompare(String(a[df] ?? '')))
         .slice(0, limit);
       return {
         rows: latest,
-        totalInSource: rows.length,
+        totalInSource: l.total ?? (l.truncated ? undefined : l.rows.length),
         asOf: new Date().toISOString(),
       };
     },
     async execute(run, queries, { signal }) {
-      await wait(opts.latencyMs ?? 350, signal);
+      await wait(opts.latencyMs ?? 0, signal);
       const results: Record<string, QueryResult> = {};
       for (const q of queries) {
-        const { rows, fields, src } = await load(q.sourceId, signal);
-        const metrics = Object.values(q.metrics ?? {}) as CalculatedMetric[];
-        const derived = (q.derived ?? []) as DerivedField[];
-        const d = applyDerived(rows, derived, [
-          ...fields,
-          ...metrics.map(metricField),
-          ...(src.metrics ?? []).map(metricField),
-        ]);
+        const l = await loadForRun(run, q.sourceId, signal);
+        const d = fieldsFor(
+          l,
+          Object.values(q.metrics ?? {}) as CalculatedMetric[],
+          (q.derived ?? []) as DerivedField[]
+        );
         results[q.id] = runLocalQuery(
           q,
           d.rows,
           new Map(d.fields.map((f) => [f.key, f])),
-          src.dateField
+          l.src.dateField
         );
       }
       return {
@@ -3089,9 +10181,47 @@ function createLocalProvider(opts: {
         meta: {
           recordsMatched: null,
           dataAsOf: new Date().toISOString(),
-          datasetVersion: `demo-${run.definition.sourceId}`,
+          datasetVersion: `api-${run.definition.sourceId}`,
         },
       };
+    },
+    async fetchExportRows(run, { signal, maxRows }) {
+      const l = await loadForRun(run, run.definition.sourceId, signal);
+      const allQ = run.queries.filter(
+        (q) => q.sourceId === run.definition.sourceId
+      );
+      const derived = [
+        ...new Map(
+          allQ
+            .flatMap((q) => (q.derived ?? []) as DerivedField[])
+            .map((x) => [x.key, x])
+        ).values(),
+      ];
+      const metrics = [
+        ...new Map(
+          allQ
+            .flatMap(
+              (q) => Object.values(q.metrics ?? {}) as CalculatedMetric[]
+            )
+            .map((x) => [x.key, x])
+        ).values(),
+      ];
+      const d = fieldsFor(l, metrics, derived);
+      const fm = new Map(d.fields.map((f) => [f.key, f]));
+      const df = l.src.dateField;
+      let rs = applyFilters(d.rows, toRules(run.filters), fm);
+      if (run.period)
+        rs = rs.filter((r) =>
+          inWindow(r, df, {
+            from: run.period!.from,
+            to: run.period!.to,
+            days: run.period!.days,
+          })
+        );
+      rs = [...rs].sort((a, b) =>
+        String(b[df] ?? '').localeCompare(String(a[df] ?? ''))
+      );
+      return { rows: rs.slice(0, maxRows), truncated: rs.length > maxRows };
     },
   };
 }
@@ -7562,26 +14692,28 @@ const ReportPaper: React.FC<{
                 Preview · sample data
               </span>
             ) : (
-              <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
-                Actual data
-              </span>
+              <span> </span>
+              // <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+              //   Actual data
+              // </span>
             )}
           </span>
         </div>
         {mode === 'final' && meta ? (
           <p className={`mt-1.5 text-[11px] ${t.muted}`}>
             Reporting period: <strong>{describePeriod(meta.period)}</strong>
-            {meta.comparePeriod && (
+            {/* {meta.comparePeriod && (
               <> (compared with {describePeriod(meta.comparePeriod)})</>
-            )}{' '}
-            · {meta.sourceName}
+            )}{' '} */}
+            {/* · {meta.sourceName}
             {meta.filters.length > 0 && (
               <> · {meta.filters.join(' · ')}</>
-            )} ·{' '}
-            {meta.recordsMatched === null
+            )} ·{' '} */}
+            {/* {meta.recordsMatched === null
               ? '—'
               : meta.recordsMatched.toLocaleString()}{' '}
-            records · Generated {formatDate(new Date(meta.generatedAt))} by{' '}
+            records · */}{' '}
+            Generated {formatDate(new Date(meta.generatedAt))} by{' '}
             {meta.generatedBy} ({meta.timezone})
             {meta.dataAsOf && (
               <> · Data as of {formatDate(new Date(meta.dataAsOf))}</>
@@ -7606,7 +14738,7 @@ const ReportPaper: React.FC<{
           </span>
           <span>
             {mode === 'final' && meta ? `Run ${meta.runId.slice(0, 8)} · ` : ''}
-            {pres.showPageNumbers ? 'Page numbers added on print / PDF' : ''}
+            {/* {pres.showPageNumbers ? 'Page numbers added on print / PDF' : ''} */}
           </span>
         </footer>
       )}
@@ -10733,7 +17865,9 @@ const WidgetModal: React.FC<{
     widget.kind === 'chart'
       ? { ...widget, height: 'lg' as Height, span: 12 as Span }
       : widget;
-  const showRecords = widget.kind !== 'text';
+  // In the actual report, files are produced by the export service only (never downloaded from here),
+  // and record-level access goes through drill-through, which pages server-side.
+  const showRecords = widget.kind !== 'text' && data.mode !== 'final';
   const exportRecords = () =>
     downloadCsv(
       `${slug(widget.title)}-records.csv`,
@@ -10763,20 +17897,22 @@ const WidgetModal: React.FC<{
             {widget.title}
           </h2>
           <div className="flex gap-2">
-            {tab === 'data' && tbl.headers.length > 0 && (
-              <GhostButton
-                onClick={() =>
-                  downloadCsv(
-                    `${slug(widget.title)}.csv`,
-                    tbl.headers,
-                    tbl.rows
-                  )
-                }
-                icon={<Download className="h-3.5 w-3.5" />}
-              >
-                Download data
-              </GhostButton>
-            )}
+            {tab === 'data' &&
+              tbl.headers.length > 0 &&
+              data.mode !== 'final' && (
+                <GhostButton
+                  onClick={() =>
+                    downloadCsv(
+                      `${slug(widget.title)}.csv`,
+                      tbl.headers,
+                      tbl.rows
+                    )
+                  }
+                  icon={<Download className="h-3.5 w-3.5" />}
+                >
+                  Download data
+                </GhostButton>
+              )}
             {tab === 'records' && (
               <GhostButton
                 onClick={exportRecords}
@@ -11069,7 +18205,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   const provider = useMemo(
     () =>
       providerProp ??
-      createLocalProvider({ sources, canViewSensitive, latencyMs: 450 }),
+      createLocalProvider({ sources, canViewSensitive, latencyMs: 350 }),
     [providerProp, sources, canViewSensitive]
   );
   const run = useReportRun(provider);
@@ -11860,7 +18996,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
         filters: def.filters,
         widgets: widgetsAsRegistry,
         schedule: def.schedule,
-        format: output.format,
+        // Output files are produced by the host's export service (onGenerate), not by the data provider.
         sources: sourceInfos,
         fieldMap: fieldMap as unknown as Map<string, FieldInfo>,
         capabilities: provider.capabilities ?? {},
@@ -12581,7 +19717,9 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     setStep(1);
   };
 
-  /* ---- export: ONLY from an actual run (never from the preview sample) ---- */
+  /* ---- export: ONLY from an actual run, ONLY through the host's export handler (`onGenerate`) ----
+   * The builder never creates or downloads files itself: PDF / CSV / Excel are produced by the host service
+   * (e.g. reportBuilderService.generateReportFile), which also records the run. */
   const exportReport = async () => {
     if (capabilities?.canExport === false)
       return notify('You do not have permission to export reports.', 'error');
@@ -12596,58 +19734,45 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
         'The report changed after it was generated. Regenerate before exporting.',
         'error'
       );
+    if (!onGenerate)
+      return notify(
+        'No export handler is configured. Pass an onGenerate handler (e.g. generateReportFile from reportBuilderService) to enable PDF, CSV and Excel.',
+        'error'
+      );
     setGenerating(true);
     try {
-      if (onGenerate) {
-        await onGenerate({
-          definition: def,
-          templateId: templateId ?? undefined,
-          run: {
-            meta: r.meta,
-            request: r.compiled.request,
-            results: r.results,
-          },
-          columns: selectedFields,
-          format: output.format,
-          options: output,
-          schedule: def.schedule,
+      // Records of the actual period, for CSV / Excel. PDF prints the on-screen report, so it needs none.
+      let rows: Row[] = [];
+      let rowsTruncated = false;
+      if (output.format !== 'pdf' && provider.fetchExportRows) {
+        const ex = await provider.fetchExportRows(r.compiled.request, {
+          signal: new AbortController().signal,
+          maxRows: MAX_EXPORT_ROWS,
         });
-      } else if (output.format === 'csv') {
-        const m = r.meta;
-        const grid: (string | number | undefined)[][] = [
-          [def.name],
-          ['Data status', 'ACTUAL DATA'],
-          ['Reporting period', describePeriod(m.period)],
-          ['Records in scope', m.recordsMatched ?? ''],
-          ['Filters', m.filters.join(' | ') || 'None'],
-          ['Generated', `${m.generatedAt} by ${m.generatedBy}`],
-          ['Data as of', m.dataAsOf ?? ''],
-          ['Run / definition', `${m.runId} / ${m.definitionHash}`],
-          ...(m.partial
-            ? [
-                [
-                  'WARNING',
-                  'Partial data: some widgets could not be calculated',
-                ],
-              ]
-            : []),
-          [],
-        ];
-        for (const w of def.widgets) {
-          const tb = resultTable(w, r.results, dataCtx);
-          if (!tb) continue;
-          grid.push([w.title], tb.headers, ...tb.rows, []);
-        }
-        downloadCsvGrid(`${slug(def.name)}-${iso(new Date())}.csv`, grid);
-      } else if (output.format === 'pdf') {
-        await new Promise((res) => setTimeout(res, 150));
-        window.print();
-      } else {
-        throw new Error('unsupported');
+        rows = ex.rows;
+        rowsTruncated = ex.truncated;
       }
+      const tables = def.widgets.flatMap((w) => {
+        const tb = resultTable(w, r.results, dataCtx);
+        return tb && tb.headers.length
+          ? [{ widgetId: w.id, title: w.title, ...tb }]
+          : [];
+      });
+      await onGenerate({
+        definition: def,
+        templateId: templateId ?? undefined,
+        run: { meta: r.meta, request: r.compiled.request, results: r.results },
+        rows,
+        rowsTruncated,
+        tables,
+        columns: selectedFields,
+        format: output.format,
+        options: output,
+        schedule: def.schedule,
+      });
       setLastRun({
         at: new Date(),
-        rows: r.meta.recordsMatched ?? 0,
+        rows: r.meta.recordsMatched ?? rows.length,
         format: output.format,
       });
       onAudit?.({
@@ -12656,9 +19781,22 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
         detail: `${output.format}, run ${r.meta.runId}, ${r.meta.recordsMatched ?? '?'} records`,
         at: new Date().toISOString(),
       });
-      notify('Report exported.', 'success');
-    } catch {
-      notify('Export failed. Try again.', 'error');
+      notify(
+        rowsTruncated
+          ? `Report exported (first ${MAX_EXPORT_ROWS.toLocaleString()} records of ${(r.meta.recordsMatched ?? 0).toLocaleString()}).`
+          : 'Report exported.',
+        'success'
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[ReportBuilder] export failed', e);
+      const msg = e instanceof Error && e.message ? e.message : '';
+      notify(
+        msg
+          ? `Export failed: ${msg.slice(0, 220)}`
+          : 'Export failed. Try again.',
+        'error'
+      );
     } finally {
       setGenerating(false);
     }
@@ -13589,7 +20727,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
                   ['xlsx', 'Excel', Table2],
                 ] as const
               ).map(([id, label, Icon]) => {
-                const disabled = id === 'xlsx' && !onGenerate;
+                const disabled = !onGenerate;
                 return (
                   <button
                     key={id}
@@ -13599,7 +20737,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
                     disabled={disabled}
                     title={
                       disabled
-                        ? 'Provide an onGenerate handler to enable Excel export'
+                        ? 'Provide an onGenerate handler (export service) to enable downloads'
                         : undefined
                     }
                     onClick={() => setOutput((o) => ({ ...o, format: id }))}
@@ -13741,13 +20879,17 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
           <button
             type="button"
             onClick={exportReport}
-            disabled={generating || viewMode !== 'final' || stale}
+            disabled={
+              generating || viewMode !== 'final' || stale || !onGenerate
+            }
             title={
-              viewMode !== 'final'
-                ? 'Generate the report first: exports use actual data only'
-                : stale
-                  ? 'Regenerate first: the report changed'
-                  : undefined
+              !onGenerate
+                ? 'No export handler configured (onGenerate)'
+                : viewMode !== 'final'
+                  ? 'Generate the report first: exports use actual data only'
+                  : stale
+                    ? 'Regenerate first: the report changed'
+                    : undefined
             }
             className={`${viewMode === 'final' && !stale ? PRIMARY_BTN : `${t.btn} border`} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50`}
           >
@@ -13796,14 +20938,14 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
                   <ArrowLeft className="h-4 w-4" />
                 </IconButton>
               )}
-              <span
+              {/* <span
                 className={`hidden shrink-0 text-xs font-medium md:inline ${t.muted}`}
               >
                 Report Builder
               </span>
               <ChevronRight
                 className={`hidden h-3.5 w-3.5 shrink-0 md:block ${t.muted}`}
-              />
+              /> */}
               <input
                 aria-label="Report name"
                 value={def.name}
@@ -14110,6 +21252,72 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
 };
 
 export { createLocalProvider, runLocalQuery, SOURCES as DEMO_SOURCES };
+/** Public extension / integration API (widgets, contract, compiler, run engine). */
+export {
+  parseFormula,
+  evalFormula,
+  prevRefs,
+  printFormula,
+  resolveComparison,
+  periodError,
+  legacyRangeToPeriod,
+  addMonthsISO,
+  todayIn,
+  registerWidget,
+  __resetRegistry,
+  getWidget,
+  hasWidget,
+  listWidgets,
+  widgetKinds,
+  compileReport,
+  applySectionFilters,
+  definitionHash,
+  RECORDS_QUERY_ID,
+  resultKey,
+  executeRun,
+  fetchQueries,
+  RunError,
+  useReportRun,
+  validateReport,
+  filterProblem,
+  hasErrors,
+  stableStringify,
+  hashString,
+  queryFingerprint,
+  GEO_LAYOUTS,
+  parseEdges,
+  resolvePeriod,
+  describePeriod,
+  PRESET_LABEL,
+};
+export type {
+  FieldInfo,
+  SourceInfo,
+  RegistryWidget,
+  WidgetDescriptor,
+  ValidationIssue,
+  WidgetRenderProps,
+  WidgetEnv,
+  ConfigField,
+  QuerySpec,
+  ReportDataProvider,
+  ReportQuery,
+  QueryResult,
+  BatchResult,
+  ScalarResult,
+  GroupedResult,
+  RecordsResult,
+  ReportRunMetadata,
+  ReportRunRequest,
+  ReportPeriod,
+  ResolvedPeriod,
+  DatePreset,
+  CompilableDefinition,
+  RunContext,
+  RunState,
+  ProviderCapabilities,
+  ExportFormat,
+};
 /** @internal exposed for tests */
 export const __test = {
   BUILTIN_TEMPLATES,

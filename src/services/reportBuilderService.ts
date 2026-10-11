@@ -6,8 +6,13 @@
  *
  * Expected API contract (to be implemented server-side):
  *   GET    {baseUrl}/reports/sources                  -> ReportSourceMeta[]
- *   POST   {baseUrl}/reports/data                     -> { rows: Row[] }
- *          body: { source_id, from_date, to_date }
+ *   POST   {baseUrl}/reports/data                     -> { rows: Row[], truncated?, total? }
+ *          Design preview : { source_id, limit }            (latest N rows, no date range)
+ *          Generate report: { source_id, from_date, to_date, filters }
+ *                           called AGAIN every time the user clicks Generate, with the reporting
+ *                           period chosen by the user (dates are inclusive ISO yyyy-mm-dd, null = all
+ *                           time). from_date/to_date also cover the comparison period.
+ *   POST   {baseUrl}/reports/runs                     -> {}   (audit record of each export)
  *   GET    {baseUrl}/reports/templates?owner=...      -> ReportTemplate[]
  *   POST   {baseUrl}/reports/templates                -> ReportTemplate
  *   DELETE {baseUrl}/reports/templates/:id            -> {}
@@ -17,6 +22,7 @@ import { AlertTriangle, Building, CreditCard, Users } from 'lucide-react';
 import type {
   FieldDef,
   GeneratePayload,
+  LoadContext,
   ReportSource,
   ReportTemplate,
   ReportTemplateStore,
@@ -346,21 +352,48 @@ const MOCK_ROW_FACTORIES: Record<string, () => Row[]> = {
   transactions: TXN_MOCK,
 };
 
+/** Preview samples only (keyed by source + size). Report data is never cached: every Generate re-fetches. */
 const rowCache = new Map<string, RowLoadResult>();
 
-async function fetchRows(meta: ReportSourceMeta): Promise<RowLoadResult> {
-  const cacheKey = meta.id;
-  const cached = rowCache.get(cacheKey);
-  if (cached) return cached;
+const inRange = (day: string, from?: string, to?: string) =>
+  (!from || day >= from) && (!to || day <= to);
+
+/**
+ * Preview  (ctx.purpose !== 'report'): the latest `limit` rows, used only while designing the report.
+ * Report   (ctx.purpose === 'report'): the actual rows of the reporting period the user selected,
+ *          fetched from the API on every Generate.
+ */
+async function fetchRows(
+  meta: ReportSourceMeta,
+  ctx?: LoadContext
+): Promise<RowLoadResult> {
+  const forReport = ctx?.purpose === 'report';
+  const limit = ctx?.limit ?? 100;
+  const cacheKey = `${meta.id}:${limit}`;
+  if (!forReport) {
+    const cached = rowCache.get(cacheKey);
+    if (cached) return cached;
+  }
   try {
+    const body = forReport
+      ? {
+          source_id: meta.id,
+          from_date: ctx?.fromDate ?? null,
+          to_date: ctx?.toDate ?? null,
+          filters: ctx?.filters ?? [],
+        }
+      : { source_id: meta.id, limit };
     const response = await apiClient.post<RowLoadResult>(
       `${config.api.baseUrl}/reports/data`,
-      { source_id: meta.id, limit: 100 }
+      body
     );
     const result = response.data;
-    if (!Array.isArray(result?.rows)) throw new Error('Unexpected rows payload');
-    if (rowCache.size > 20) rowCache.clear();
-    rowCache.set(cacheKey, result);
+    if (!Array.isArray(result?.rows))
+      throw new Error('Unexpected rows payload');
+    if (!forReport) {
+      if (rowCache.size > 20) rowCache.clear();
+      rowCache.set(cacheKey, result);
+    }
     return result;
   } catch (err) {
     logger.info(
@@ -368,9 +401,24 @@ async function fetchRows(meta: ReportSourceMeta): Promise<RowLoadResult> {
       'fetchRows',
       `API unavailable for ${meta.id}, using mock data`
     );
-    const result = { rows: (MOCK_ROW_FACTORIES[meta.id] ?? ALERT_MOCK)(), truncated: false };
-    if (rowCache.size > 20) rowCache.clear();
-    rowCache.set(cacheKey, result);
+    const all = (MOCK_ROW_FACTORIES[meta.id] ?? ALERT_MOCK)();
+    const day = (r: Row) => String(r[meta.dateField] ?? '').slice(0, 10);
+    const result: RowLoadResult = forReport
+      ? {
+          rows: all.filter((r) => inRange(day(r), ctx?.fromDate, ctx?.toDate)),
+          truncated: false,
+        }
+      : {
+          rows: [...all]
+            .sort((a, b) => day(b).localeCompare(day(a)))
+            .slice(0, limit),
+          truncated: all.length > limit,
+          total: all.length,
+        };
+    if (!forReport) {
+      if (rowCache.size > 20) rowCache.clear();
+      rowCache.set(cacheKey, result);
+    }
     return result;
   }
 }
@@ -386,7 +434,7 @@ export async function fetchReportSources(): Promise<ReportSource[]> {
     return response.data.map((meta) => ({
       ...meta,
       icon: SOURCE_ICONS[meta.id] ?? CreditCard,
-      loadRows: () => fetchRows(meta),
+      loadRows: (ctx) => fetchRows(meta, ctx),
     }));
   } catch (err) {
     logger.info(
@@ -397,7 +445,7 @@ export async function fetchReportSources(): Promise<ReportSource[]> {
     return MOCK_SOURCE_CATALOGUE.map((meta) => ({
       ...meta,
       icon: SOURCE_ICONS[meta.id] ?? CreditCard,
-      loadRows: () => fetchRows(meta),
+      loadRows: (ctx) => fetchRows(meta, ctx),
     }));
   }
 }
@@ -423,335 +471,6 @@ const writeLocalTemplates = (templates: ReportTemplate[]) =>
  * flows can be reviewed before the endpoint is live. Mirrors the documented
  * response shape exactly.
  */
-const MOCK_TEMPLATES: ReportTemplate[] = [
-  {
-    id: 'tpl-mock-001',
-    name: 'Weekly alert triage pack',
-    description:
-      'Alert volume, priority mix and analyst workload for the weekly fraud operations meeting.',
-    definition: {
-      name: 'Weekly alert triage pack',
-      description:
-        'Alert volume, priority mix and analyst workload for the weekly fraud operations meeting.',
-      sourceId: 'alerts',
-      fields: [
-        'alert_id',
-        'scenario',
-        'rule_priority',
-        'status',
-        'channel',
-        'risk_score',
-        'amount',
-        'analyst',
-        'triggered',
-      ],
-      widgets: [
-        {
-          id: 'w-001',
-          kind: 'kpi',
-          title: 'Alerts',
-          span: 3,
-          filters: [],
-          agg: 'count',
-          tone: 'blue',
-          showTrend: true,
-          lowerIsBetter: true,
-        },
-        {
-          id: 'w-002',
-          kind: 'kpi',
-          title: 'Value at stake',
-          span: 3,
-          filters: [],
-          agg: 'sum',
-          field: 'amount',
-          tone: 'red',
-          showTrend: true,
-          lowerIsBetter: true,
-        },
-        {
-          id: 'w-003',
-          kind: 'kpi',
-          title: 'Avg risk score',
-          span: 3,
-          filters: [],
-          agg: 'avg',
-          field: 'risk_score',
-          tone: 'amber',
-          showTrend: true,
-          lowerIsBetter: false,
-        },
-        {
-          id: 'w-004',
-          kind: 'kpi',
-          title: 'Analysts involved',
-          span: 3,
-          filters: [],
-          agg: 'distinct',
-          field: 'analyst',
-          tone: 'violet',
-          showTrend: false,
-          lowerIsBetter: false,
-        },
-        {
-          id: 'w-005',
-          kind: 'chart',
-          title: 'Alerts by priority',
-          span: 6,
-          filters: [],
-          chartType: 'doughnut',
-          groupBy: 'rule_priority',
-          bucket: 'month',
-          agg: 'count',
-          topN: 6,
-          showLegend: true,
-          showLabels: true,
-          showPercentage: true,
-        },
-        {
-          id: 'w-006',
-          kind: 'chart',
-          title: 'Alert volume trend',
-          span: 6,
-          filters: [],
-          chartType: 'line',
-          groupBy: 'triggered',
-          bucket: 'week',
-          agg: 'count',
-          topN: 6,
-          showLegend: true,
-          showLabels: true,
-          showPercentage: true,
-        },
-        {
-          id: 'w-007',
-          kind: 'chart',
-          title: 'Exposure by channel',
-          span: 12,
-          filters: [],
-          chartType: 'hbar',
-          groupBy: 'channel',
-          bucket: 'month',
-          agg: 'sum',
-          field: 'amount',
-          topN: 6,
-          showLegend: true,
-          showLabels: true,
-          showPercentage: true,
-        },
-        {
-          id: 'w-008',
-          kind: 'table',
-          title: 'Highest scoring alerts',
-          span: 12,
-          filters: [],
-          columns: [
-            'alert_id',
-            'scenario',
-            'rule_priority',
-            'status',
-            'risk_score',
-            'analyst',
-          ],
-          sortBy: 'risk_score',
-          sortDir: 'desc',
-          limit: 10,
-        },
-      ],
-      filters: [],
-      dateRange: '30d',
-      createdAt: '2026-09-28T09:00:00.000Z',
-    },
-    isDraft: false,
-    visibility: 'team',
-    createdBy: 'System Administrator',
-    createdAt: '2026-09-28T09:00:00.000Z',
-    updatedAt: '2026-10-02T16:45:00.000Z',
-  },
-  {
-    id: 'tpl-mock-002',
-    name: 'Executive exposure summary',
-    description:
-      'One-page view of exposure and risk scores by scenario, for management review.',
-    definition: {
-      name: 'Executive exposure summary',
-      description:
-        'One-page view of exposure and risk scores by scenario, for management review.',
-      sourceId: 'alerts',
-      fields: [
-        'scenario',
-        'rule_priority',
-        'status',
-        'amount',
-        'risk_score',
-        'triggered',
-      ],
-      widgets: [
-        {
-          id: 'w-101',
-          kind: 'kpi',
-          title: 'Total exposure',
-          span: 4,
-          filters: [],
-          agg: 'sum',
-          field: 'amount',
-          tone: 'red',
-          showTrend: true,
-          lowerIsBetter: true,
-        },
-        {
-          id: 'w-102',
-          kind: 'kpi',
-          title: 'Average exposure',
-          span: 4,
-          filters: [],
-          agg: 'avg',
-          field: 'amount',
-          tone: 'amber',
-          showTrend: true,
-          lowerIsBetter: true,
-        },
-        {
-          id: 'w-103',
-          kind: 'kpi',
-          title: 'Peak risk score',
-          span: 4,
-          filters: [],
-          agg: 'max',
-          field: 'risk_score',
-          tone: 'blue',
-          showTrend: false,
-          lowerIsBetter: false,
-        },
-        {
-          id: 'w-104',
-          kind: 'chart',
-          title: 'Exposure by scenario',
-          span: 12,
-          filters: [],
-          chartType: 'bar',
-          groupBy: 'scenario',
-          bucket: 'month',
-          agg: 'sum',
-          field: 'amount',
-          topN: 8,
-          showLegend: true,
-          showLabels: true,
-          showPercentage: true,
-        },
-      ],
-      filters: [],
-      dateRange: '90d',
-      createdAt: '2026-10-01T11:30:00.000Z',
-    },
-    isDraft: false,
-    visibility: 'org',
-    createdBy: 'System Administrator',
-    createdAt: '2026-10-01T11:30:00.000Z',
-    updatedAt: '2026-10-03T08:20:00.000Z',
-  },
-  {
-    id: 'tpl-mock-003',
-    name: 'Draft: branch deep dive',
-    description:
-      'Work in progress — branch-level alert distribution and high-risk concentration.',
-    definition: {
-      name: 'Draft: branch deep dive',
-      description:
-        'Work in progress — branch-level alert distribution and high-risk concentration.',
-      sourceId: 'branches',
-      fields: [
-        'branch_name',
-        'region',
-        'risk_level',
-        'total_alerts',
-        'high_risk',
-        'amount',
-        'report_date',
-      ],
-      widgets: [
-        {
-          id: 'w-201',
-          kind: 'kpi',
-          title: 'Branches reporting',
-          span: 4,
-          filters: [],
-          agg: 'count',
-          tone: 'blue',
-          showTrend: false,
-          lowerIsBetter: false,
-        },
-        {
-          id: 'w-202',
-          kind: 'kpi',
-          title: 'Total exposure',
-          span: 4,
-          filters: [],
-          agg: 'sum',
-          field: 'amount',
-          tone: 'red',
-          showTrend: true,
-          lowerIsBetter: true,
-        },
-        {
-          id: 'w-203',
-          kind: 'kpi',
-          title: 'High-risk alerts',
-          span: 4,
-          filters: [],
-          agg: 'sum',
-          field: 'high_risk',
-          tone: 'amber',
-          showTrend: true,
-          lowerIsBetter: true,
-        },
-        {
-          id: 'w-204',
-          kind: 'chart',
-          title: 'Alerts by region',
-          span: 6,
-          filters: [],
-          chartType: 'doughnut',
-          groupBy: 'region',
-          bucket: 'month',
-          agg: 'sum',
-          field: 'total_alerts',
-          topN: 6,
-          showLegend: true,
-          showLabels: true,
-          showPercentage: true,
-        },
-        {
-          id: 'w-205',
-          kind: 'table',
-          title: 'Branches by exposure',
-          span: 6,
-          filters: [],
-          columns: [
-            'branch_name',
-            'region',
-            'risk_level',
-            'total_alerts',
-            'amount',
-          ],
-          sortBy: 'amount',
-          sortDir: 'desc',
-          limit: 10,
-        },
-      ],
-      filters: [],
-      dateRange: 'custom',
-      customFrom: '2026-07-01',
-      customTo: '2026-09-30',
-      createdAt: '2026-10-04T14:10:00.000Z',
-    },
-    isDraft: true,
-    visibility: 'private',
-    createdBy: 'System Administrator',
-    createdAt: '2026-10-04T14:10:00.000Z',
-    updatedAt: '2026-10-04T17:55:00.000Z',
-  },
-];
 
 export const reportTemplateStore: ReportTemplateStore = {
   list: async () => {
@@ -767,7 +486,7 @@ export const reportTemplateStore: ReportTemplateStore = {
         'reportTemplateStore.list',
         'API unavailable, using mock templates'
       );
-      return [ ...readLocalTemplates()];
+      return [...readLocalTemplates()];
     }
   },
   save: async (template) => {
@@ -797,6 +516,16 @@ export const reportTemplateStore: ReportTemplateStore = {
 
 /* ==========================================================================
  * File generation: PDF (print), CSV, Excel
+ *
+ * The Report Builder never creates or downloads files itself; it calls this
+ * handler (its `onGenerate` prop) with the ACTUAL report:
+ *   payload.rows    records of the selected period + report filters (re-fetched
+ *                   from /reports/data when the report was generated; empty for
+ *                   PDF). Capped at 100,000 (payload.rowsTruncated).
+ *   payload.tables  one table per report widget (aggregated actual results)
+ *   payload.run     metadata (period, record count, filters, run id, data-as-of)
+ *                   and the compiled request, so the server can regenerate the
+ *                   file itself from run.request if you prefer.
  * ======================================================================== */
 const slug = (s: string) =>
   s
@@ -813,35 +542,73 @@ function downloadBlob(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
+const csvEsc = (v: string | number | boolean | null | undefined) =>
+  `"${String(v ?? '').replace(/"/g, '""')}"`;
+
+/** Excel sheet names: max 31 chars, no \ / ? * [ ] :, unique. */
+function sheetName(raw: string, used: Set<string>) {
+  const base =
+    raw
+      .replace(/[\\/?*[\]:]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 31) || 'Sheet';
+  let name = base;
+  for (let i = 2; used.has(name.toLowerCase()); i++)
+    name = `${base.slice(0, 31 - String(i).length - 1)} ${i}`;
+  used.add(name.toLowerCase());
+  return name;
+}
+
 export async function generateReportFile(
   payload: GeneratePayload
 ): Promise<void> {
-  const { definition, rows, columns, format } = payload;
+  const { definition, rows, columns, format, run, tables } = payload;
+  const meta = run.meta;
+  // 1) record the run (audit + lets the server regenerate / schedule from the same request)
   await apiClient.post(`${config.api.baseUrl}/reports/runs`, {
-    template_id: payload.templateId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.templateId)
-      ? payload.templateId
-      : null,
+    template_id:
+      payload.templateId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        payload.templateId
+      )
+        ? payload.templateId
+        : null,
     source_id: definition.sourceId,
     format,
-    row_count: rows.length,
+    row_count: meta.recordsMatched ?? rows.length,
+    run_id: meta.runId,
+    definition_hash: meta.definitionHash,
+    from_date: meta.period?.from ?? null,
+    to_date: meta.period?.to ?? null,
+    compare_from_date: meta.comparePeriod?.from ?? null,
+    compare_to_date: meta.comparePeriod?.to ?? null,
+    data_as_of: meta.dataAsOf ?? null,
+    generated_at: meta.generatedAt,
+    generated_by: meta.generatedBy,
+    dataset_version: meta.datasetVersion ?? null,
     filters: definition.filters,
     definition,
   });
   const base = `${slug(definition.name)}-${new Date().toISOString().slice(0, 10)}`;
 
+  // 2) PDF: print the generated (actual-data) report
   if (format === 'pdf') {
     await new Promise((r) => setTimeout(r, 150));
     window.print();
     return;
   }
 
+  // 3) CSV: records of the period; falls back to the report tables when no records were supplied
   if (format === 'csv') {
-    const esc = (v: string | number | undefined) =>
-      `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const csv = [
-      columns.map((c) => esc(c.label)).join(','),
-      ...rows.map((r) => columns.map((c) => esc(r[c.key])).join(',')),
-    ].join('\r\n');
+    const grid: (string | number | boolean | null | undefined)[][] =
+      rows.length > 0
+        ? [
+            columns.map((c) => c.label),
+            ...rows.map((r) => columns.map((c) => r[c.key])),
+          ]
+        : tables.flatMap((t) => [[t.title], t.headers, ...t.rows, []]);
+    const csv = grid.map((r) => r.map(csvEsc).join(',')).join('\r\n');
     downloadBlob(
       new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }),
       `${base}.csv`
@@ -849,17 +616,45 @@ export async function generateReportFile(
     return;
   }
 
-  const sheet = XLSX.utils.json_to_sheet(
-    rows.map((r) =>
-      Object.fromEntries(columns.map((c) => [c.label, r[c.key] ?? '']))
-    )
-  );
+  // 4) Excel: Report info + Data (records) + one sheet per report table
   const book = XLSX.utils.book_new();
+  const used = new Set<string>();
+  const period = meta.period
+    ? `${meta.period.from} to ${meta.period.to}`
+    : 'All available data';
   XLSX.utils.book_append_sheet(
     book,
-    sheet,
-    slug(definition.name).slice(0, 30) || 'Report'
+    XLSX.utils.aoa_to_sheet([
+      ['Report', definition.name],
+      ['Data status', 'ACTUAL DATA'],
+      ['Reporting period', period],
+      ['Records in scope', meta.recordsMatched ?? rows.length],
+      ['Filters', meta.filters.join(' | ') || 'None'],
+      ['Generated', `${meta.generatedAt} by ${meta.generatedBy}`],
+      ['Data as of', meta.dataAsOf ?? ''],
+      ['Run / definition', `${meta.runId} / ${meta.definitionHash}`],
+      ...(payload.rowsTruncated
+        ? [['Note', 'Data sheet is limited to the first 100,000 records']]
+        : []),
+    ]),
+    sheetName('Report info', used)
   );
+  if (rows.length > 0)
+    XLSX.utils.book_append_sheet(
+      book,
+      XLSX.utils.json_to_sheet(
+        rows.map((r) =>
+          Object.fromEntries(columns.map((c) => [c.label, r[c.key] ?? '']))
+        )
+      ),
+      sheetName('Data', used)
+    );
+  for (const t of tables)
+    XLSX.utils.book_append_sheet(
+      book,
+      XLSX.utils.aoa_to_sheet([t.headers, ...t.rows]),
+      sheetName(t.title, used)
+    );
   const out = XLSX.write(book, { bookType: 'xlsx', type: 'array' });
   downloadBlob(
     new Blob([out], {
