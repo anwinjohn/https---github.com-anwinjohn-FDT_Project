@@ -8962,7 +8962,7 @@ function compareCells(fd: FieldDef, a: Cell, b: Cell): number {
   return String(a).localeCompare(String(b));
 }
 
-const MASK = '••••••';
+const MASK = '******';
 function exportCell(
   fd: FieldDef,
   v: Cell | undefined,
@@ -10626,6 +10626,23 @@ function validateImportedDefinition(
 
 const LS_KEY = 'fraud-report-builder:templates:v1';
 const LS_AUTOSAVE = 'fraud-report-builder:autosave:v1';
+/** Preview samples are mirrored to sessionStorage so a page refresh keeps the sample payload. */
+const PREVIEW_SS_PREFIX = 'fraud-report-builder:preview:';
+
+const readPreviewCache = (
+  key: string
+):
+  | { rows: Row[]; truncated: boolean; at?: string; total?: number }
+  | undefined => {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return undefined;
+    const v = JSON.parse(raw);
+    return Array.isArray(v?.rows) ? v : undefined;
+  } catch {
+    return undefined;
+  }
+};
 const readLocal = (): ReportTemplate[] => {
   try {
     return JSON.parse(localStorage.getItem(LS_KEY) || '[]');
@@ -10716,997 +10733,693 @@ const ALERT_F = [
   'triggered',
 ];
 
-const BUILTIN_TEMPLATES: ReportTemplate[] = [
-  builtIn(
-    'Executive fraud summary',
-    'Board-ready view of exposure, recovery, severity mix and hotspots.',
-    'cases',
-    {
-      classification: 'confidential',
-      fields: [
-        'case_id',
-        'title',
-        'fraud_type',
-        'channel',
-        'severity',
-        'status',
-        'is_repeat',
-        'amt_aed',
-        'recovered_aed',
-        'investigator',
-        'region',
-        'opened',
-        'days_open',
-      ],
-      widgets: [
-        mkText(
-          'Fraud exposure and case outcomes for {{range}}. {{records}} cases analysed from {{source}}.',
-          'callout'
-        ),
-        mkKpi('Total cases', { lowerIsBetter: true }),
-        mkKpi('Amount at risk', {
-          agg: 'sum',
-          field: 'amt_aed',
-          tone: 'red',
-          lowerIsBetter: true,
-        }),
-        mkKpi('Recovered', {
-          agg: 'sum',
-          field: 'recovered_aed',
-          tone: 'green',
-        }),
-        mkKpi('Repeat customer rate', {
-          agg: 'rate',
-          field: 'is_repeat',
-          tone: 'amber',
-          lowerIsBetter: true,
-        }),
-        mkInsight('Key insights', 'fraud_type', { subject: 'cases' }),
-        mkChart('Cases opened by severity', 'stacked', 'opened', {
-          span: 8,
-          breakBy: 'severity',
-        }),
-        mkChart('Cases by fraud type', 'doughnut', 'fraud_type', { span: 4 }),
-        mkChart('Exposure by channel', 'hbar', 'channel', {
-          span: 4,
-          agg: 'sum',
-          field: 'amt_aed',
-        }),
-        mkChart('Channel × severity', 'heatmap', 'channel', {
-          span: 4,
-          breakBy: 'severity',
-        }),
-        mkTable(
-          'Highest exposure cases',
-          ['case_id', 'title', 'severity', 'status', 'amt_aed'],
-          { sortBy: 'amt_aed', limit: 8, dataBars: true, pageBreak: true }
-        ),
-      ],
-    }
-  ),
-  builtIn(
-    'Alert priority and value-band analysis',
-    'Rule priority, escalation and SAR rates, with alerts banded by transaction value.',
-    'alerts',
-    {
-      fields: [
-        'alert_id',
-        'rule',
-        'rule_priority',
-        'status',
-        'score',
-        'amt_aed',
-        'is_escalated',
-        'sar_filed',
-        'analyst',
-        'triggered',
-        'cf_value_band',
-      ],
-      derived: [
-        {
-          id: 'band1',
-          key: 'cf_value_band',
-          label: 'Value band',
-          kind: 'bands',
-          source: 'amt_aed',
-          edges: [1000, 5000, 20000],
-        },
-      ],
-      widgets: [
-        mkKpi('Alerts', { lowerIsBetter: true }),
-        mkKpi('Value at stake', {
-          agg: 'sum',
-          field: 'amt_aed',
-          tone: 'red',
-          lowerIsBetter: true,
-          format: 'full',
-        }),
-        mkKpi('Escalation rate', {
-          agg: 'rate',
-          field: 'is_escalated',
-          tone: 'amber',
-          lowerIsBetter: true,
-        }),
-        mkKpi('SAR filed', {
-          agg: 'yes',
-          field: 'sar_filed',
-          tone: 'violet',
-          showSparkline: true,
-        }),
-        mkInsight('Key insights', 'rule_priority', { subject: 'alerts' }),
-        mkChart('Alerts by priority over time', 'stacked', 'triggered', {
-          span: 8,
-          breakBy: 'rule_priority',
-        }),
-        mkChart('Alerts by rule priority', 'doughnut', 'rule_priority', {
-          span: 4,
-        }),
-        mkChart('Value at stake by band', 'bar', 'cf_value_band', {
-          span: 4,
-          agg: 'sum',
-          field: 'amt_aed',
-        }),
-        mkChart('Escalation rate by priority', 'hbar', 'rule_priority', {
-          span: 4,
-          agg: 'rate',
-          field: 'is_escalated',
-        }),
-        mkChart('Priority × value band (AED)', 'pivot', 'rule_priority', {
-          span: 4,
-          breakBy: 'cf_value_band',
-          agg: 'sum',
-          field: 'amt_aed',
-          showTotals: true,
-        }),
-        mkTable(
-          'Highest value alerts',
-          [
-            'alert_id',
-            'rule',
-            'rule_priority',
-            'status',
-            'is_escalated',
-            'amt_aed',
-          ],
-          { sortBy: 'amt_aed', dataBars: true, showTotals: true }
-        ),
-      ],
-    }
-  ),
-  builtIn(
-    'Alert triage performance',
-    'Alert volume, false-positive load and rule effectiveness.',
-    'alerts',
-    {
-      fields: [
-        'alert_id',
-        'rule',
-        'rule_priority',
-        'severity',
-        'status',
-        'channel',
-        'score',
-        'amt_aed',
-        'analyst',
-        'triggered',
-      ],
-      widgets: [
-        mkKpi('Alerts', { lowerIsBetter: true }),
-        mkKpi('Avg risk score', { agg: 'avg', field: 'score', tone: 'amber' }),
-        mkKpi('Value at stake', {
-          agg: 'sum',
-          field: 'amt_aed',
-          tone: 'red',
-          lowerIsBetter: true,
-        }),
-        mkKpi('False-positive ratio', {
-          agg: 'metric',
-          field: 'mt_fp_ratio',
-          tone: 'violet',
-          lowerIsBetter: true,
-        }),
-        mkInsight('Key insights', 'status', { subject: 'alerts' }),
-        mkChart('Alert volume by severity', 'stacked', 'triggered', {
-          span: 8,
-          breakBy: 'severity',
-        }),
-        mkChart('Alerts by status', 'doughnut', 'status', { span: 4 }),
-        mkChart('Alerts by detection rule', 'hbar', 'rule', {
-          span: 4,
-          others: true,
-          topN: 4,
-        }),
-        mkChart('Risk score vs amount', 'scatter', 'severity', {
-          span: 4,
-          xField: 'score',
-          field: 'amt_aed',
-          breakBy: 'rule_priority',
-        }),
-        mkTable(
-          'Highest scoring alerts',
-          ['alert_id', 'rule', 'rule_priority', 'status', 'score'],
-          { sortBy: 'score', dataBars: true }
-        ),
-      ],
-    }
-  ),
-  builtIn(
-    'Chargeback analysis',
-    'Dispute value by reason and network, with outcomes.',
-    'chargebacks',
-    {
-      fields: [
-        'cb_id',
-        'merchant',
-        'reason',
-        'network',
-        'status',
-        'is_represented',
-        'amt_aed',
-        'filed',
-      ],
-      widgets: [
-        mkKpi('Chargebacks', { lowerIsBetter: true }),
-        mkKpi('Disputed value', {
-          agg: 'sum',
-          field: 'amt_aed',
-          tone: 'red',
-          lowerIsBetter: true,
-        }),
-        mkKpi('Avg dispute', { agg: 'avg', field: 'amt_aed', tone: 'amber' }),
-        mkKpi('Representment rate', {
-          agg: 'rate',
-          field: 'is_represented',
-          tone: 'violet',
-        }),
-        mkInsight('Key insights', 'reason', { subject: 'chargebacks' }),
-        mkChart('Disputes by status', 'stacked', 'filed', {
-          span: 8,
-          breakBy: 'status',
-        }),
-        mkChart('Disputes by reason', 'doughnut', 'reason', { span: 4 }),
-        mkChart('Value by network', 'hbar', 'network', {
-          span: 4,
-          agg: 'sum',
-          field: 'amt_aed',
-        }),
-        mkChart('Reason × outcome', 'heatmap', 'reason', {
-          span: 4,
-          breakBy: 'status',
-        }),
-        mkTable(
-          'Largest disputes',
-          ['cb_id', 'merchant', 'reason', 'status', 'amt_aed'],
-          { sortBy: 'amt_aed', dataBars: true }
-        ),
-      ],
-    }
-  ),
+const BUILTIN_TEMPLATES: ReportTemplate[] = [];
+// const BUILTIN_TEMPLATES: ReportTemplate[] = [
+//   /* ---- Board & executive pack (source: alerts) ---- */
+//   builtIn(
+//     'Board fraud risk overview',
+//     'Quarterly board pack: headline exposure, confirmed-fraud rate, trend by rule priority, channel and branch concentration.',
+//     'alerts',
+//     {
+//       classification: 'confidential',
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'customer_type',
+//         'amt_aed',
+//         'cashier',
+//         'branch_name',
+//         'rule_id',
+//         'rule_description',
+//         'rule_priority',
+//         'txn_count',
+//         'is_alert_closed',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'sla_days',
+//         'age_days',
+//         'payment_to_country',
+//       ],
+//       presentation: {
+//         subtitle: 'Fraud Risk Overview for the Board',
+//         footerText: 'Board of Directors · Strictly Confidential',
+//         showPageNumbers: true,
+//         coverPage: false,
+//       },
+//       widgets: [
+//         mkE('section', 'Executive summary', { span: 12, height: 'sm' }),
+//         mkE('execSummary', 'Quarter at a glance', {
+//           span: 12,
+//           commentary:
+//             'Alert volumes, flagged value and the confirmed-fraud share for {{range}}, from {{source}}.',
+//           items: [
+//             { label: 'Alerts raised', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Value flagged (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Confirmed fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Avg SLA days',
+//               agg: 'avg',
+//               field: 'sla_days',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('kpiGroup', 'Headline metrics', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Exposure (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Closure rate',
+//               agg: 'rate',
+//               field: 'is_alert_closed',
+//               lowerIsBetter: false,
+//             },
+//           ],
+//         }),
+//         mkChart('Alerts by rule priority over time', 'stacked', 'triggered', {
+//           span: 8,
+//           breakBy: 'rule_priority',
+//         }),
+//         mkChart('Priority mix', 'doughnut', 'rule_priority', { span: 4 }),
+//         mkChart('Exposure by channel (AED)', 'hbar', 'channel', {
+//           span: 6,
+//           agg: 'sum',
+//           field: 'amt_aed',
+//         }),
+//         mkE('riskMatrix', 'Risk matrix: priority × service type', {
+//           span: 6,
+//           rowField: 'rule_priority',
+//           colField: 'service_type',
+//           agg: 'count',
+//         }),
+//         mkE('pareto', 'Branch concentration of alerts', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'count',
+//           topN: 8,
+//         }),
+//         mkE('pareto', 'Branch concentration of exposure (AED)', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('waterfall', 'Change in alerts by rule priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           agg: 'count',
+//           topN: 4,
+//           lowerIsBetter: true,
+//         }),
+//         mkChart(
+//           'Exposure by destination country (AED)',
+//           'bar',
+//           'payment_to_country',
+//           {
+//             span: 6,
+//             agg: 'sum',
+//             field: 'amt_aed',
+//             topN: 8,
+//           }
+//         ),
+//         mkE('section', 'Findings and next steps', { span: 12, height: 'sm' }),
+//         mkText(
+//           'Commentary for the Board: {{records}} alerts over {{range}} from {{source}}. Summarise confirmed-fraud value, the highest-risk branches and rules, and the actions agreed.',
+//           'callout'
+//         ),
+//         mkInsight('Key insights', 'rule_priority', {
+//           span: 12,
+//           subject: 'alerts',
+//         }),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Monthly executive fraud report',
+//     'Previous month versus the month before: drivers, channel movement, branch scorecard and the critical queue.',
+//     'alerts',
+//     {
+//       classification: 'confidential',
+//       period: { preset: 'previous_month', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'amt_aed',
+//         'cashier',
+//         'branch_name',
+//         'rule_id',
+//         'rule_priority',
+//         'is_alert_closed',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'sla_days',
+//       ],
+//       presentation: {
+//         subtitle: 'Monthly Fraud Management Report',
+//         footerText: 'Executive Management · Confidential',
+//         showPageNumbers: true,
+//         coverPage: false,
+//       },
+//       widgets: [
+//         mkE('execSummary', 'Month at a glance', {
+//           span: 12,
+//           commentary:
+//             'Monthly movement in alerts and flagged value for {{range}}, from {{source}}.',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Exposure (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('waterfall', 'Change in alerts by rule priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           agg: 'count',
+//           topN: 4,
+//           lowerIsBetter: true,
+//         }),
+//         mkE('periodCompare', 'Channel: this month vs prior', {
+//           span: 6,
+//           groupBy: 'channel',
+//           agg: 'count',
+//           topN: 6,
+//         }),
+//         mkChart('Exposure by rule (AED)', 'hbar', 'rule_id', {
+//           span: 6,
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('periodCompare', 'Branches vs prior period (exposure)', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 6,
+//         }),
+//         mkE('summaryTable', 'Branch scorecard', {
+//           span: 12,
+//           groupBy: 'branch_name',
+//           topN: 10,
+//           sortIndex: 1,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Exposure (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Fraud rate', agg: 'rate', field: 'is_fraud' },
+//             { label: 'Avg SLA days', agg: 'avg', field: 'sla_days' },
+//           ],
+//         }),
+//         mkTable(
+//           'Critical and high-priority alerts',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'rule_id',
+//             'rule_priority',
+//             'branch_name',
+//             'amt_aed',
+//             'analyst',
+//           ],
+//           {
+//             filters: [
+//               { id: uid(), field: 'rule_priority', op: 'atleast', value: 'High' },
+//             ],
+//             sortBy: 'amt_aed',
+//             limit: 10,
+//           }
+//         ),
+//       ],
+//     }
+//   ),
 
-  /* ---- Fraud & risk reporting pack (registry widgets) ---- */
-  builtIn(
-    'Fraud executive overview',
-    'Board pack: headline KPIs, trend, channel mix, risk matrix, geography, detection funnel and insights.',
-    'cases',
-    {
-      classification: 'confidential',
-      period: { preset: 'previous_quarter', compare: 'previous_period' },
-      fields: CASE_F,
-      presentation: {
-        subtitle: 'Fraud Executive Overview',
-        footerText: 'Board of Directors · Confidential',
-        showPageNumbers: true,
-        coverPage: false,
-      },
-      drillPaths: [
-        {
-          id: 'dp-channel',
-          name: 'Channel › Region › Fraud type',
-          levels: [
-            { field: 'channel' },
-            { field: 'region' },
-            { field: 'fraud_type' },
-          ],
-        },
-      ],
-      widgets: [
-        mkE('section', 'Executive summary', { span: 12, height: 'sm' }),
-        mkE('execSummary', 'Executive summary', {
-          span: 12,
-          commentary: '',
-          items: [
-            { label: 'Fraud cases', agg: 'count', lowerIsBetter: true },
-            {
-              label: 'Amount at risk',
-              agg: 'sum',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Recovered',
-              agg: 'sum',
-              field: 'recovered_aed',
-              lowerIsBetter: false,
-            },
-          ],
-        }),
-        mkE('kpiGroup', 'Headline metrics', {
-          span: 12,
-          height: 'sm',
-          items: [
-            { label: 'Cases', agg: 'count', lowerIsBetter: true },
-            {
-              label: 'Amount at risk',
-              agg: 'sum',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Recovery rate',
-              agg: 'metric',
-              field: 'mt_recovery_rate',
-              lowerIsBetter: false,
-            },
-            {
-              label: 'Critical share',
-              agg: 'metric',
-              field: 'mt_critical_share',
-              lowerIsBetter: true,
-            },
-          ],
-        }),
-        mkE('section', 'Trend and drivers', { span: 12, height: 'sm' }),
-        mkChart('Fraud cases over time', 'line', 'opened', { span: 8 }),
-        mkE('waterfall', 'What drove the change', {
-          span: 4,
-          groupBy: 'fraud_type',
-          agg: 'count',
-          topN: 5,
-          lowerIsBetter: true,
-        }),
-        mkChart('Cases by channel', 'bar', 'channel', {
-          span: 6,
-          drillPathId: 'dp-channel',
-        }),
-        mkE('riskMatrix', 'Risk matrix: severity × status', {
-          span: 6,
-          rowField: 'severity',
-          colField: 'status',
-          agg: 'count',
-        }),
-        mkE('section', 'Where and how we detect', { span: 12, height: 'sm' }),
-        mkE('geoTiles', 'Exposure by region', {
-          span: 5,
-          groupBy: 'region',
-          agg: 'sum',
-          field: 'amt_aed',
-          layout: 'world-regions',
-        }),
-        mkE('detectionFunnel', 'Detection funnel', {
-          span: 7,
-          height: 'lg',
-          stages: [
-            { label: 'Transactions', sourceId: 'transactions', agg: 'count' },
-            { label: 'Alerts raised', sourceId: 'alerts', agg: 'count' },
-            { label: 'Cases opened', sourceId: 'cases', agg: 'count' },
-            {
-              label: 'Confirmed fraud',
-              sourceId: 'cases',
-              agg: 'count',
-              whereField: 'status',
-              whereOp: 'eq',
-              whereValue: 'Confirmed fraud',
-            },
-            {
-              label: 'Confirmed loss',
-              sourceId: 'cases',
-              agg: 'sum',
-              field: 'amt_aed',
-              whereField: 'status',
-              whereOp: 'eq',
-              whereValue: 'Confirmed fraud',
-            },
-            {
-              label: 'Recovered',
-              sourceId: 'cases',
-              agg: 'sum',
-              field: 'recovered_aed',
-            },
-          ],
-        }),
-        mkInsight('Key insights', 'fraud_type', { span: 12, subject: 'cases' }),
-      ],
-    }
-  ),
-  builtIn(
-    'Daily fraud monitoring',
-    'Yesterday at a glance: alert volume, risk indicators, hot rules and the critical queue.',
-    'alerts',
-    {
-      period: { preset: 'yesterday', compare: 'previous_period' },
-      fields: ALERT_F,
-      widgets: [
-        mkE('kpiGroup', 'Yesterday', {
-          span: 12,
-          height: 'sm',
-          items: [
-            { label: 'Alerts', agg: 'count', lowerIsBetter: true },
-            {
-              label: 'Value flagged',
-              agg: 'sum',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Escalation rate',
-              agg: 'metric',
-              field: 'mt_escalation_rate',
-              lowerIsBetter: false,
-            },
-            {
-              label: 'False positives',
-              agg: 'metric',
-              field: 'mt_fp_ratio',
-              lowerIsBetter: true,
-            },
-          ],
-        }),
-        mkE('kri', 'Key risk indicators', {
-          span: 6,
-          items: [
-            {
-              label: 'Alerts',
-              agg: 'count',
-              lowerIsBetter: true,
-              warn: 20,
-              breach: 40,
-            },
-            {
-              label: 'False-positive ratio',
-              agg: 'metric',
-              field: 'mt_fp_ratio',
-              lowerIsBetter: true,
-              warn: 50,
-              breach: 70,
-            },
-          ],
-        }),
-        mkE('riskGauge', 'Average alert score', {
-          span: 3,
-          agg: 'avg',
-          field: 'score',
-          min: 0,
-          max: 100,
-          warn: 50,
-          breach: 75,
-          lowerIsBetter: true,
-        }),
-        mkE('riskGauge', 'False-positive ratio', {
-          span: 3,
-          agg: 'metric',
-          field: 'mt_fp_ratio',
-          min: 0,
-          max: 100,
-          warn: 50,
-          breach: 70,
-          lowerIsBetter: true,
-        }),
-        mkChart('Alerts by hour of triggering day', 'bar', 'triggered', {
-          span: 6,
-        }),
-        mkE('pareto', 'Rules driving alert volume', {
-          span: 6,
-          groupBy: 'rule',
-          agg: 'count',
-          topN: 8,
-        }),
-        mkTable(
-          'Critical and high alerts',
-          [
-            'alert_id',
-            'rule',
-            'severity',
-            'status',
-            'amt_aed',
-            'analyst',
-            'triggered',
-          ],
-          {
-            filters: [
-              { id: uid(), field: 'severity', op: 'atleast', value: 'High' },
-            ],
-            sortBy: 'amt_aed',
-            limit: 10,
-          }
-        ),
-      ],
-    }
-  ),
-  builtIn(
-    'Monthly fraud management report',
-    'Previous month versus the month before: drivers, concentration, team workload and geography.',
-    'cases',
-    {
-      classification: 'confidential',
-      period: { preset: 'previous_month', compare: 'previous_period' },
-      fields: CASE_F,
-      presentation: {
-        subtitle: 'Monthly Fraud Management Report',
-        footerText: 'Fraud Management · Confidential',
-        showPageNumbers: true,
-        coverPage: false,
-      },
-      widgets: [
-        mkE('execSummary', 'Executive summary', {
-          span: 12,
-          items: [
-            { label: 'Fraud cases', agg: 'count', lowerIsBetter: true },
-            {
-              label: 'Amount at risk',
-              agg: 'sum',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Recovery rate',
-              agg: 'metric',
-              field: 'mt_recovery_rate',
-              lowerIsBetter: false,
-            },
-          ],
-        }),
-        mkE('waterfall', 'Change in cases by fraud type', {
-          span: 6,
-          groupBy: 'fraud_type',
-          agg: 'count',
-          topN: 6,
-          lowerIsBetter: true,
-        }),
-        mkE('periodCompare', 'Channel: this month vs prior', {
-          span: 6,
-          groupBy: 'channel',
-          agg: 'count',
-          topN: 6,
-        }),
-        mkE('pareto', 'Where the loss concentrates', {
-          span: 6,
-          groupBy: 'fraud_type',
-          agg: 'sum',
-          field: 'amt_aed',
-          topN: 8,
-        }),
-        mkE('geoTiles', 'Regional exposure', {
-          span: 6,
-          groupBy: 'region',
-          agg: 'sum',
-          field: 'amt_aed',
-          layout: 'world-regions',
-        }),
-        mkE('summaryTable', 'Investigator workload', {
-          span: 12,
-          groupBy: 'investigator',
-          topN: 10,
-          sortIndex: 0,
-          sortDir: 'desc',
-          showTotal: true,
-          dataBars: true,
-          measures: [
-            { label: 'Cases', agg: 'count' },
-            { label: 'Amount', agg: 'sum', field: 'amt_aed' },
-            { label: 'Avg days open', agg: 'avg', field: 'days_open' },
-          ],
-        }),
-        mkInsight('Key insights', 'channel', { span: 12, subject: 'cases' }),
-      ],
-    }
-  ),
-  builtIn(
-    'Risk exposure report',
-    'Exposure, concentration and distribution of losses with thresholds for the Chief Risk Officer.',
-    'cases',
-    {
-      classification: 'confidential',
-      period: { preset: 'last_12_months', compare: 'previous_year' },
-      fields: CASE_F,
-      widgets: [
-        mkE('kri', 'Risk appetite indicators', {
-          span: 8,
-          items: [
-            {
-              label: 'Amount at risk',
-              agg: 'sum',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-              warn: 5000000,
-              breach: 10000000,
-            },
-            {
-              label: 'Critical share',
-              agg: 'metric',
-              field: 'mt_critical_share',
-              lowerIsBetter: true,
-              warn: 15,
-              breach: 25,
-            },
-            {
-              label: 'Repeat-customer rate',
-              agg: 'rate',
-              field: 'is_repeat',
-              lowerIsBetter: true,
-              warn: 20,
-              breach: 30,
-            },
-          ],
-        }),
-        mkE('riskGauge', 'Critical share', {
-          span: 4,
-          agg: 'metric',
-          field: 'mt_critical_share',
-          min: 0,
-          max: 50,
-          warn: 15,
-          breach: 25,
-          lowerIsBetter: true,
-        }),
-        mkE('riskMatrix', 'Severity × channel', {
-          span: 6,
-          rowField: 'severity',
-          colField: 'channel',
-          agg: 'sum',
-          field: 'amt_aed',
-        }),
-        mkE('pareto', 'Concentration by region', {
-          span: 6,
-          groupBy: 'region',
-          agg: 'sum',
-          field: 'amt_aed',
-          topN: 6,
-        }),
-        mkE('histogram', 'Loss size distribution', {
-          span: 6,
-          field: 'amt_aed',
-          bins: 20,
-        }),
-        mkE('boxplot', 'Loss size by fraud type', {
-          span: 6,
-          groupBy: 'fraud_type',
-          field: 'amt_aed',
-          topN: 6,
-        }),
-      ],
-    }
-  ),
-  builtIn(
-    'Alert & investigation report',
-    'From detection to outcome: funnel, case aging against SLA, workload and resolution mix.',
-    'cases',
-    {
-      period: { preset: 'last_90_days', compare: 'previous_period' },
-      fields: CASE_F,
-      widgets: [
-        mkE('kpiGroup', 'Investigation load', {
-          span: 12,
-          height: 'sm',
-          items: [
-            { label: 'Cases', agg: 'count', lowerIsBetter: true },
-            {
-              label: 'Avg days open',
-              agg: 'avg',
-              field: 'days_open',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Amount at risk',
-              agg: 'sum',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-            },
-          ],
-        }),
-        mkE('detectionFunnel', 'Alert-to-case conversion', {
-          span: 12,
-          height: 'lg',
-          stages: [
-            { label: 'Alerts raised', sourceId: 'alerts', agg: 'count' },
-            {
-              label: 'Escalated alerts',
-              sourceId: 'alerts',
-              agg: 'count',
-              whereField: 'is_escalated',
-              whereOp: 'eq',
-              whereValue: 'Yes',
-            },
-            { label: 'Cases opened', sourceId: 'cases', agg: 'count' },
-            {
-              label: 'Confirmed fraud',
-              sourceId: 'cases',
-              agg: 'count',
-              whereField: 'status',
-              whereOp: 'eq',
-              whereValue: 'Confirmed fraud',
-            },
-          ],
-        }),
-        mkE('aging', 'Case aging vs 14-day SLA', {
-          span: 6,
-          ageField: 'days_open',
-          edges: '3, 7, 14, 30, 60',
-          slaDays: 14,
-          agg: 'count',
-        }),
-        mkChart('Investigation outcome', 'doughnut', 'status', { span: 6 }),
-        mkE('summaryTable', 'Investigator workload', {
-          span: 12,
-          groupBy: 'investigator',
-          topN: 10,
-          sortIndex: 0,
-          sortDir: 'desc',
-          showTotal: true,
-          dataBars: true,
-          measures: [
-            { label: 'Cases', agg: 'count' },
-            { label: 'Avg days open', agg: 'avg', field: 'days_open' },
-            { label: 'Amount', agg: 'sum', field: 'amt_aed' },
-          ],
-        }),
-      ],
-    }
-  ),
-  builtIn(
-    'Fraud detection performance',
-    'How well detection works: precision, false positives, escalation and score separation.',
-    'alerts',
-    {
-      period: { preset: 'last_90_days', compare: 'previous_period' },
-      fields: ALERT_F,
-      widgets: [
-        mkE('kpiGroup', 'Detection quality', {
-          span: 12,
-          height: 'sm',
-          items: [
-            {
-              label: 'Precision',
-              agg: 'metric',
-              field: 'mt_precision',
-              lowerIsBetter: false,
-            },
-            {
-              label: 'False-positive ratio',
-              agg: 'metric',
-              field: 'mt_fp_ratio',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Escalation rate',
-              agg: 'metric',
-              field: 'mt_escalation_rate',
-              lowerIsBetter: false,
-            },
-            { label: 'Alerts', agg: 'count', lowerIsBetter: true },
-          ],
-        }),
-        mkE('riskGauge', 'False-positive ratio', {
-          span: 4,
-          agg: 'metric',
-          field: 'mt_fp_ratio',
-          min: 0,
-          max: 100,
-          warn: 50,
-          breach: 70,
-          lowerIsBetter: true,
-        }),
-        mkE('histogram', 'Alert score distribution', {
-          span: 4,
-          field: 'score',
-          bins: 20,
-        }),
-        mkE('boxplot', 'Score by severity', {
-          span: 4,
-          groupBy: 'severity',
-          field: 'score',
-          topN: 4,
-        }),
-        mkE('combo', 'Volume and false-positive ratio by month', {
-          span: 12,
-          groupBy: 'triggered',
-          agg: 'count',
-          label1: 'Alerts',
-          agg2: 'metric',
-          field2: 'mt_fp_ratio',
-          label2: 'False-positive ratio',
-          topN: 12,
-        }),
-        mkInsight('Key insights', 'rule', { span: 12, subject: 'alerts' }),
-      ],
-    }
-  ),
-  builtIn(
-    'Branch risk analysis',
-    'Branch-channel exposure by region, with change versus the prior period.',
-    'cases',
-    {
-      period: { preset: 'last_90_days', compare: 'previous_period' },
-      fields: CASE_F,
-      filters: [{ id: uid(), field: 'channel', op: 'eq', value: 'Branch' }],
-      widgets: [
-        mkE('kpiGroup', 'Branch channel', {
-          span: 12,
-          height: 'sm',
-          items: [
-            { label: 'Cases', agg: 'count', lowerIsBetter: true },
-            {
-              label: 'Amount at risk',
-              agg: 'sum',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Repeat rate',
-              agg: 'rate',
-              field: 'is_repeat',
-              lowerIsBetter: true,
-            },
-          ],
-        }),
-        mkE('geoTiles', 'Exposure by region', {
-          span: 6,
-          groupBy: 'region',
-          agg: 'sum',
-          field: 'amt_aed',
-          layout: 'world-regions',
-        }),
-        mkE('periodCompare', 'Regions vs prior period', {
-          span: 6,
-          groupBy: 'region',
-          agg: 'count',
-          topN: 6,
-        }),
-        mkE('riskMatrix', 'Region × severity', {
-          span: 12,
-          rowField: 'severity',
-          colField: 'region',
-          agg: 'count',
-        }),
-        mkE('summaryTable', 'Region scorecard', {
-          span: 12,
-          groupBy: 'region',
-          topN: 10,
-          sortIndex: 1,
-          sortDir: 'desc',
-          showTotal: true,
-          dataBars: true,
-          measures: [
-            { label: 'Cases', agg: 'count' },
-            { label: 'Amount', agg: 'sum', field: 'amt_aed' },
-            { label: 'Recovered', agg: 'sum', field: 'recovered_aed' },
-          ],
-        }),
-      ],
-    }
-  ),
-  builtIn(
-    'Customer risk analysis',
-    'Repeat-victim behaviour, loss-size spread and the largest cases.',
-    'cases',
-    {
-      period: { preset: 'last_12_months', compare: 'previous_year' },
-      fields: CASE_F,
-      widgets: [
-        mkE('kpiGroup', 'Customer risk', {
-          span: 12,
-          height: 'sm',
-          items: [
-            {
-              label: 'Repeat-customer rate',
-              agg: 'rate',
-              field: 'is_repeat',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Distinct customers',
-              agg: 'distinct',
-              field: 'customer_ref',
-              lowerIsBetter: true,
-            },
-            {
-              label: 'Avg loss',
-              agg: 'avg',
-              field: 'amt_aed',
-              lowerIsBetter: true,
-            },
-          ],
-        }),
-        mkChart('Repeat vs first-time', 'doughnut', 'is_repeat', { span: 4 }),
-        mkE('boxplot', 'Loss size by severity', {
-          span: 8,
-          groupBy: 'severity',
-          field: 'amt_aed',
-          topN: 4,
-        }),
-        mkE('summaryTable', 'Fraud type profile', {
-          span: 12,
-          groupBy: 'fraud_type',
-          topN: 8,
-          sortIndex: 1,
-          sortDir: 'desc',
-          showTotal: true,
-          dataBars: true,
-          measures: [
-            { label: 'Cases', agg: 'count' },
-            { label: 'Repeat rate %', agg: 'rate', field: 'is_repeat' },
-            { label: 'Avg loss', agg: 'avg', field: 'amt_aed' },
-          ],
-        }),
-        mkTable(
-          'Largest cases',
-          [
-            'case_id',
-            'title',
-            'fraud_type',
-            'severity',
-            'status',
-            'amt_aed',
-            'opened',
-          ],
-          { sortBy: 'amt_aed', limit: 10 }
-        ),
-      ],
-    }
-  ),
-  builtIn(
-    'Rule & model performance',
-    'Rule-by-rule precision, false positives, concentration and score behaviour.',
-    'alerts',
-    {
-      period: { preset: 'last_90_days', compare: 'previous_period' },
-      fields: ALERT_F,
-      widgets: [
-        mkE('summaryTable', 'Rule scorecard', {
-          span: 12,
-          groupBy: 'rule',
-          topN: 10,
-          sortIndex: 0,
-          sortDir: 'desc',
-          showTotal: true,
-          dataBars: true,
-          measures: [
-            { label: 'Alerts', agg: 'count' },
-            { label: 'Precision', agg: 'metric', field: 'mt_precision' },
-            {
-              label: 'False-positive ratio',
-              agg: 'metric',
-              field: 'mt_fp_ratio',
-            },
-            {
-              label: 'Escalation rate',
-              agg: 'metric',
-              field: 'mt_escalation_rate',
-            },
-          ],
-        }),
-        mkE('pareto', 'Alert volume concentration by rule', {
-          span: 6,
-          groupBy: 'rule',
-          agg: 'count',
-          topN: 8,
-        }),
-        mkE('boxplot', 'Score spread by rule', {
-          span: 6,
-          groupBy: 'rule',
-          field: 'score',
-          topN: 6,
-        }),
-        mkE('bubble', 'Score vs amount (size = score)', {
-          span: 12,
-          xField: 'score',
-          yField: 'amt_aed',
-          sizeField: 'score',
-          colour: 'severity',
-        }),
-      ],
-    }
-  ),
-];
+//   /* ---- Analytical pack (source: alerts) ---- */
+//   builtIn(
+//     'Confirmed fraud & loss analysis',
+//     'Where confirmed fraud concentrates: value bands, priority spread, loss-size distribution and the largest confirmed cases.',
+//     'alerts',
+//     {
+//       classification: 'confidential',
+//       period: { preset: 'last_12_months', compare: 'previous_year' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'txn_date',
+//         'service_type',
+//         'amt_aed',
+//         'curcode',
+//         'branch_name',
+//         'rule_id',
+//         'rule_description',
+//         'rule_priority',
+//         'txn_count',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'disposition',
+//         'cf_value_band',
+//       ],
+//       derived: [
+//         {
+//           id: 'band1',
+//           key: 'cf_value_band',
+//           label: 'Value band (AED)',
+//           kind: 'bands',
+//           source: 'amt_aed',
+//           edges: [1000, 5000, 20000, 100000],
+//         },
+//       ],
+//       widgets: [
+//         mkE('kpiGroup', 'Confirmed fraud', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Confirmed cases', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Fraud loss (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Avg loss per case (AED)',
+//               agg: 'avg',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('riskGauge', 'Fraud rate (share of alerts)', {
+//           span: 4,
+//           agg: 'rate',
+//           field: 'is_fraud',
+//           min: 0,
+//           max: 100,
+//           warn: 20,
+//           breach: 40,
+//           lowerIsBetter: true,
+//         }),
+//         mkChart('Confirmed by rule priority', 'doughnut', 'rule_priority', {
+//           span: 4,
+//         }),
+//         mkChart('Confirmed by channel', 'bar', 'channel', { span: 4 }),
+//         mkE('histogram', 'Loss size distribution (AED)', {
+//           span: 6,
+//           field: 'amt_aed',
+//           bins: 20,
+//         }),
+//         mkE('boxplot', 'Loss size by rule priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           field: 'amt_aed',
+//           topN: 4,
+//         }),
+//         mkChart('Priority × value band (AED)', 'pivot', 'rule_priority', {
+//           span: 6,
+//           breakBy: 'cf_value_band',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           showTotals: true,
+//         }),
+//         mkE('pareto', 'Loss concentration by rule (AED)', {
+//           span: 6,
+//           groupBy: 'rule_id',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('summaryTable', 'Branch loss scorecard', {
+//           span: 12,
+//           groupBy: 'branch_name',
+//           topN: 10,
+//           sortIndex: 1,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Confirmed fraud', agg: 'count' },
+//             { label: 'Loss (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Avg loss (AED)', agg: 'avg', field: 'amt_aed' },
+//           ],
+//         }),
+//         mkTable(
+//           'Largest confirmed fraud cases',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'branch_name',
+//             'rule_id',
+//             'rule_priority',
+//             'amt_aed',
+//             'analyst',
+//             'disposition',
+//           ],
+//           {
+//             filters: [{ id: uid(), field: 'is_fraud', op: 'eq', value: 'Yes' }],
+//             sortBy: 'amt_aed',
+//             limit: 10,
+//             pageBreak: true,
+//           }
+//         ),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Alert triage & SLA performance',
+//     'Backlog health: closure rates, SLA compliance, aging buckets, branch workload and the overdue queue.',
+//     'alerts',
+//     {
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'created_at',
+//         'amt_aed',
+//         'branch_name',
+//         'rule_id',
+//         'rule_priority',
+//         'txn_count',
+//         'is_alert_closed',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'sla_days',
+//         'age_days',
+//       ],
+//       widgets: [
+//         mkE('kpiGroup', 'Backlog health', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Avg SLA days',
+//               agg: 'avg',
+//               field: 'sla_days',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Avg age (days)',
+//               agg: 'avg',
+//               field: 'age_days',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Closure rate',
+//               agg: 'rate',
+//               field: 'is_alert_closed',
+//               lowerIsBetter: false,
+//             },
+//           ],
+//         }),
+//         mkE('riskGauge', 'Avg SLA days (30-day target)', {
+//           span: 4,
+//           agg: 'avg',
+//           field: 'sla_days',
+//           min: 0,
+//           max: 120,
+//           warn: 30,
+//           breach: 60,
+//           lowerIsBetter: true,
+//         }),
+//         mkE('riskGauge', 'Closure rate', {
+//           span: 4,
+//           agg: 'rate',
+//           field: 'is_alert_closed',
+//           min: 0,
+//           max: 100,
+//           warn: 40,
+//           breach: 20,
+//           lowerIsBetter: false,
+//         }),
+//         mkChart('Open vs closed', 'doughnut', 'is_alert_closed', { span: 4 }),
+//         mkE('aging', 'Alert aging vs 30-day SLA', {
+//           span: 6,
+//           ageField: 'age_days',
+//           edges: '7, 14, 30, 60, 90',
+//           slaDays: 30,
+//           agg: 'count',
+//         }),
+//         mkE('combo', 'Volume and avg SLA days by month', {
+//           span: 6,
+//           groupBy: 'triggered',
+//           agg: 'count',
+//           label1: 'Alerts',
+//           agg2: 'avg',
+//           field2: 'sla_days',
+//           label2: 'Avg SLA days',
+//           topN: 12,
+//         }),
+//         mkE('summaryTable', 'Branch workload', {
+//           span: 12,
+//           groupBy: 'branch_name',
+//           topN: 10,
+//           sortIndex: 3,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Avg SLA days', agg: 'avg', field: 'sla_days' },
+//             { label: 'Avg age (days)', agg: 'avg', field: 'age_days' },
+//             { label: 'Closure rate', agg: 'rate', field: 'is_alert_closed' },
+//           ],
+//         }),
+//         mkTable(
+//           'Overdue open alerts (over 30 days)',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'rule_priority',
+//             'branch_name',
+//             'age_days',
+//             'sla_days',
+//             'analyst',
+//           ],
+//           {
+//             filters: [
+//               { id: uid(), field: 'is_alert_closed', op: 'eq', value: 'No' },
+//               { id: uid(), field: 'age_days', op: 'gt', value: '30' },
+//             ],
+//             sortBy: 'age_days',
+//             limit: 10,
+//           }
+//         ),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Detection rule effectiveness',
+//     'Rule-by-rule yield: fraud-hit rate, exposure triggered, transaction behaviour and priority coverage.',
+//     'alerts',
+//     {
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'amt_aed',
+//         'branch_name',
+//         'rule_id',
+//         'rule_description',
+//         'rule_priority',
+//         'txn_count',
+//         'is_fraud',
+//         'channel',
+//         'disposition',
+//       ],
+//       widgets: [
+//         mkE('summaryTable', 'Rule scorecard', {
+//           span: 12,
+//           groupBy: 'rule_id',
+//           topN: 12,
+//           sortIndex: 2,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Fraud rate', agg: 'rate', field: 'is_fraud' },
+//             { label: 'Exposure (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Avg txns per alert', agg: 'avg', field: 'txn_count' },
+//           ],
+//         }),
+//         mkE('pareto', 'Alert volume concentration by rule', {
+//           span: 6,
+//           groupBy: 'rule_id',
+//           agg: 'count',
+//           topN: 8,
+//         }),
+//         mkE('pareto', 'Exposure concentration by rule (AED)', {
+//           span: 6,
+//           groupBy: 'rule_id',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('bubble', 'Txns vs amount by rule (size = amount)', {
+//           span: 12,
+//           xField: 'txn_count',
+//           yField: 'amt_aed',
+//           sizeField: 'amt_aed',
+//           colour: 'rule_priority',
+//         }),
+//         mkE('boxplot', 'Transaction count by priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           field: 'txn_count',
+//           topN: 4,
+//         }),
+//         mkChart('Rule × priority (alerts)', 'pivot', 'rule_id', {
+//           span: 6,
+//           breakBy: 'rule_priority',
+//           agg: 'count',
+//           showTotals: true,
+//           topN: 8,
+//         }),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Branch & channel risk watch',
+//     'Branch and over-the-counter risk: exposure movement, priority hotspots, teller watchlist and the employee-transaction flag.',
+//     'alerts',
+//     {
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'amt_aed',
+//         'cashier',
+//         'branch_name',
+//         'rule_id',
+//         'rule_priority',
+//         'txn_count',
+//         'is_employee_txn',
+//         'is_fraud',
+//         'channel',
+//         'curcode',
+//       ],
+//       widgets: [
+//         mkE('kpiGroup', 'Branch & channel', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Exposure (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Employee transactions',
+//               agg: 'yes',
+//               field: 'is_employee_txn',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('periodCompare', 'Branches vs prior period (alerts)', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'count',
+//           topN: 8,
+//         }),
+//         mkE('periodCompare', 'Channels vs prior period (exposure)', {
+//           span: 6,
+//           groupBy: 'channel',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 6,
+//         }),
+//         mkE('riskMatrix', 'Priority × channel (exposure)', {
+//           span: 12,
+//           rowField: 'rule_priority',
+//           colField: 'channel',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//         }),
+//         mkE('summaryTable', 'Teller (cashier) watchlist', {
+//           span: 12,
+//           groupBy: 'cashier',
+//           topN: 10,
+//           sortIndex: 0,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Exposure (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Fraud rate', agg: 'rate', field: 'is_fraud' },
+//           ],
+//         }),
+//         mkTable(
+//           'Highest exposure alerts',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'branch_name',
+//             'cashier',
+//             'rule_id',
+//             'rule_priority',
+//             'amt_aed',
+//             'curcode',
+//           ],
+//           { sortBy: 'amt_aed', limit: 10 }
+//         ),
+//       ],
+//     }
+//   ),
+// ];
 
 /* ==========================================================================
  * Design tokens (compact system: 32px controls, 13px body)
@@ -14976,6 +14689,7 @@ const TYPE_LABEL: Record<FieldType, string> = {
 
 const ProfileCard: React.FC<{ fd: FieldDef; rows: Row[] }> = ({ fd, rows }) => {
   const t = useT();
+  const canView = useContext(MaskCtx);
   const p = useMemo(() => profileField(fd, rows), [fd, rows]);
   const missing = p.total ? (p.nulls / p.total) * 100 : 0;
   const maxTop = Math.max(...p.top.map((x) => x.n), 1);
@@ -15018,7 +14732,7 @@ const ProfileCard: React.FC<{ fd: FieldDef; rows: Row[] }> = ({ fd, rows }) => {
               <div key={k} className="flex justify-between gap-2">
                 <dt className={t.muted}>{k}</dt>
                 <dd className={`tabular-nums ${t.text}`}>
-                  {fd.sensitive ? MASK : v}
+                  {fd.sensitive && !canView ? MASK : v}
                 </dd>
               </div>
             ))}
@@ -15032,7 +14746,7 @@ const ProfileCard: React.FC<{ fd: FieldDef; rows: Row[] }> = ({ fd, rows }) => {
               className="grid grid-cols-[minmax(60px,35%)_minmax(0,1fr)_auto] items-center gap-2"
             >
               <span className={`truncate ${t.body}`}>
-                {fd.sensitive ? MASK : x.label}
+                {fd.sensitive && !canView ? MASK : x.label}
               </span>
               <span
                 className={`h-1.5 overflow-hidden rounded-full ${t.dark ? 'bg-white/10' : 'bg-slate-100'}`}
@@ -18267,6 +17981,13 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   const [reloadTick, setReloadTick] = useState(0);
   const refreshData = () => {
     rowCache.current.clear();
+    try {
+      Object.keys(sessionStorage)
+        .filter((k) => k.startsWith(PREVIEW_SS_PREFIX))
+        .forEach((k) => sessionStorage.removeItem(k));
+    } catch {
+      /* ignore */
+    }
     setReloadTick((n) => n + 1);
   };
 
@@ -18407,9 +18128,14 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   useEffect(() => {
     let cancelled = false;
     const ctrl = new AbortController();
-    const cacheKey = `${source.id}:${previewLimit}`;
-    const cached = rowCache.current.get(cacheKey);
+    // Permission is part of the key: after a canViewSensitive change, stale
+    // (masked or unmasked) cached rows are never reused.
+    const cacheKey = `${source.id}:${previewLimit}:${canViewSensitive ? 1 : 0}`;
+    const ssKey = `${PREVIEW_SS_PREFIX}${cacheKey}`;
+    // Memory cache first, then the session-store copy (survives a page refresh).
+    const cached = rowCache.current.get(cacheKey) ?? readPreviewCache(ssKey);
     if (cached) {
+      rowCache.current.set(cacheKey, cached);
       setRowsState({ id: source.id, ...cached });
       setRowsError(null);
       return;
@@ -18437,6 +18163,14 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
           total: res.totalInSource,
         };
         rowCache.current.set(cacheKey, entry);
+        // Restricted reports never touch browser storage (same rule as the design autosave).
+        if (def.classification !== 'restricted') {
+          try {
+            sessionStorage.setItem(ssKey, JSON.stringify(entry));
+          } catch {
+            /* quota */
+          }
+        }
         setRowsState({ id: source.id, ...entry });
       })
       .catch(
@@ -18449,7 +18183,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       cancelled = true;
       ctrl.abort();
     };
-  }, [source, reloadTick, provider, previewLimit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, reloadTick, provider, previewLimit, canViewSensitive]);
 
   useEffect(() => {
     templateStore
@@ -19478,7 +19213,9 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       );
     });
 
-  /* ---- autosave + restore of an unsaved session ---- */
+  /* ---- autosave + automatic restore of an unsaved session ----
+   * The design is restored immediately on load, so a refresh never loses it.
+   * Only a manual "New report" or a successful save clears it. */
   const [restore, setRestore] = useState<{
     def: ReportDefinition;
     at: string;
@@ -19487,8 +19224,17 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     try {
       const raw = localStorage.getItem(LS_AUTOSAVE);
       const p = raw ? JSON.parse(raw) : null;
-      if (p?.def?.widgets && sources.some((x) => x.id === p.def.sourceId))
-        setRestore(p);
+      if (
+        p?.def?.widgets &&
+        sources.some((x: ReportSource) => x.id === p.def.sourceId)
+      ) {
+        // Restore the design and its template link right away (silent resume).
+        resetHistory(cloneDefinition(p.def));
+        setTemplateId(p.templateId ?? null);
+        setRestore({ def: p.def, at: p.at ?? new Date().toISOString() });
+        if (typeof p.step === 'number' && p.step >= 1 && p.step <= 3)
+          setStep(p.step);
+      }
     } catch {
       /* ignore */
     }
@@ -19496,19 +19242,24 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   }, []);
   useEffect(() => {
     // Restricted reports are never written to browser storage.
-    if (!dirty || def.classification === 'restricted') return;
+    if (def.classification === 'restricted') return;
     const id = window.setTimeout(() => {
       try {
         localStorage.setItem(
           LS_AUTOSAVE,
-          JSON.stringify({ def, at: new Date().toISOString() })
+          JSON.stringify({
+            def,
+            templateId,
+            step,
+            at: new Date().toISOString(),
+          })
         );
       } catch {
         /* quota */
       }
     }, 800);
     return () => window.clearTimeout(id);
-  }, [def, dirty]);
+  }, [def, templateId, step]);
   const clearAutosave = () => {
     try {
       localStorage.removeItem(LS_AUTOSAVE);
@@ -19580,12 +19331,19 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     if (!def.name.trim())
       return notify('Give your report a name before saving.', 'error');
     const now = new Date().toISOString();
+    // Identity: the template being edited (by id), or an existing template with the
+    // same name (case-insensitive). Either way we UPDATE it instead of minting a
+    // duplicate. "Save as copy" always creates a new template.
+    const name = def.name.trim();
     const existing = asCopy
       ? undefined
-      : userTemplates.find((x) => x.id === templateId);
+      : userTemplates.find((x) => x.id === templateId) ??
+        userTemplates.find(
+          (x) => x.name.trim().toLowerCase() === name.toLowerCase()
+        );
     const tpl: ReportTemplate = {
       id: existing?.id ?? uid(),
-      name: asCopy ? `${def.name.trim()} (copy)` : def.name.trim(),
+      name: asCopy ? `${name} (copy)` : name,
       description: def.description,
       definition: JSON.parse(JSON.stringify(def)),
       isDraft: draft,
@@ -19611,7 +19369,9 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
           ? 'Saved as a copy.'
           : draft
             ? 'Draft saved.'
-            : 'Template saved. Find it under Templates.',
+            : existing
+              ? 'Template updated. Find it under Templates.'
+              : 'Template saved. Find it under Templates.',
         'success'
       );
     } catch {
@@ -19627,7 +19387,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     )
       return;
     resetHistory(cloneDefinition(tp.definition));
-    setTemplateId(tp.builtIn ? null : tp.id);
+    //setTemplateId(tp.builtIn ? null : tp.id);
+    setTemplateId( tp.id);
     setSelectedWidgetId(null);
     setTemplatesOpen(false);
     setLastRun(null);
@@ -21086,34 +20847,27 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
             </div>
           </div>
 
-          {restore && !dirty && step === 1 && (
+          {restore && !dirty && (
             <div
               role="status"
               className={`flex shrink-0 flex-wrap items-center gap-3 rounded-xl border border-amber-300 px-3 py-2 text-xs ${t.dark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-800'}`}
             >
               <Clock className="h-4 w-4 shrink-0" />
               <span className="flex-1">
-                You have an unsaved report “{restore.def.name || 'Untitled'}”
-                from {new Date(restore.at).toLocaleString()}.
+                Resumed “{restore.def.name || 'Untitled'}” (last saved{' '}
+                {new Date(restore.at).toLocaleString()}).
               </span>
               <button
                 type="button"
                 onClick={() => {
-                  resetHistory(cloneDefinition(restore.def));
+                  resetHistory(blankDefinition(sources[0]));
                   setTemplateId(null);
-                  setRestore(null);
-                  setStep(2);
+                  clearAutosave();
+                  setStep(1);
                 }}
-                className={`rounded-md bg-amber-600 px-2.5 py-1 font-semibold text-white ${FOCUS}`}
-              >
-                Restore
-              </button>
-              <button
-                type="button"
-                onClick={clearAutosave}
                 className={`rounded-md border border-amber-400 px-2.5 py-1 font-medium ${FOCUS}`}
               >
-                Discard
+                Start over
               </button>
             </div>
           )}

@@ -442,11 +442,12 @@ export async function fetchReportSources(): Promise<ReportSource[]> {
       'fetchReportSources',
       'API unavailable, using mock source catalogue'
     );
-    return MOCK_SOURCE_CATALOGUE.map((meta) => ({
-      ...meta,
-      icon: SOURCE_ICONS[meta.id] ?? CreditCard,
-      loadRows: (ctx) => fetchRows(meta, ctx),
-    }));
+    return [];
+    // return MOCK_SOURCE_CATALOGUE.map((meta) => ({
+    //   ...meta,
+    //   icon: SOURCE_ICONS[meta.id] ?? CreditCard,
+    //   loadRows: (ctx) => fetchRows(meta, ctx),
+    // }));
   }
 }
 
@@ -565,15 +566,10 @@ export async function generateReportFile(
 ): Promise<void> {
   const { definition, rows, columns, format, run, tables } = payload;
   const meta = run.meta;
+  console.log('generateReportFile', payload);
   // 1) record the run (audit + lets the server regenerate / schedule from the same request)
   await apiClient.post(`${config.api.baseUrl}/reports/runs`, {
-    template_id:
-      payload.templateId &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        payload.templateId
-      )
-        ? payload.templateId
-        : null,
+    template_id:payload.templateId ?? null,
     source_id: definition.sourceId,
     format,
     row_count: meta.recordsMatched ?? rows.length,
@@ -594,6 +590,13 @@ export async function generateReportFile(
 
   // 2) PDF: print the generated (actual-data) report
   if (format === 'pdf') {
+    // The print dialog freezes the page; refresh the session-activity stamp so the
+    // app's inactivity watcher does not treat the dialog as idle time and log out.
+    try {
+      localStorage.setItem('lastActivity', Date.now().toString());
+    } catch {
+      /* ignore */
+    }
     await new Promise((r) => setTimeout(r, 150));
     window.print();
     return;

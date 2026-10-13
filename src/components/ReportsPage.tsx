@@ -79,6 +79,7 @@ const ReportsPage: React.FC = () => {
       currentUser={user?.username || 'Current user'}
       theme={theme}
       canViewSensitive={user?.canViewSensitive || false}
+      
     />
   );
 };
