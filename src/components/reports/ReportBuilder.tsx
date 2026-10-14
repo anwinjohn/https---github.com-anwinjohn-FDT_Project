@@ -1,59 +1,3 @@
-/**
- * Report Builder: Fraud Management  (v2, compact workspace)
- *
- * A self-service report designer for executive and analytical reporting.
- *   1. Data       pick a dataset and the fields the report may use, or start from a template
- *   2. Design     compose KPI cards, charts, insights, tables and commentary; configure each one
- *   3. Generate   review, set run parameters, save as a template, schedule, export
- *
- * Highlights
- *   - One-screen workspace: top bar carries stepper + actions; panels scroll internally
- *   - 9 chart types (doughnut, pie, column, stacked, bar, line, area, scatter, heatmap) with multi-series breakdowns
- *   - KPI cards with sparkline, period-over-period delta and target progress
- *   - Auto-written Key insights, commentary blocks with {{variables}}, annotations on every widget
- *   - Click-to-drill cross-filtering in Preview / Generate, expand any widget with its data table
- *   - Palettes, classification label, print page-breaks, undo/redo, templates (import/export JSON), scheduling
- *
- * Data model (v2.1)
- *   - Field types: text, category, number, decimal, currency, boolean, date, datetime
- *   - boolean: true/false, 1/0, yes/no, Y/N, T/F, on/off are all normalised; Yes-count and Yes-rate measures
- *   - decimal / currency: exact for NUMERIC(18,2) (scaled-integer maths, no float drift), per-field currency (AED)
- *   - ordinal categories: `order` (or inferred for badge fields) gives rank sorting, semantic colours, "at least" filters
- *   - custom fields: value bands, groups, date parts, calculations, rule segments (CASE WHEN / Yes-No flags)
- *   - sensitive fields masked in preview, tables and exports unless `canViewSensitive`
- *   - pivot tables, chart sorting, "Others" roll-up, 100% stacked, target lines, field profiling, autosave
- *
- * Integration points (all optional, sensible defaults included):
- *   - sources        real datasets (field catalogue + loadRows). Defaults to built-in mock fraud data.
- *   - templateStore  persistence for templates/drafts. Defaults to localStorage.
- *   - onGenerate     custom pipeline (e.g. server-side PDF/XLSX/e-mail). Required to enable the Excel format.
- *   - onBack         shows the back arrow in the top bar.
- *   - theme          'light' | 'dark' (wire this to your ThemeContext).
- *   - height         CSS height of the workspace on xl screens (default: calc(100vh - 6rem)).
- *   - currency       fallback ISO currency for currency fields without their own `currency` (default 'AED').
- *   - canViewSensitive  show fields flagged `sensitive` unmasked (default false).
- *
- * Dependencies: react, lucide-react, Tailwind CSS. No chart library: charts are SVG.
- *
- * v3 changes (from the enterprise review)
- *   Correctness:  PaletteKey/props typing fixed; invalid custom date range now blocks (was silently "All time");
- *                 report time zone (default: browser) drives "today", datetime day-bucketing, hour/weekday parts;
- *                 charts disclose truncation ("Top N of M", hidden series, sampling); donut centre says "Shown" when partial;
- *                 share-of-total only for additive measures; cross-filter no longer collapses the source chart;
- *                 scatter uses even-stride sampling instead of the first 400 rows.
- *   Analytics:    calculated metrics (ratio of aggregates, e.g. FP ratio, recovery rate, bps) + certified metrics per source;
- *                 KPI warning threshold (Target / Warning / Breach, text + colour); report metadata (audience, tags).
- *   Security:     sensitive fields are masked at load time when !canViewSensitive (all charts/filters/groups see masked values);
- *                 CSV formula-injection neutralised; strict template-import validation; no localStorage autosave for
- *                 'restricted' reports; export capability guard + onAudit hook.
- *                 NOTE: these are UI-side mitigations. Authorization, masking, tenant isolation, row security and export
- *                 control MUST be enforced by the backend (see assessment document).
- *   Data:         loadRows receives { signal, maxRows }; client row cap; data-freshness + Refresh; status bar.
- *   Schema:       schemaVersion, timezone, metrics, audience, tags added to ReportDefinition (v2 definitions are upgraded).
- *   A11y:         focus trap + focus return in dialogs; keyboard-operable chart drill; widget wrapper no longer role=button.
- *   Output:       print footer with classification and page x of y.
- *   UX:           Save as copy; Delete key only (Backspace no longer deletes a widget).
- */
 import React, {
   createContext,
   useCallback,
@@ -981,7 +925,7 @@ function legacyRangeToPeriod(
     preset: map[range ?? ''] ?? 'last_6_months',
     from: range === 'custom' ? from : undefined,
     to: range === 'custom' ? to : undefined,
-    compare: range === 'all' ? 'none' : 'previous_period',
+    compare: range === 'all' ? 'none' : 'none',
   };
 }
 
@@ -18880,6 +18824,31 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [xfKey, viewMode, run.state.result?.runId]);
 
+  // const compareKey = `${def.compare}|${effCompare}|${def.period.preset}|${def.period.from ?? ''}|${def.period.to ?? ''}`;
+  // const autoRan = useRef(false);
+  // const lastAutoKey = useRef(compareKey);
+  // useEffect(() => {
+  //   if (!autoRan.current) {
+  //     autoRan.current = true;
+  //     if (
+  //       def.name.trim() &&
+  //       def.fields.length > 0 &&
+  //       def.widgets.length > 0 &&
+  //       !hasErrors(issues)
+  //     )
+  //       startRun();
+  //     return;
+  //   }
+  //   if (viewMode !== 'final' || !run.state.result) return;
+  //   if (lastAutoKey.current === compareKey) return;
+  //   const id = window.setTimeout(() => {
+  //     lastAutoKey.current = compareKey;
+  //     startRun();
+  //   }, 400);
+  //   return () => window.clearTimeout(id);
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [compareKey, viewMode, run.state.result?.runId]);
+
   /* ---- field actions ---- */
   const setFields = (keys: string[]) =>
     update((d) =>
@@ -19337,10 +19306,10 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     const name = def.name.trim();
     const existing = asCopy
       ? undefined
-      : userTemplates.find((x) => x.id === templateId) ??
+      : (userTemplates.find((x) => x.id === templateId) ??
         userTemplates.find(
           (x) => x.name.trim().toLowerCase() === name.toLowerCase()
-        );
+        ));
     const tpl: ReportTemplate = {
       id: existing?.id ?? uid(),
       name: asCopy ? `${name} (copy)` : name,
@@ -19388,7 +19357,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       return;
     resetHistory(cloneDefinition(tp.definition));
     //setTemplateId(tp.builtIn ? null : tp.id);
-    setTemplateId( tp.id);
+    setTemplateId(tp.id);
     setSelectedWidgetId(null);
     setTemplatesOpen(false);
     setLastRun(null);
@@ -21003,7 +20972,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
       </MaskCtx.Provider>
     </ThemeCtx.Provider>
   );
-};
+};;
 
 export { createLocalProvider, runLocalQuery, SOURCES as DEMO_SOURCES };
 /** Public extension / integration API (widgets, contract, compiler, run engine). */
