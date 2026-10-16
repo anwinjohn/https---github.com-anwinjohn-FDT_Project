@@ -1,12 +1,28 @@
 // Mock API endpoints for filter options
 // In a real application, these would be actual API calls to your backend
 
-import config from '../config/app-config.json';
+import { string } from 'three/tsl';
+import { appConfig as config } from '../config/runtime-config';
+
+
+interface RuleIdResponse {
+  options: string;
+}
+
+interface BranchesResponse {
+  options: string;
+}
+
+interface PriorityResponse {
+  options: string;
+}
+
 
 interface FilterOptionResponse {
   options: string[];
   total: number;
 }
+
 
 // Mock data for demonstration
 const mockFilterData = {
@@ -26,7 +42,7 @@ class FilterOptionsAPI {
     try {
       // const response = await fetch(`${this.baseUrl}/filter-options/service-types`);
       // return await response.json();
-      
+
       // Mock response for now
       return new Promise((resolve) => {
         setTimeout(() => {
@@ -44,11 +60,19 @@ class FilterOptionsAPI {
 
   static async getRuleIds(): Promise<FilterOptionResponse> {
     try {
+      const response = await fetch(`${this.baseUrl}/filter-option/ruleId`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data: RuleIdResponse[] = await response.json();
+      const options = data.map(item => item.options);
+
       return new Promise((resolve) => {
         setTimeout(() => {
           resolve({
-            options: mockFilterData.ruleIds,
-            total: mockFilterData.ruleIds.length
+            options: options,
+            total: options.length
           });
         }, 150);
       });
@@ -60,11 +84,19 @@ class FilterOptionsAPI {
 
   static async getPriorities(): Promise<FilterOptionResponse> {
     try {
+      const response = await fetch(`${this.baseUrl}/filter-option/priority`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data: PriorityResponse[] = await response.json();
+      const options = data.map(item => item.options);
+
+
       return new Promise((resolve) => {
         setTimeout(() => {
           resolve({
-            options: mockFilterData.priorities,
-            total: mockFilterData.priorities.length
+            options: options,
+            total: options.length
           });
         }, 80);
       });
@@ -108,11 +140,20 @@ class FilterOptionsAPI {
 
   static async getBranches(): Promise<FilterOptionResponse> {
     try {
+
+      const response = await fetch(`${this.baseUrl}/filter-option/branches`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data: BranchesResponse[] = await response.json();
+      const options = data.map(item => item.options);
+
       return new Promise((resolve) => {
         setTimeout(() => {
           resolve({
-            options: mockFilterData.branches,
-            total: mockFilterData.branches.length
+            options: options,
+            total: options.length
           });
         }, 180);
       });
