@@ -92,6 +92,9 @@ import {
   XCircle,
 } from 'lucide-react';
 
+import { useMenuIds } from '../../hooks/useMenuIds';
+import PermissionGuard from '../PermissionGuard';
+import { useNotifications } from '../notifications';
 /* ==========================================================================
  * Report Builder core (inlined): theme tokens, query contract, widget registry, compiler,
  * validation, run engine and the fraud / risk widget library.
@@ -17860,6 +17863,11 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   fiscalYearStartMonth,
 }) => {
   const t = theme === 'dark' ? DARK : LIGHT;
+   const { getMenuId } = useMenuIds();
+  const REPORT_BUILDER_MENU_ID = getMenuId('report_builder');
+
+  const dark = theme === 'dark' ? 'bg-white/5 border-white/20' : 'bg-white border-gray-200';
+
   const provider = useMemo(
     () =>
       providerProp ??
@@ -17894,6 +17902,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
     value: string;
   } | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { addNotification } = useNotifications();
 
   const [rowsState, setRowsState] = useState<{
     id: string;
@@ -20606,32 +20615,51 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
             )}
             {viewMode === 'final' ? 'Regenerate report' : 'Generate report'}
           </button>
-          <button
-            type="button"
-            onClick={exportReport}
-            disabled={
-              generating || viewMode !== 'final' || stale || !onGenerate
+          <PermissionGuard
+            menuId={REPORT_BUILDER_MENU_ID}
+            action="export"
+            fallback={
+              <button
+                onClick={() =>
+                  addNotification(
+                    'You do not have permission to export, Contact Administrator.',
+                    'warning'
+                  )
+                }
+                className={`${viewMode === 'final' && !stale ? PRIMARY_BTN : `${t.btn} border`} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                <Download className="w-4 h-4" />
+                Export
+              </button>
             }
-            title={
-              !onGenerate
-                ? 'No export handler configured (onGenerate)'
-                : viewMode !== 'final'
-                  ? 'Generate the report first: exports use actual data only'
-                  : stale
-                    ? 'Regenerate first: the report changed'
-                    : undefined
-            }
-            className={`${viewMode === 'final' && !stale ? PRIMARY_BTN : `${t.btn} border`} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50`}
           >
-            {generating ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="h-4 w-4" />
-            )}
-            {generating
-              ? 'Exporting…'
-              : `Export ${output.format.toUpperCase()}`}
-          </button>
+            <button
+              type="button"
+              onClick={exportReport}
+              disabled={
+                generating || viewMode !== 'final' || stale || !onGenerate
+              }
+              title={
+                !onGenerate
+                  ? 'No export handler configured (onGenerate)'
+                  : viewMode !== 'final'
+                    ? 'Generate the report first: exports use actual data only'
+                    : stale
+                      ? 'Regenerate first: the report changed'
+                      : undefined
+              }
+              className={`${viewMode === 'final' && !stale ? PRIMARY_BTN : `${t.btn} border`} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50`}
+            >
+              {generating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {generating
+                ? 'Exporting…'
+                : `Export ${output.format.toUpperCase()}`}
+            </button>
+          </PermissionGuard>
         </div>
       </Panel>
     </div>
@@ -20651,24 +20679,39 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
   }`;
 
   return (
-    <ThemeCtx.Provider value={t}>
-      <MaskCtx.Provider value={canViewSensitive}>
-        <style>{printCss}</style>
+    <PermissionGuard
+      menuId={REPORT_BUILDER_MENU_ID}
+      action="view"
+      fallback={
         <div
-          className="flex min-h-0 flex-col gap-2 xl:h-[var(--rb-h)] xl:min-h-[620px]"
-          style={{ ['--rb-h' as string]: height } as React.CSSProperties}
+          className={`text-center py-20 ${dark ? 'text-white' : 'text-gray-900'}`}
         >
-          {/* Top bar: identity, stepper and actions in one row */}
+          <AlertTriangle className="w-16 h-16 mx-auto mb-4 text-red-400" />
+          <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+          <p className="text-gray-500">
+            You don't have permission to view the report builder.
+          </p>
+        </div>
+      }
+    >
+      <ThemeCtx.Provider value={t}>
+        <MaskCtx.Provider value={canViewSensitive}>
+          <style>{printCss}</style>
           <div
-            className={`flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 ${t.card}`}
+            className="flex min-h-0 flex-col gap-2 xl:h-[var(--rb-h)] xl:min-h-[620px]"
+            style={{ ['--rb-h' as string]: height } as React.CSSProperties}
           >
-            <div className="flex min-w-0 flex-1 basis-[280px] items-center gap-2">
-              {onBack && (
-                <IconButton label="Go back" onClick={onBack}>
-                  <ArrowLeft className="h-4 w-4" />
-                </IconButton>
-              )}
-              {/* <span
+            {/* Top bar: identity, stepper and actions in one row */}
+            <div
+              className={`flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 ${t.card}`}
+            >
+              <div className="flex min-w-0 flex-1 basis-[280px] items-center gap-2">
+                {onBack && (
+                  <IconButton label="Go back" onClick={onBack}>
+                    <ArrowLeft className="h-4 w-4" />
+                  </IconButton>
+                )}
+                {/* <span
                 className={`hidden shrink-0 text-xs font-medium md:inline ${t.muted}`}
               >
                 Report Builder
@@ -20676,301 +20719,304 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({
               <ChevronRight
                 className={`hidden h-3.5 w-3.5 shrink-0 md:block ${t.muted}`}
               /> */}
-              <input
-                aria-label="Report name"
-                value={def.name}
-                onChange={(e) =>
-                  update((d) => ({ ...d, name: e.target.value }), 'name')
-                }
-                placeholder="Untitled report"
-                className={`h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-sm font-semibold ${t.text} ${FOCUS}`}
-              />
-              <Badge
-                value={statusLabel}
-                tone={dirty ? 'amber' : templateId ? 'green' : 'slate'}
-              />
-            </div>
-
-            <nav aria-label="Report builder steps">
-              <ol className="flex items-center gap-1">
-                {STEPS.map((s, i) => {
-                  const n = i + 1,
-                    done = n < step,
-                    active = n === step;
-                  return (
-                    <React.Fragment key={s.full}>
-                      <li>
-                        <button
-                          type="button"
-                          onClick={() => goStep(n)}
-                          aria-current={active ? 'step' : undefined}
-                          title={s.full}
-                          className={`flex items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 ${active ? (t.dark ? 'bg-blue-500/15' : 'bg-blue-50') : ''} ${FOCUS}`}
-                        >
-                          <span
-                            className={`grid h-6 w-6 place-items-center rounded-full text-xs font-semibold ${active ? 'bg-blue-600 text-white' : done ? 'bg-blue-100 text-blue-700' : t.dark ? 'bg-white/10 text-white/60' : 'bg-slate-200 text-slate-600'}`}
-                          >
-                            {done ? <Check className="h-3.5 w-3.5" /> : n}
-                          </span>
-                          <span
-                            className={`text-xs font-medium ${active ? t.text : t.muted}`}
-                          >
-                            <span className="hidden 2xl:inline">{s.full}</span>
-                            <span className="2xl:hidden">{s.short}</span>
-                          </span>
-                        </button>
-                      </li>
-                      {n < STEPS.length && (
-                        <li
-                          aria-hidden="true"
-                          className={`h-px w-4 ${done ? 'bg-blue-300' : t.dark ? 'bg-white/15' : 'bg-slate-200'}`}
-                        />
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </ol>
-            </nav>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              <IconButton
-                label="Undo (Ctrl+Z)"
-                onClick={undo}
-                disabled={hist.past.length === 0}
-              >
-                <Undo2 className="h-4 w-4" />
-              </IconButton>
-              <IconButton
-                label="Redo (Ctrl+Shift+Z)"
-                onClick={redo}
-                disabled={hist.future.length === 0}
-              >
-                <Redo2 className="h-4 w-4" />
-              </IconButton>
-              <IconButton
-                label="Refresh data"
-                onClick={refreshData}
-                disabled={rowsLoading}
-              >
-                <RefreshCw
-                  className={`h-4 w-4 ${rowsLoading ? 'animate-spin' : ''}`}
+                <input
+                  aria-label="Report name"
+                  value={def.name}
+                  onChange={(e) =>
+                    update((d) => ({ ...d, name: e.target.value }), 'name')
+                  }
+                  placeholder="Untitled report"
+                  className={`h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-sm font-semibold ${t.text} ${FOCUS}`}
                 />
-              </IconButton>
-              <GhostButton
-                onClick={() => setTemplatesOpen(true)}
-                icon={<FolderOpen className="h-3.5 w-3.5" />}
-              >
-                Templates
-              </GhostButton>
-              <GhostButton
-                onClick={newReport}
-                icon={<Plus className="h-3.5 w-3.5" />}
-              >
-                New
-              </GhostButton>
-              <GhostButton
-                onClick={() => saveTemplate(true)}
-                icon={<Save className="h-3.5 w-3.5" />}
-              >
-                Save draft
-              </GhostButton>
-              <GhostButton
-                onClick={() => saveTemplate(false, true)}
-                icon={<Copy className="h-3.5 w-3.5" />}
-                title="Save a copy under a new name"
-              >
-                Save as
-              </GhostButton>
-              {step > 1 && (
+                <Badge
+                  value={statusLabel}
+                  tone={dirty ? 'amber' : templateId ? 'green' : 'slate'}
+                />
+              </div>
+
+              <nav aria-label="Report builder steps">
+                <ol className="flex items-center gap-1">
+                  {STEPS.map((s, i) => {
+                    const n = i + 1,
+                      done = n < step,
+                      active = n === step;
+                    return (
+                      <React.Fragment key={s.full}>
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => goStep(n)}
+                            aria-current={active ? 'step' : undefined}
+                            title={s.full}
+                            className={`flex items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 ${active ? (t.dark ? 'bg-blue-500/15' : 'bg-blue-50') : ''} ${FOCUS}`}
+                          >
+                            <span
+                              className={`grid h-6 w-6 place-items-center rounded-full text-xs font-semibold ${active ? 'bg-blue-600 text-white' : done ? 'bg-blue-100 text-blue-700' : t.dark ? 'bg-white/10 text-white/60' : 'bg-slate-200 text-slate-600'}`}
+                            >
+                              {done ? <Check className="h-3.5 w-3.5" /> : n}
+                            </span>
+                            <span
+                              className={`text-xs font-medium ${active ? t.text : t.muted}`}
+                            >
+                              <span className="hidden 2xl:inline">
+                                {s.full}
+                              </span>
+                              <span className="2xl:hidden">{s.short}</span>
+                            </span>
+                          </button>
+                        </li>
+                        {n < STEPS.length && (
+                          <li
+                            aria-hidden="true"
+                            className={`h-px w-4 ${done ? 'bg-blue-300' : t.dark ? 'bg-white/15' : 'bg-slate-200'}`}
+                          />
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </ol>
+              </nav>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <IconButton
+                  label="Undo (Ctrl+Z)"
+                  onClick={undo}
+                  disabled={hist.past.length === 0}
+                >
+                  <Undo2 className="h-4 w-4" />
+                </IconButton>
+                <IconButton
+                  label="Redo (Ctrl+Shift+Z)"
+                  onClick={redo}
+                  disabled={hist.future.length === 0}
+                >
+                  <Redo2 className="h-4 w-4" />
+                </IconButton>
+                <IconButton
+                  label="Refresh data"
+                  onClick={refreshData}
+                  disabled={rowsLoading}
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 ${rowsLoading ? 'animate-spin' : ''}`}
+                  />
+                </IconButton>
                 <GhostButton
-                  onClick={() => goStep(step - 1)}
-                  icon={<ArrowLeft className="h-3.5 w-3.5" />}
+                  onClick={() => setTemplatesOpen(true)}
+                  icon={<FolderOpen className="h-3.5 w-3.5" />}
                 >
-                  Back
+                  Templates
                 </GhostButton>
-              )}
-              {step < 3 ? (
-                <button
-                  type="button"
-                  onClick={() => goStep(step + 1)}
-                  className={PRIMARY_BTN}
+                <GhostButton
+                  onClick={newReport}
+                  icon={<Plus className="h-3.5 w-3.5" />}
                 >
-                  {step === 1 ? 'Next: Design' : 'Next: Review'}{' '}
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={startRun}
-                  disabled={run.state.phase === 'running' || rowsLoading}
-                  className={PRIMARY_BTN}
+                  New
+                </GhostButton>
+                <GhostButton
+                  onClick={() => saveTemplate(true)}
+                  icon={<Save className="h-3.5 w-3.5" />}
                 >
-                  {run.state.phase === 'running' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Download className="h-3.5 w-3.5" />
-                  )}{' '}
-                  Generate report
-                </button>
-              )}
+                  Save draft
+                </GhostButton>
+                <GhostButton
+                  onClick={() => saveTemplate(false, true)}
+                  icon={<Copy className="h-3.5 w-3.5" />}
+                  title="Save a copy under a new name"
+                >
+                  Save as
+                </GhostButton>
+                {step > 1 && (
+                  <GhostButton
+                    onClick={() => goStep(step - 1)}
+                    icon={<ArrowLeft className="h-3.5 w-3.5" />}
+                  >
+                    Back
+                  </GhostButton>
+                )}
+                {step < 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => goStep(step + 1)}
+                    className={PRIMARY_BTN}
+                  >
+                    {step === 1 ? 'Next: Design' : 'Next: Review'}{' '}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startRun}
+                    disabled={run.state.phase === 'running' || rowsLoading}
+                    className={PRIMARY_BTN}
+                  >
+                    {run.state.phase === 'running' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}{' '}
+                    Generate report
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
 
-          {restore && !dirty && (
-            <div
-              role="status"
-              className={`flex shrink-0 flex-wrap items-center gap-3 rounded-xl border border-amber-300 px-3 py-2 text-xs ${t.dark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-800'}`}
-            >
-              <Clock className="h-4 w-4 shrink-0" />
-              <span className="flex-1">
-                Resumed “{restore.def.name || 'Untitled'}” (last saved{' '}
-                {new Date(restore.at).toLocaleString()}).
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  resetHistory(blankDefinition(sources[0]));
-                  setTemplateId(null);
-                  clearAutosave();
-                  setStep(1);
-                }}
-                className={`rounded-md border border-amber-400 px-2.5 py-1 font-medium ${FOCUS}`}
+            {restore && !dirty && (
+              <div
+                role="status"
+                className={`flex shrink-0 flex-wrap items-center gap-3 rounded-xl border border-amber-300 px-3 py-2 text-xs ${t.dark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-800'}`}
               >
-                Start over
-              </button>
+                <Clock className="h-4 w-4 shrink-0" />
+                <span className="flex-1">
+                  Resumed “{restore.def.name || 'Untitled'}” (last saved{' '}
+                  {new Date(restore.at).toLocaleString()}).
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetHistory(blankDefinition(sources[0]));
+                    setTemplateId(null);
+                    clearAutosave();
+                    setStep(1);
+                  }}
+                  className={`rounded-md border border-amber-400 px-2.5 py-1 font-medium ${FOCUS}`}
+                >
+                  Start over
+                </button>
+              </div>
+            )}
+
+            {rangeErr && (
+              <div
+                role="alert"
+                className="flex shrink-0 items-center gap-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800"
+              >
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                {rangeErr} Widgets show no data until this is fixed.
+              </div>
+            )}
+
+            <div className="min-h-0 flex-1">
+              {step === 1 && renderStep1()}
+              {step === 2 && renderStep2()}
+              {step === 3 && renderStep3()}
             </div>
-          )}
 
-          {rangeErr && (
-            <div
-              role="alert"
-              className="flex shrink-0 items-center gap-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800"
-            >
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              {rangeErr} Widgets show no data until this is fixed.
-            </div>
-          )}
-
-          <div className="min-h-0 flex-1">
-            {step === 1 && renderStep1()}
-            {step === 2 && renderStep2()}
-            {step === 3 && renderStep3()}
-          </div>
-
-          <div
-            role="status"
-            className={`flex shrink-0 flex-wrap items-center gap-x-4 gap-y-0.5 rounded-xl border px-3 py-1 text-[11px] ${t.card} ${t.muted}`}
-          >
-            <span>
-              {rowsLoading
-                ? 'Loading data…'
-                : rowsError
-                  ? 'Data unavailable'
-                  : 'Ready'}
-            </span>
-            {viewMode === 'final' && runResult ? (
-              <span className="font-medium text-emerald-700">
-                ACTUAL DATA ·{' '}
-                {(runResult.meta.recordsMatched ?? 0).toLocaleString()} records
-                in scope · run {runResult.meta.runId.slice(0, 8)}
-              </span>
-            ) : (
-              <span className="font-medium text-amber-700">
-                PREVIEW SAMPLE · {rawRows.length.toLocaleString()}
-                {rowsState.id === source.id && rowsState.total
-                  ? ` of ${rowsState.total.toLocaleString()}`
-                  : ''}{' '}
-                {source.recordLabel} loaded · {viewRows.length.toLocaleString()}{' '}
-                in view
-              </span>
-            )}
-            {loadedAt && viewMode === 'preview' && (
-              <span>Sample refreshed {fmtDateTime(loadedAt)}</span>
-            )}
-            <span>Time zone {def.timezone ?? DEFAULT_TZ}</span>
-            <span className="ml-auto">
-              {(rangeErr ? 1 : 0) +
-                (rowsError ? 1 : 0) +
-                (rowsTruncated ? 1 : 0)}{' '}
-              problem
-              {(rangeErr ? 1 : 0) +
-                (rowsError ? 1 : 0) +
-                (rowsTruncated ? 1 : 0) ===
-              1
-                ? ''
-                : 's'}
-            </span>
-          </div>
-
-          <TemplatesDrawer
-            open={templatesOpen}
-            templates={[...userTemplates, ...BUILTIN_TEMPLATES]}
-            sources={sources}
-            onClose={() => setTemplatesOpen(false)}
-            onOpen={openTemplate}
-            onDuplicate={duplicateTemplate}
-            onDelete={deleteTemplate}
-            onImport={importTemplate}
-          />
-          <CustomFieldsModal
-            open={customOpen}
-            editKey={customEdit}
-            fields={catalogue}
-            derived={def.derived ?? []}
-            rows={allRows}
-            onClose={() => setCustomOpen(false)}
-            onSave={saveDerived}
-            onRemove={removeDerived}
-          />
-          <MetricModal
-            open={metricOpen}
-            fields={catalogue}
-            fieldMap={fieldMap}
-            certified={certifiedMetrics}
-            mine={def.metrics ?? []}
-            rows={rows}
-            onClose={() => setMetricOpen(false)}
-            onSave={saveMetric}
-            onRemove={removeMetric}
-          />
-          <DrillThroughModal
-            info={drillThrough}
-            data={dataCtx}
-            onClose={() => setDrillThrough(null)}
-          />
-          <WidgetModal
-            widget={def.widgets.find((w) => w.id === expandedId) ?? null}
-            data={dataCtx}
-            onClose={() => setExpandedId(null)}
-          />
-
-          {runDialog &&
-            run.state.phase !== 'idle' &&
-            run.state.phase !== 'succeeded' && (
-              <RunDialog
-                state={run.state}
-                reportName={def.name}
-                onCancel={run.cancel}
-                onRetry={run.retry}
-                onClose={() => {
-                  run.cancel();
-                  setRunDialog(false);
-                }}
-              />
-            )}
-
-          {toast && (
             <div
               role="status"
-              aria-live="polite"
-              className={`fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-lg ${toast.tone === 'error' ? 'bg-red-600' : toast.tone === 'success' ? 'bg-emerald-600' : 'bg-slate-800'}`}
+              className={`flex shrink-0 flex-wrap items-center gap-x-4 gap-y-0.5 rounded-xl border px-3 py-1 text-[11px] ${t.card} ${t.muted}`}
             >
-              {toast.msg}
+              <span>
+                {rowsLoading
+                  ? 'Loading data…'
+                  : rowsError
+                    ? 'Data unavailable'
+                    : 'Ready'}
+              </span>
+              {viewMode === 'final' && runResult ? (
+                <span className="font-medium text-emerald-700">
+                  ACTUAL DATA ·{' '}
+                  {(runResult.meta.recordsMatched ?? 0).toLocaleString()}{' '}
+                  records in scope · run {runResult.meta.runId.slice(0, 8)}
+                </span>
+              ) : (
+                <span className="font-medium text-amber-700">
+                  PREVIEW SAMPLE · {rawRows.length.toLocaleString()}
+                  {rowsState.id === source.id && rowsState.total
+                    ? ` of ${rowsState.total.toLocaleString()}`
+                    : ''}{' '}
+                  {source.recordLabel} loaded ·{' '}
+                  {viewRows.length.toLocaleString()} in view
+                </span>
+              )}
+              {loadedAt && viewMode === 'preview' && (
+                <span>Sample refreshed {fmtDateTime(loadedAt)}</span>
+              )}
+              <span>Time zone {def.timezone ?? DEFAULT_TZ}</span>
+              <span className="ml-auto">
+                {(rangeErr ? 1 : 0) +
+                  (rowsError ? 1 : 0) +
+                  (rowsTruncated ? 1 : 0)}{' '}
+                problem
+                {(rangeErr ? 1 : 0) +
+                  (rowsError ? 1 : 0) +
+                  (rowsTruncated ? 1 : 0) ===
+                1
+                  ? ''
+                  : 's'}
+              </span>
             </div>
-          )}
-        </div>
-      </MaskCtx.Provider>
-    </ThemeCtx.Provider>
+
+            <TemplatesDrawer
+              open={templatesOpen}
+              templates={[...userTemplates, ...BUILTIN_TEMPLATES]}
+              sources={sources}
+              onClose={() => setTemplatesOpen(false)}
+              onOpen={openTemplate}
+              onDuplicate={duplicateTemplate}
+              onDelete={deleteTemplate}
+              onImport={importTemplate}
+            />
+            <CustomFieldsModal
+              open={customOpen}
+              editKey={customEdit}
+              fields={catalogue}
+              derived={def.derived ?? []}
+              rows={allRows}
+              onClose={() => setCustomOpen(false)}
+              onSave={saveDerived}
+              onRemove={removeDerived}
+            />
+            <MetricModal
+              open={metricOpen}
+              fields={catalogue}
+              fieldMap={fieldMap}
+              certified={certifiedMetrics}
+              mine={def.metrics ?? []}
+              rows={rows}
+              onClose={() => setMetricOpen(false)}
+              onSave={saveMetric}
+              onRemove={removeMetric}
+            />
+            <DrillThroughModal
+              info={drillThrough}
+              data={dataCtx}
+              onClose={() => setDrillThrough(null)}
+            />
+            <WidgetModal
+              widget={def.widgets.find((w) => w.id === expandedId) ?? null}
+              data={dataCtx}
+              onClose={() => setExpandedId(null)}
+            />
+
+            {runDialog &&
+              run.state.phase !== 'idle' &&
+              run.state.phase !== 'succeeded' && (
+                <RunDialog
+                  state={run.state}
+                  reportName={def.name}
+                  onCancel={run.cancel}
+                  onRetry={run.retry}
+                  onClose={() => {
+                    run.cancel();
+                    setRunDialog(false);
+                  }}
+                />
+              )}
+
+            {toast && (
+              <div
+                role="status"
+                aria-live="polite"
+                className={`fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-lg ${toast.tone === 'error' ? 'bg-red-600' : toast.tone === 'success' ? 'bg-emerald-600' : 'bg-slate-800'}`}
+              >
+                {toast.msg}
+              </div>
+            )}
+          </div>
+        </MaskCtx.Provider>
+      </ThemeCtx.Provider>
+    </PermissionGuard>
   );
 };;
 
