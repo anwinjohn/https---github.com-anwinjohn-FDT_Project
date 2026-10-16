@@ -1,4 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import {
   X,
@@ -20,6 +27,8 @@ import {
   Loader2,
   ChevronRight,
   CheckCircle2,
+  Activity,
+  RefreshCw,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
@@ -272,6 +281,16 @@ const fmtDateTime = (s?: string | null) =>
       })
     : undefined;
 
+/**
+ * Overlays render on <body>. Inside the list card they were positioned against
+ * the card (backdrop-filter / overflow-hidden create a containing block for
+ * fixed elements), which made them as short as the table.
+ */
+const Portal: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+  typeof document === 'undefined'
+    ? null
+    : createPortal(children, document.body);
+
 /* =============================================================== */
 /* Accessibility: focus trap, scroll lock, stacked Escape handling  */
 /* =============================================================== */
@@ -363,7 +382,7 @@ const Dialog: React.FC<{
   onClose,
   locked,
   width = 'sm:max-w-lg',
-  z = 'z-[60]',
+  z = 'z-[90]',
   initialFocus,
   children,
 }) => {
@@ -374,39 +393,41 @@ const Dialog: React.FC<{
   useDialogA11y(ref, onClose, !!locked, initialFocus);
 
   return (
-    <motion.div
-      className={cx(
-        'fixed inset-0 flex items-end justify-center sm:items-center sm:p-6',
-        z,
-        dark ? 'bg-slate-950/60' : 'bg-slate-900/40'
-      )}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.15 }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !locked) onClose();
-      }}
-    >
+    <Portal>
       <motion.div
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        tabIndex={-1}
-        initial={reduce ? { opacity: 0 } : { opacity: 0, y: 24, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={reduce ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
-        transition={{ type: 'spring', damping: 30, stiffness: 380 }}
         className={cx(
-          'flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl shadow-2xl outline-none sm:rounded-2xl',
-          width,
-          t.panel
+          'fixed inset-0 flex items-end justify-center sm:items-center sm:p-6',
+          z,
+          dark ? 'bg-slate-950/60' : 'bg-slate-900/40'
         )}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.15 }}
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget && !locked) onClose();
+        }}
       >
-        {children}
+        <motion.div
+          ref={ref}
+          role="dialog"
+          aria-modal="true"
+          aria-label={label}
+          tabIndex={-1}
+          initial={reduce ? { opacity: 0 } : { opacity: 0, y: 24, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={reduce ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
+          transition={{ type: 'spring', damping: 30, stiffness: 380 }}
+          className={cx(
+            'flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl shadow-2xl outline-none sm:rounded-2xl',
+            width,
+            t.panel
+          )}
+        >
+          {children}
+        </motion.div>
       </motion.div>
-    </motion.div>
+    </Portal>
   );
 };
 
@@ -427,7 +448,312 @@ const DialogFooter: React.FC<{ children: React.ReactNode }> = ({
 };
 
 /* =============================================================== */
-/* Details drawer                                                   */
+/* Event logs (lazy – only fetched when the tab is opened)          */
+/* =============================================================== */
+export interface UserEventLog {
+  id: string;
+  event_type: string;
+  description?: string | null;
+  status?: string | null;
+  ip_address?: string | null;
+  created_at: string;
+}
+
+export type EventLogLoader = (
+  userId: string,
+  page: number,
+  pageSize: number
+) => Promise<{ items: UserEventLog[]; hasMore: boolean }>;
+
+const LOG_PAGE_SIZE = 15;
+
+const humanize = (s: string) =>
+  s.replace(/[_-]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+
+const dayLabel = (s: string) => {
+  const d = new Date(s);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+const timeOf = (s: string) =>
+  new Date(s).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+const logTone = (status?: string | null): Tone => {
+  const v = (status ?? '').toLowerCase();
+  if (['failed', 'failure', 'error', 'denied', 'blocked'].includes(v))
+    return 'danger';
+  if (['success', 'succeeded', 'ok', 'completed'].includes(v)) return 'success';
+  return 'neutral';
+};
+
+const EventLogsPanel: React.FC<{ userId: string; load: EventLogLoader }> = ({
+  userId,
+  load,
+}) => {
+  const dark = useDark();
+  const t = ui(dark);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const reqId = useRef(0);
+
+  const [items, setItems] = useState<UserEventLog[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchPage = useCallback(
+    async (nextPage: number, replace: boolean) => {
+      const id = ++reqId.current;
+      setError(null);
+      if (replace) setPhase('loading');
+      else setLoadingMore(true);
+      try {
+        const res = await loadRef.current(userId, nextPage, LOG_PAGE_SIZE);
+        if (id !== reqId.current) return;
+        setItems((prev) => (replace ? res.items : [...prev, ...res.items]));
+        setPage(nextPage);
+        setHasMore(res.hasMore);
+        setPhase('ready');
+      } catch (e) {
+        if (id !== reqId.current) return;
+        setError(
+          e instanceof Error ? e.message : 'We couldn’t load the event logs.'
+        );
+        setPhase(replace ? 'error' : 'ready');
+      } finally {
+        if (id === reqId.current) setLoadingMore(false);
+      }
+    },
+    [userId]
+  );
+
+  useEffect(() => {
+    fetchPage(1, true);
+    return () => {
+      reqId.current++; // ignore late responses after unmount
+    };
+  }, [fetchPage]);
+
+  const groups = useMemo(() => {
+    const out: { label: string; entries: UserEventLog[] }[] = [];
+    items.forEach((it) => {
+      const label = dayLabel(it.created_at);
+      const last = out[out.length - 1];
+      if (last && last.label === label) last.entries.push(it);
+      else out.push({ label, entries: [it] });
+    });
+    return out;
+  }, [items]);
+
+  const errorBox = (retry: () => void) => (
+    <div
+      role="alert"
+      className={cx(
+        'flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-sm ring-1 ring-inset',
+        toneCls(dark, 'danger')
+      )}
+    >
+      <span className="flex items-center gap-2">
+        <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+        {error}
+      </span>
+      <button
+        type="button"
+        onClick={retry}
+        className={btnCls(dark, 'secondary', 'sm')}
+      >
+        Retry
+      </button>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className={cx('text-sm font-semibold', t.strong)}>
+          Recent activity
+        </h3>
+        <button
+          type="button"
+          onClick={() => fetchPage(1, true)}
+          disabled={phase === 'loading'}
+          aria-label="Refresh event logs"
+          title="Refresh"
+          className={cx(btnCls(dark, 'ghost', 'sm'), '!h-8 !w-8 !px-0')}
+        >
+          <RefreshCw
+            className={cx('h-3.5 w-3.5', phase === 'loading' && 'animate-spin')}
+            aria-hidden
+          />
+        </button>
+      </div>
+
+      {phase === 'loading' && (
+        <div className="space-y-5" aria-busy aria-label="Loading event logs">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex gap-3">
+              <div
+                className={cx(
+                  'h-6 w-6 shrink-0 animate-pulse rounded-full motion-reduce:animate-none',
+                  dark ? 'bg-white/10' : 'bg-slate-100'
+                )}
+              />
+              <div className="flex-1 space-y-2">
+                <div
+                  className={cx(
+                    'h-3.5 w-2/3 animate-pulse rounded motion-reduce:animate-none',
+                    dark ? 'bg-white/10' : 'bg-slate-100'
+                  )}
+                />
+                <div
+                  className={cx(
+                    'h-3 w-1/3 animate-pulse rounded motion-reduce:animate-none',
+                    dark ? 'bg-white/5' : 'bg-slate-50'
+                  )}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {phase === 'error' && errorBox(() => fetchPage(1, true))}
+
+      {phase === 'ready' && items.length === 0 && (
+        <div className="py-12 text-center">
+          <span
+            className={cx(
+              'mx-auto grid h-11 w-11 place-items-center rounded-full',
+              dark ? 'bg-white/5' : 'bg-slate-100'
+            )}
+          >
+            <Activity className={cx('h-5 w-5', t.muted)} aria-hidden />
+          </span>
+          <p className={cx('mt-3 text-sm font-medium', t.strong)}>
+            No activity recorded yet
+          </p>
+          <p className={cx('mt-1 text-xs', t.muted)}>
+            Sign-ins and account changes will show up here.
+          </p>
+        </div>
+      )}
+
+      {phase === 'ready' && items.length > 0 && (
+        <div className="space-y-6">
+          {groups.map((g) => (
+            <section key={g.label} aria-label={g.label}>
+              <h4 className={cx('mb-3 text-xs font-medium', t.muted)}>
+                {g.label}
+              </h4>
+              <ol>
+                {g.entries.map((e, idx) => {
+                  const tone = logTone(e.status);
+                  const Icon =
+                    tone === 'danger'
+                      ? AlertTriangle
+                      : tone === 'success'
+                        ? CheckCircle2
+                        : Activity;
+                  const isLast = idx === g.entries.length - 1;
+                  return (
+                    <li
+                      key={e.id}
+                      className={cx('relative pl-10', !isLast && 'pb-5')}
+                    >
+                      {!isLast && (
+                        <span
+                          aria-hidden
+                          className={cx(
+                            'absolute bottom-0 left-3 top-7 w-px',
+                            dark ? 'bg-white/10' : 'bg-slate-200'
+                          )}
+                        />
+                      )}
+                      <span
+                        className={cx(
+                          'absolute left-0 top-0 grid h-6 w-6 place-items-center rounded-full ring-1 ring-inset',
+                          toneCls(dark, tone)
+                        )}
+                      >
+                        <Icon className="h-3 w-3" aria-hidden />
+                      </span>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className={cx('text-sm font-medium', t.strong)}>
+                          {humanize(e.event_type)}
+                        </p>
+                        <time
+                          dateTime={e.created_at}
+                          className={cx(
+                            'shrink-0 text-xs tabular-nums',
+                            t.muted
+                          )}
+                        >
+                          {timeOf(e.created_at)}
+                        </time>
+                      </div>
+                      {e.description && (
+                        <p className={cx('mt-0.5 break-words text-sm', t.body)}>
+                          {e.description}
+                        </p>
+                      )}
+                      {(e.status || e.ip_address) && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          {e.status && (
+                            <Pill tone={tone}>{humanize(e.status)}</Pill>
+                          )}
+                          {e.ip_address && (
+                            <span
+                              className={cx('text-xs tabular-nums', t.muted)}
+                            >
+                              IP {e.ip_address}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          ))}
+
+          {error && errorBox(() => fetchPage(page + 1, false))}
+
+          {hasMore && !error && (
+            <button
+              type="button"
+              onClick={() => fetchPage(page + 1, false)}
+              disabled={loadingMore}
+              className={cx(btnCls(dark, 'secondary'), 'w-full')}
+            >
+              {loadingMore && (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              )}
+              {loadingMore ? 'Loading…' : 'Load older activity'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* =============================================================== */
+/* Details drawer – full-height, rendered in a portal               */
 /* =============================================================== */
 interface DrawerProps {
   user: UserOnboardingData | null;
@@ -435,7 +761,11 @@ interface DrawerProps {
   onClose: () => void;
   onEdit: (u: UserOnboardingData) => void;
   onAction: (action: UserActionKind, u: UserOnboardingData) => void;
+  /** When provided, an "Event logs" tab is shown and loaded on demand. */
+  loadEventLogs?: EventLogLoader;
 }
+
+type DrawerTab = 'details' | 'logs';
 
 const DrawerPanel: React.FC<DrawerProps & { user: UserOnboardingData }> = ({
   user,
@@ -443,13 +773,17 @@ const DrawerPanel: React.FC<DrawerProps & { user: UserOnboardingData }> = ({
   onClose,
   onEdit,
   onAction,
+  loadEventLogs,
 }) => {
   const dark = useDark();
   const t = ui(dark);
   const reduce = useReducedMotion();
   const panelRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
+  const [tab, setTab] = useState<DrawerTab>('details');
+  const [logsOpened, setLogsOpened] = useState(false); // gate for the first API call
   useDialogA11y(panelRef, onClose, false, closeRef);
 
   useEffect(() => {
@@ -457,6 +791,15 @@ const DrawerPanel: React.FC<DrawerProps & { user: UserOnboardingData }> = ({
     const id = setTimeout(() => setCopied(false), 1600);
     return () => clearTimeout(id);
   }, [copied]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [tab]);
+
+  const selectTab = (next: DrawerTab) => {
+    setTab(next);
+    if (next === 'logs') setLogsOpened(true);
+  };
 
   const copyEmail = async () => {
     try {
@@ -514,268 +857,361 @@ const DrawerPanel: React.FC<DrawerProps & { user: UserOnboardingData }> = ({
     </div>
   );
 
+  const tabs: { id: DrawerTab; label: string }[] = [
+    { id: 'details', label: 'Details' },
+    ...(loadEventLogs
+      ? [{ id: 'logs' as DrawerTab, label: 'Event logs' }]
+      : []),
+  ];
+
+  const onTabKey = (e: React.KeyboardEvent) => {
+    if (tabs.length < 2) return;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const next =
+        tabs[(tabs.findIndex((x) => x.id === tab) + 1) % tabs.length];
+      selectTab(next.id);
+      document.getElementById(`um-tab-${next.id}`)?.focus();
+    }
+  };
+
   return (
-    <motion.div
-      className={cx(
-        'fixed inset-0 z-50 flex justify-end sm:p-3',
-        dark ? 'bg-slate-950/55' : 'bg-slate-900/35'
-      )}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <motion.aside
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Details for ${user.full_name}`}
-        tabIndex={-1}
-        initial={reduce ? { opacity: 0 } : { x: '100%' }}
-        animate={reduce ? { opacity: 1 } : { x: 0 }}
-        exit={reduce ? { opacity: 0 } : { x: '100%' }}
-        transition={{ type: 'spring', damping: 34, stiffness: 340 }}
+    <Portal>
+      <motion.div
         className={cx(
-          'flex h-full w-full flex-col overflow-hidden shadow-2xl outline-none sm:max-w-[480px] sm:rounded-2xl',
-          t.panel
+          'fixed inset-0 z-[80] flex justify-end',
+          dark ? 'bg-slate-950/55' : 'bg-slate-900/35'
         )}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.18 }}
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
       >
-        {/* Header */}
-        <header
-          className={cx('flex items-start gap-4 border-b p-6', t.hairline)}
-        >
-          <Avatar name={user.full_name} size="lg" />
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-lg font-semibold tracking-tight">
-              {user.full_name}
-            </h2>
-            <p className={cx('truncate text-sm', t.muted)}>{user.username}</p>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              <Pill tone={status.tone} dot>
-                {status.label}
-              </Pill>
-              <Pill>{user.user_roles}</Pill>
-            </div>
-          </div>
-          <button
-            ref={closeRef}
-            type="button"
-            onClick={onClose}
-            aria-label="Close details"
-            className={cx(btnCls(dark, 'ghost', 'sm'), '!h-8 !w-8 !px-0')}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-
-        {/* Body */}
-        <div className="min-h-0 flex-1 space-y-7 overflow-y-auto p-6">
-          <section aria-label="Security signals">
-            <div
-              className={cx(
-                'flex divide-x overflow-hidden rounded-xl border',
-                t.hairline,
-                t.divide
-              )}
-            >
-              {signal(
-                user.mfa_enabled ? ShieldCheck : ShieldAlert,
-                'Multi-factor',
-                user.mfa_enabled ? 'Enabled' : 'Disabled',
-                user.mfa_enabled ? 'success' : 'warning'
-              )}
-              {signal(
-                user.email_verified ? CheckCircle2 : AlertTriangle,
-                'Email',
-                user.email_verified ? 'Verified' : 'Unverified',
-                user.email_verified ? 'success' : 'warning'
-              )}
-              {signal(
-                attempts > 0 ? AlertTriangle : CheckCircle2,
-                'Failed logins',
-                String(attempts),
-                attempts > 0 ? 'warning' : 'neutral'
-              )}
-            </div>
-          </section>
-
-          <section>
-            {sectionTitle('Profile')}
-            <dl className={cx('divide-y', t.divide)}>
-              {row('Username', user.username)}
-              {row(
-                'Email',
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="break-all">{user.email_id}</span>
-                  <button
-                    type="button"
-                    onClick={copyEmail}
-                    aria-label="Copy email address"
-                    className={cx(
-                      'grid h-6 w-6 shrink-0 place-items-center rounded-md transition-colors',
-                      t.muted,
-                      t.hover,
-                      t.focus
-                    )}
-                  >
-                    {copied ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-500" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </span>
-              )}
-              {row('Role', user.user_roles)}
-              {row('User status', user.user_status)}
-              {row('Account status', user.account_status)}
-              {row(
-                'Sensitive data',
-                <Pill
-                  tone={canViewSensitive ? 'success' : 'neutral'}
-                  icon={canViewSensitive ? ShieldCheck : ShieldAlert}
-                >
-                  {canViewSensitive ? 'Allowed' : 'Blocked'}
-                </Pill>
-              )}
-            </dl>
-          </section>
-
-          <section>
-            {sectionTitle('Activity')}
-            <dl className={cx('divide-y', t.divide)}>
-              {row('Last login', fmtDateTime(user.last_login) ?? 'Never')}
-              {row(
-                'Last password change',
-                fmtDateTime(user.last_password_change)
-              )}
-              {row('Created', fmtDateTime(user.created_at))}
-            </dl>
-          </section>
-
-          <section>
-            {sectionTitle('Manage access')}
-            <ul className="-mx-2 mt-1">
-              {manage.map((kind) => {
-                const m = ACTION_META[kind];
-                const Icon = m.icon;
-                return (
-                  <li key={kind}>
-                    <button
-                      type="button"
-                      onClick={() => onAction(kind, user)}
-                      className={cx(
-                        'group flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors',
-                        t.hover,
-                        t.focus
-                      )}
-                    >
-                      <span
-                        className={cx(
-                          'grid h-9 w-9 shrink-0 place-items-center rounded-lg ring-1 ring-inset',
-                          toneCls(dark, m.tone)
-                        )}
-                      >
-                        <Icon className="h-4 w-4" aria-hidden />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span
-                          className={cx('block text-sm font-medium', t.strong)}
-                        >
-                          {m.label}
-                        </span>
-                        <span className={cx('block text-xs', t.muted)}>
-                          {m.hint}
-                        </span>
-                      </span>
-                      <ChevronRight
-                        className={cx(
-                          'h-4 w-4 transition-transform group-hover:translate-x-0.5',
-                          t.muted
-                        )}
-                        aria-hidden
-                      />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-
-          <section
-            className={cx(
-              'rounded-xl border p-4',
-              dark
-                ? 'border-rose-400/25 bg-rose-400/5'
-                : 'border-rose-200 bg-rose-50/60'
-            )}
-          >
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div
-                  className={cx(
-                    'text-sm font-semibold',
-                    dark ? 'text-rose-200' : 'text-rose-800'
-                  )}
-                >
-                  Delete this user
-                </div>
-                <p className={cx('mt-0.5 text-xs', t.muted)}>
-                  Permanently removes the account. This can’t be undone.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => onAction('delete', user)}
-                className={cx(
-                  btnCls(dark, 'secondary', 'sm'),
-                  dark
-                    ? '!text-rose-300 hover:!bg-rose-500/10'
-                    : '!text-rose-700 hover:!bg-rose-100'
-                )}
-              >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                Delete
-              </button>
-            </div>
-          </section>
-        </div>
-
-        {/* Sticky footer */}
-        <footer
+        <motion.aside
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Details for ${user.full_name}`}
+          tabIndex={-1}
+          initial={reduce ? { opacity: 0 } : { x: '100%' }}
+          animate={reduce ? { opacity: 1 } : { x: 0 }}
+          exit={reduce ? { opacity: 0 } : { x: '100%' }}
+          transition={{ type: 'spring', damping: 34, stiffness: 340 }}
           className={cx(
-            'flex gap-2 border-t px-6 py-4',
-            t.hairline,
-            dark ? 'bg-slate-900' : 'bg-white'
+            'flex h-full w-full flex-col overflow-hidden shadow-2xl outline-none sm:max-w-[480px]',
+            t.panel
           )}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            className={btnCls(dark, 'secondary')}
+          {/* Header (fixed) */}
+          <header className="shrink-0 px-6 pt-6">
+            <div className="flex items-start gap-4">
+              <Avatar name={user.full_name} size="lg" />
+              <div className="min-w-0 flex-1">
+                <h2 className="truncate text-lg font-semibold tracking-tight">
+                  {user.full_name}
+                </h2>
+                <p className={cx('truncate text-sm', t.muted)}>
+                  {user.username}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  <Pill tone={status.tone} dot>
+                    {status.label}
+                  </Pill>
+                  <Pill>{user.user_roles}</Pill>
+                </div>
+              </div>
+              <button
+                ref={closeRef}
+                type="button"
+                onClick={onClose}
+                aria-label="Close details"
+                className={cx(btnCls(dark, 'ghost', 'sm'), '!h-8 !w-8 !px-0')}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {tabs.length > 1 && (
+              <div
+                role="tablist"
+                aria-label="User sections"
+                onKeyDown={onTabKey}
+                className={cx(
+                  '-mx-6 mt-5 flex gap-6 border-b px-6',
+                  t.hairline
+                )}
+              >
+                {tabs.map((x) => {
+                  const active = tab === x.id;
+                  return (
+                    <button
+                      key={x.id}
+                      id={`um-tab-${x.id}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      aria-controls={`um-panel-${x.id}`}
+                      tabIndex={active ? 0 : -1}
+                      onClick={() => selectTab(x.id)}
+                      className={cx(
+                        '-mb-px border-b-2 pb-3 text-sm font-medium transition-colors',
+                        t.focus,
+                        active
+                          ? dark
+                            ? 'border-teal-400 text-white'
+                            : 'border-teal-600 text-slate-900'
+                          : cx('border-transparent', t.muted)
+                      )}
+                    >
+                      {x.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {tabs.length <= 1 && (
+              <div className={cx('-mx-6 mt-5 border-b', t.hairline)} />
+            )}
+          </header>
+
+          {/* Body – the only scrolling region, independent of the page/table */}
+          <div
+            ref={scrollRef}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6"
           >
-            Close
-          </button>
-          <button
-            type="button"
-            onClick={() => onEdit(user)}
-            className={cx(btnCls(dark, 'primary'), 'flex-1')}
+            {tab === 'details' && (
+              <div
+                role="tabpanel"
+                id="um-panel-details"
+                aria-labelledby="um-tab-details"
+                className="space-y-7"
+              >
+                <section aria-label="Security signals">
+                  <div
+                    className={cx(
+                      'flex divide-x overflow-hidden rounded-xl border',
+                      t.hairline,
+                      t.divide
+                    )}
+                  >
+                    {signal(
+                      user.mfa_enabled ? ShieldCheck : ShieldAlert,
+                      'Multi-factor',
+                      user.mfa_enabled ? 'Enabled' : 'Disabled',
+                      user.mfa_enabled ? 'success' : 'warning'
+                    )}
+                    {signal(
+                      user.email_verified ? CheckCircle2 : AlertTriangle,
+                      'Email',
+                      user.email_verified ? 'Verified' : 'Unverified',
+                      user.email_verified ? 'success' : 'warning'
+                    )}
+                    {signal(
+                      attempts > 0 ? AlertTriangle : CheckCircle2,
+                      'Failed logins',
+                      String(attempts),
+                      attempts > 0 ? 'warning' : 'neutral'
+                    )}
+                  </div>
+                </section>
+
+                <section>
+                  {sectionTitle('Profile')}
+                  <dl className={cx('divide-y', t.divide)}>
+                    {row('Username', user.username)}
+                    {row(
+                      'Email',
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="break-all">{user.email_id}</span>
+                        <button
+                          type="button"
+                          onClick={copyEmail}
+                          aria-label="Copy email address"
+                          className={cx(
+                            'grid h-6 w-6 shrink-0 place-items-center rounded-md transition-colors',
+                            t.muted,
+                            t.hover,
+                            t.focus
+                          )}
+                        >
+                          {copied ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-500" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </span>
+                    )}
+                    {row('Role', user.user_roles)}
+                    {row('User status', user.user_status)}
+                    {row('Account status', user.account_status)}
+                    {row(
+                      'Sensitive data',
+                      <Pill
+                        tone={canViewSensitive ? 'success' : 'neutral'}
+                        icon={canViewSensitive ? ShieldCheck : ShieldAlert}
+                      >
+                        {canViewSensitive ? 'Allowed' : 'Blocked'}
+                      </Pill>
+                    )}
+                  </dl>
+                </section>
+
+                <section>
+                  {sectionTitle('Activity')}
+                  <dl className={cx('divide-y', t.divide)}>
+                    {row('Last login', fmtDateTime(user.last_login) ?? 'Never')}
+                    {row(
+                      'Last password change',
+                      fmtDateTime(user.last_password_change)
+                    )}
+                    {row('Created', fmtDateTime(user.created_at))}
+                  </dl>
+                </section>
+
+                <section>
+                  {sectionTitle('Manage access')}
+                  <ul className="-mx-2 mt-1">
+                    {manage.map((kind) => {
+                      const m = ACTION_META[kind];
+                      const Icon = m.icon;
+                      return (
+                        <li key={kind}>
+                          <button
+                            type="button"
+                            onClick={() => onAction(kind, user)}
+                            className={cx(
+                              'group flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors',
+                              t.hover,
+                              t.focus
+                            )}
+                          >
+                            <span
+                              className={cx(
+                                'grid h-9 w-9 shrink-0 place-items-center rounded-lg ring-1 ring-inset',
+                                toneCls(dark, m.tone)
+                              )}
+                            >
+                              <Icon className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span
+                                className={cx(
+                                  'block text-sm font-medium',
+                                  t.strong
+                                )}
+                              >
+                                {m.label}
+                              </span>
+                              <span className={cx('block text-xs', t.muted)}>
+                                {m.hint}
+                              </span>
+                            </span>
+                            <ChevronRight
+                              className={cx(
+                                'h-4 w-4 transition-transform group-hover:translate-x-0.5',
+                                t.muted
+                              )}
+                              aria-hidden
+                            />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+
+                <section
+                  className={cx(
+                    'rounded-xl border p-4',
+                    dark
+                      ? 'border-rose-400/25 bg-rose-400/5'
+                      : 'border-rose-200 bg-rose-50/60'
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div
+                        className={cx(
+                          'text-sm font-semibold',
+                          dark ? 'text-rose-200' : 'text-rose-800'
+                        )}
+                      >
+                        Delete this user
+                      </div>
+                      <p className={cx('mt-0.5 text-xs', t.muted)}>
+                        Permanently removes the account. This can’t be undone.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onAction('delete', user)}
+                      className={cx(
+                        btnCls(dark, 'secondary', 'sm'),
+                        dark
+                          ? '!text-rose-300 hover:!bg-rose-500/10'
+                          : '!text-rose-700 hover:!bg-rose-100'
+                      )}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                      Delete
+                    </button>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* Mounted on first visit only, then kept (hidden) so state is not refetched */}
+            {loadEventLogs && logsOpened && (
+              <div
+                role="tabpanel"
+                id="um-panel-logs"
+                aria-labelledby="um-tab-logs"
+                hidden={tab !== 'logs'}
+              >
+                <EventLogsPanel userId={user.id} load={loadEventLogs} />
+              </div>
+            )}
+          </div>
+
+          {/* Footer (fixed) */}
+          <footer
+            className={cx(
+              'flex shrink-0 gap-2 border-t px-6 py-4',
+              t.hairline,
+              dark ? 'bg-slate-900' : 'bg-white'
+            )}
           >
-            <Pencil className="h-4 w-4" aria-hidden />
-            Edit details
-          </button>
-        </footer>
-      </motion.aside>
-    </motion.div>
+            <button
+              type="button"
+              onClick={onClose}
+              className={btnCls(dark, 'secondary')}
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => onEdit(user)}
+              className={cx(btnCls(dark, 'primary'), 'flex-1')}
+            >
+              <Pencil className="h-4 w-4" aria-hidden />
+              Edit details
+            </button>
+          </footer>
+        </motion.aside>
+      </motion.div>
+    </Portal>
   );
 };
 
 export const UserDetailsDrawer: React.FC<DrawerProps> = (props) => (
   <AnimatePresence>
-    {props.user && <DrawerPanel key="drawer" {...props} user={props.user} />}
+    {props.user && (
+      <DrawerPanel key={props.user.id} {...props} user={props.user} />
+    )}
   </AnimatePresence>
 );
 
@@ -1067,7 +1503,7 @@ const ConfirmPanel: React.FC<{
       onClose={onClose}
       locked={busy}
       width="sm:max-w-[440px]"
-      z="z-[60]"
+      z="z-[90]"
       // Destructive actions start on Cancel so Enter can't delete by accident.
       initialFocus={destructive ? cancelRef : confirmRef}
     >

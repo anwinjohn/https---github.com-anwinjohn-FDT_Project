@@ -39,6 +39,7 @@ import type { LucideIcon } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import * as XLSX from 'xlsx';
 import { useNotifications } from '../notifications';
+import apiClient from '../../utils/apiClient';
 import { appConfig as config } from '../../config/runtime-config';
 import {
   setUserStatus,
@@ -63,6 +64,7 @@ import {
   ui,
   useDark,
   type UserActionKind,
+  type EventLogLoader,
 } from './UserManagementDialogs';
 
 interface UserOnboardingProps {
@@ -138,6 +140,46 @@ const writeUsersWorkbook = (
     wb,
     `${filePrefix}_${new Date().toISOString().split('T')[0]}.xlsx`
   );
+};
+
+/**
+ * Event logs for one user. Called ONLY when the "Event logs" tab is opened in
+ * the drawer (never on row click / drawer open) and paged to keep payloads small.
+ *
+ * ASSUMPTION – confirm against your backend:
+ *   GET /admin/users/{id}/event-logs?page=1&page_size=15
+ *   -> { data: [{ id, event_type, description, status, ip_address, created_at }],
+ *        has_next? , total_pages? }
+ * Field aliases below tolerate common naming variations. If you prefer, move
+ * this into services/userManagementService.ts next to the other user calls.
+ */
+const fetchUserEventLogs: EventLogLoader = async (userId, page, pageSize) => {
+  const res = await apiClient.get(
+    `/admin/users/${encodeURIComponent(userId)}/event-logs`,
+    { params: { page, page_size: pageSize } }
+  );
+  const body = res.data ?? {};
+  const rows: any[] = Array.isArray(body)
+    ? body
+    : (body.data ?? body.items ?? body.results ?? []);
+
+  const items = rows.map((r, i) => ({
+    id: String(r.id ?? r.event_id ?? `${page}-${i}`),
+    event_type: String(r.event_type ?? r.action ?? r.event ?? 'event'),
+    description: r.description ?? r.message ?? null,
+    status: r.status ?? r.result ?? null,
+    ip_address: r.ip_address ?? r.ip ?? null,
+    created_at: r.created_at ?? r.timestamp ?? r.event_time,
+  }));
+
+  const hasMore =
+    typeof body.has_next === 'boolean'
+      ? body.has_next
+      : body.total_pages
+        ? page < body.total_pages
+        : rows.length === pageSize;
+
+  return { items, hasMore };
 };
 
 const pageWindow = (page: number, total: number) => {
@@ -1642,6 +1684,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
           handleEditUser(u);
         }}
         onAction={(kind, u) => requestAction(kind, u)}
+        loadEventLogs={fetchUserEventLogs}
       />
 
       <EditUserModal
