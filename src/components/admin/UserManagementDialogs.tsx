@@ -29,6 +29,7 @@ import {
   CheckCircle2,
   Activity,
   RefreshCw,
+  ChevronDown,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
@@ -43,6 +44,39 @@ export type UserActionKind =
   | 'delete'
   | 'sensitive_enable'
   | 'sensitive_disable';
+
+export interface RoleOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+export type RolesStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+/** Fields the edit dialog can submit. Role / mobile are only sent when changed. */
+export interface UserEditPatch {
+  full_name: string;
+  email_id: string;
+  user_roles?: string;
+  mobile_number?: string;
+}
+
+interface MachineInfo {
+  UserName: string;
+  Domain: string;
+  Identity: string;
+  MachineName: string;
+  Network: string;
+}
+
+/**
+ * Mobile number lives under `mobile_number`. If your API / type uses another
+ * name (e.g. `mobile`, `phone_number`) change it here and in UserEditPatch.
+ */
+export const getMobile = (u: UserOnboardingData): string => {
+  const v = (u as UserOnboardingData & { mobile_number?: string | null })
+    .mobile_number;
+  return v ?? '';
+};
 
 /* =============================================================== */
 /* Design tokens & shared primitives (also used by the main screen) */
@@ -457,6 +491,7 @@ export interface UserEventLog {
   status?: string | null;
   ip_address?: string | null;
   created_at: string;
+  host_name?: string | null;
 }
 
 export type EventLogLoader = (
@@ -719,7 +754,7 @@ const EventLogsPanel: React.FC<{ userId: string; load: EventLogLoader }> = ({
                             <span
                               className={cx('text-xs tabular-nums', t.muted)}
                             >
-                              IP {e.ip_address}
+                              IP {e.ip_address} {' | '} {e.host_name}
                             </span>
                           )}
                         </div>
@@ -1045,9 +1080,15 @@ const DrawerPanel: React.FC<DrawerProps & { user: UserOnboardingData }> = ({
                         </button>
                       </span>
                     )}
+                    {row('Mobile', getMobile(user) || undefined)}
                     {row('Role', user.user_roles)}
                     {row('User status', user.user_status)}
                     {row('Account status', user.account_status)}
+                    {(user.account_locked || user.account_locked_until) &&
+                      row(
+                        'Locked until',
+                        fmtDateTime(user.account_locked_until)
+                      )}
                     {row(
                       'Sensitive data',
                       <Pill
@@ -1221,7 +1262,7 @@ export const UserDetailsDrawer: React.FC<DrawerProps> = (props) => (
 const inputCls = (dark: boolean, invalid: boolean) =>
   cx(
     'h-10 w-full rounded-lg border px-3 text-sm outline-none transition-shadow',
-    'focus:ring-2',
+    'focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60',
     invalid
       ? 'border-rose-400 focus:ring-rose-400/40'
       : dark
@@ -1232,26 +1273,73 @@ const inputCls = (dark: boolean, invalid: boolean) =>
       : 'bg-white text-slate-900 placeholder-slate-400'
   );
 
+/** Strip visual separators so "+971 50-123 4567" and "+971501234567" compare equal. */
+const normalizeMobile = (v: string) => v.replace(/[\s\-().]/g, '');
+const MOBILE_RE = /^\+?\d{7,15}$/;
+
 const EditForm: React.FC<{
   user: UserOnboardingData;
   saving: boolean;
   error?: string | null;
+  roles: RoleOption[];
+  rolesStatus: RolesStatus;
+  onRetryRoles: () => void;
   onClose: () => void;
-  onSave: (
-    u: UserOnboardingData,
-    patch: { full_name: string; email_id: string }
-  ) => void;
-}> = ({ user, saving, error, onClose, onSave }) => {
+  onSave: (u: UserOnboardingData, patch: UserEditPatch) => void;
+}> = ({
+  user,
+  saving,
+  error,
+  roles,
+  rolesStatus,
+  onRetryRoles,
+  onClose,
+  onSave,
+}) => {
   const dark = useDark();
   const t = ui(dark);
   const nameRef = useRef<HTMLInputElement>(null);
+
+  const originalMobile = getMobile(user);
   const [fullName, setFullName] = useState(user.full_name);
   const [email, setEmail] = useState(user.email_id);
+  const [mobile, setMobile] = useState(originalMobile);
+  const [role, setRole] = useState(user.user_roles);
   const [nameErr, setNameErr] = useState<string | null>(null);
   const [emailErr, setEmailErr] = useState<string | null>(null);
+  const [mobileErr, setMobileErr] = useState<string | null>(null);
+  const [askDiscard, setAskDiscard] = useState(false);
 
+  const mobileChanged =
+    normalizeMobile(mobile) !== normalizeMobile(originalMobile);
+  const roleChanged = role !== user.user_roles;
   const dirty =
-    fullName.trim() !== user.full_name || email.trim() !== user.email_id;
+    fullName.trim() !== user.full_name ||
+    email.trim() !== user.email_id ||
+    mobileChanged ||
+    roleChanged;
+
+  // Make sure the user's current role is always selectable, even if the
+  // roles API doesn't return it (e.g. a legacy or retired role).
+  const roleOptions = useMemo(
+    () =>
+      roles.some((r) => r.value === user.user_roles)
+        ? roles
+        : [{ value: user.user_roles, label: user.user_roles }, ...roles],
+    [roles, user.user_roles]
+  );
+  const selectedRole = roleOptions.find((r) => r.value === role);
+  const currentRole = roleOptions.find((r) => r.value === user.user_roles);
+
+  const requestClose = () => {
+    if (saving) return;
+    if (askDiscard) {
+      setAskDiscard(false);
+      return;
+    }
+    if (dirty) setAskDiscard(true);
+    else onClose();
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1264,26 +1352,60 @@ const EditForm: React.FC<{
       setEmailErr('Enter a valid email address.');
       ok = false;
     }
+    const cleanMobile = normalizeMobile(mobile);
+    if (!cleanMobile && originalMobile) {
+      setMobileErr('A mobile number is required once one has been added.');
+      ok = false;
+    } else if (cleanMobile && !MOBILE_RE.test(cleanMobile)) {
+      setMobileErr(
+        'Enter 7–15 digits, with the country code, e.g. +971501234567.'
+      );
+      ok = false;
+    }
     if (!ok) return;
-    onSave(user, { full_name: fullName.trim(), email_id: email.trim() });
+
+    const patch: UserEditPatch = {
+      full_name: fullName.trim(),
+      email_id: email.trim(),
+    };
+    if (roleChanged) patch.user_roles = role;
+    if (mobileChanged && cleanMobile) patch.mobile_number = cleanMobile;
+    onSave(user, patch);
   };
 
-  const label = (id: string, text: string) => (
+  const label = (id: string, text: string, optional?: boolean) => (
     <label
       htmlFor={id}
-      className={cx('mb-1.5 block text-sm font-medium', t.strong)}
+      className={cx(
+        'mb-1.5 flex items-baseline gap-2 text-sm font-medium',
+        t.strong
+      )}
     >
       {text}
+      {optional && (
+        <span className={cx('text-xs font-normal', t.muted)}>Optional</span>
+      )}
     </label>
+  );
+
+  const fieldError = (id: string, msg: string | null) =>
+    msg && (
+      <p id={id} role="alert" className="mt-1.5 text-xs text-rose-500">
+        {msg}
+      </p>
+    );
+
+  const groupTitle = (text: string) => (
+    <h3 className={cx('text-sm font-semibold', t.strong)}>{text}</h3>
   );
 
   return (
     <Dialog
       label={`Edit ${user.full_name}`}
-      onClose={onClose}
+      onClose={requestClose}
       locked={saving}
       initialFocus={nameRef}
-      width="sm:max-w-[480px]"
+      width="sm:max-w-[520px]"
     >
       <form
         onSubmit={submit}
@@ -1300,67 +1422,194 @@ const EditForm: React.FC<{
           <div className="min-w-0">
             <h2 className="text-base font-semibold">Edit user</h2>
             <p className={cx('truncate text-sm', t.muted)}>
-              {user.username} · {user.user_roles}
+              {user.username} · {currentRole?.label ?? user.user_roles}
             </p>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-6">
-          <div>
-            {label('um-full-name', 'Full name')}
-            <input
-              ref={nameRef}
-              id="um-full-name"
-              autoComplete="off"
-              className={inputCls(dark, !!nameErr)}
-              value={fullName}
-              aria-invalid={!!nameErr}
-              aria-describedby={nameErr ? 'um-name-err' : undefined}
-              onChange={(e) => {
-                setFullName(e.target.value);
-                setNameErr(null);
-              }}
-            />
-            {nameErr && (
-              <p
-                id="um-name-err"
-                role="alert"
-                className="mt-1.5 text-xs text-rose-500"
-              >
-                {nameErr}
-              </p>
-            )}
-          </div>
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6">
+          {/* Personal details */}
+          <section className="space-y-4">
+            {groupTitle('Personal details')}
 
-          <div>
-            {label('um-email', 'Email')}
-            <input
-              id="um-email"
-              type="email"
-              autoComplete="off"
-              className={inputCls(dark, !!emailErr)}
-              value={email}
-              aria-invalid={!!emailErr}
-              aria-describedby={emailErr ? 'um-email-err' : 'um-email-hint'}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                setEmailErr(null);
-              }}
-            />
-            {emailErr ? (
-              <p
-                id="um-email-err"
-                role="alert"
-                className="mt-1.5 text-xs text-rose-500"
+            <div>
+              {label('um-full-name', 'Full name')}
+              <input
+                ref={nameRef}
+                id="um-full-name"
+                autoComplete="off"
+                className={inputCls(dark, !!nameErr)}
+                value={fullName}
+                aria-invalid={!!nameErr}
+                aria-describedby={nameErr ? 'um-name-err' : undefined}
+                onChange={(e) => {
+                  setFullName(e.target.value);
+                  setNameErr(null);
+                }}
+              />
+              {fieldError('um-name-err', nameErr)}
+            </div>
+
+            <div>
+              {label('um-email', 'Email')}
+              <input
+                id="um-email"
+                type="email"
+                autoComplete="off"
+                className={inputCls(dark, !!emailErr)}
+                value={email}
+                aria-invalid={!!emailErr}
+                aria-describedby={emailErr ? 'um-email-err' : 'um-email-hint'}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setEmailErr(null);
+                }}
+              />
+              {emailErr ? (
+                fieldError('um-email-err', emailErr)
+              ) : (
+                <p id="um-email-hint" className={cx('mt-1.5 text-xs', t.muted)}>
+                  Password reset links are sent to this address.
+                </p>
+              )}
+            </div>
+
+            <div>
+              {label('um-mobile', 'Mobile number', !originalMobile)}
+              <input
+                id="um-mobile"
+                type="tel"
+                inputMode="tel"
+                autoComplete="off"
+                placeholder="+971 50 123 4567"
+                className={cx(inputCls(dark, !!mobileErr), 'tabular-nums')}
+                value={getMobile(user)}
+                aria-invalid={!!mobileErr}
+                aria-describedby={
+                  mobileErr ? 'um-mobile-err' : 'um-mobile-hint'
+                }
+                onChange={(e) => {
+                  setMobile(e.target.value);
+                  setMobileErr(null);
+                }}
+              />
+              {mobileErr ? (
+                fieldError('um-mobile-err', mobileErr)
+              ) : (
+                <p
+                  id="um-mobile-hint"
+                  className={cx('mt-1.5 text-xs', t.muted)}
+                >
+                  Include the country code.
+                </p>
+              )}
+            </div>
+          </section>
+
+          <div className={cx('border-t', t.hairline)} />
+
+          {/* Access */}
+          <section className="space-y-3">
+            {groupTitle('Access')}
+
+            <div>
+              {label('um-role', 'Role')}
+
+              {rolesStatus === 'loading' || rolesStatus === 'idle' ? (
+                <div
+                  role="status"
+                  className={cx(
+                    'flex h-10 items-center gap-2 rounded-lg border px-3 text-sm',
+                    t.hairline,
+                    t.subtle,
+                    t.muted
+                  )}
+                >
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  Loading roles…
+                </div>
+              ) : (
+                <div className="relative">
+                  <select
+                    id="um-role"
+                    value={role}
+                    disabled={rolesStatus === 'error' || saving}
+                    onChange={(e) => setRole(e.target.value)}
+                    aria-describedby="um-role-hint"
+                    className={cx(
+                      inputCls(dark, false),
+                      'appearance-none pr-9'
+                    )}
+                  >
+                    {roleOptions.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    aria-hidden
+                    className={cx(
+                      'pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2',
+                      t.muted
+                    )}
+                  />
+                </div>
+              )}
+
+              {rolesStatus === 'error' && (
+                <div
+                  role="alert"
+                  className={cx(
+                    'mt-2 flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm ring-1 ring-inset',
+                    toneCls(dark, 'danger')
+                  )}
+                >
+                  <span>We couldn’t load the role list.</span>
+                  <button
+                    type="button"
+                    onClick={onRetryRoles}
+                    className={btnCls(dark, 'secondary', 'sm')}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {rolesStatus === 'ready' && (
+                <p id="um-role-hint" className={cx('mt-1.5 text-xs', t.muted)}>
+                  {selectedRole?.description ??
+                    'Roles control which parts of the platform this user can access.'}
+                </p>
+              )}
+            </div>
+
+            {roleChanged && (
+              <div
+                role="status"
+                className={cx(
+                  'flex items-start gap-2.5 rounded-xl px-3.5 py-3 text-sm ring-1 ring-inset',
+                  toneCls(dark, 'warning')
+                )}
               >
-                {emailErr}
-              </p>
-            ) : (
-              <p id="um-email-hint" className={cx('mt-1.5 text-xs', t.muted)}>
-                Password reset links are sent to this address.
-              </p>
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                <div>
+                  <div className="font-medium">
+                    {currentRole?.label ?? user.user_roles}
+                    <span aria-hidden className="mx-1.5 opacity-60">
+                      →
+                    </span>
+                    <span className="sr-only"> changes to </span>
+                    {selectedRole?.label ?? role}
+                  </div>
+                  <p className="mt-0.5 text-xs opacity-90">
+                    This changes what the user can access. Make sure the new
+                    role is approved before saving.
+                  </p>
+                </div>
+              </div>
             )}
-          </div>
+          </section>
 
           {error && (
             <div
@@ -1376,24 +1625,62 @@ const EditForm: React.FC<{
           )}
         </div>
 
-        <DialogFooter>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className={btnCls(dark, 'secondary')}
+        {askDiscard ? (
+          <div
+            role="alertdialog"
+            aria-label="Discard unsaved changes"
+            className={cx(
+              'flex flex-col gap-3 border-t px-6 py-4 sm:flex-row sm:items-center sm:justify-between',
+              t.hairline,
+              t.subtle
+            )}
           >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={saving || !dirty}
-            className={btnCls(dark, 'primary')}
-          >
-            {saving && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
-            {saving ? 'Saving…' : 'Save changes'}
-          </button>
-        </DialogFooter>
+            <p className={cx('text-sm font-medium', t.strong)}>
+              Discard your unsaved changes?
+            </p>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={onClose}
+                className={cx(
+                  btnCls(dark, 'secondary'),
+                  dark ? '!text-rose-300' : '!text-rose-700'
+                )}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setAskDiscard(false)}
+                className={btnCls(dark, 'primary')}
+              >
+                Keep editing
+              </button>
+            </div>
+          </div>
+        ) : (
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={requestClose}
+              disabled={saving}
+              className={btnCls(dark, 'secondary')}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !dirty || rolesStatus === 'loading'}
+              className={btnCls(dark, 'primary')}
+            >
+              {saving && (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              )}
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </DialogFooter>
+        )}
       </form>
     </Dialog>
   );
@@ -1403,23 +1690,14 @@ export const EditUserModal: React.FC<{
   user: UserOnboardingData | null;
   saving: boolean;
   error?: string | null;
+  roles: RoleOption[];
+  rolesStatus: RolesStatus;
+  onRetryRoles: () => void;
   onClose: () => void;
-  onSave: (
-    u: UserOnboardingData,
-    patch: { full_name: string; email_id: string }
-  ) => void;
-}> = ({ user, saving, error, onClose, onSave }) => (
+  onSave: (u: UserOnboardingData, patch: UserEditPatch) => void;
+}> = ({ user, ...rest }) => (
   <AnimatePresence>
-    {user && (
-      <EditForm
-        key={user.id}
-        user={user}
-        saving={saving}
-        error={error}
-        onClose={onClose}
-        onSave={onSave}
-      />
-    )}
+    {user && <EditForm key={user.id} user={user} {...rest} />}
   </AnimatePresence>
 );
 

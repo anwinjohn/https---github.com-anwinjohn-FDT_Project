@@ -3,6 +3,7 @@ import CryptoJS from 'crypto-js';
 import { appConfig as config, securityConfig } from '../config/runtime-config';
 import { logger } from './logger';
 import { jwtDecode } from 'jwt-decode';
+import { getLocalMachineInfo } from './machineInfoStore';
 
 // Simplified Security Configuration
 const SECURITY_CONFIG = {
@@ -58,6 +59,19 @@ class SecureApiClient {
     this.axiosInstance.interceptors.request.use(
       async (request) => {
         try {
+          const machineInfo = getLocalMachineInfo();
+          if (machineInfo) {
+            // The header also covers body-less requests such as GET and DELETE.
+            request.headers['X-Machine-Info'] = this.encryptRequest(JSON.stringify(machineInfo));
+          }
+          else{
+            console.log('Machine info null or empty : ', machineInfo);
+          }
+
+          // A 401 retry passes through this interceptor with an already
+          // encrypted body. Do not encrypt the envelope a second time.
+          // if ((request as any)._machineInfoEnriched) return request;
+
           let token = localStorage.getItem('authToken');
           if (token) {
             if (this.isTokenExpired(token)) {
@@ -68,8 +82,22 @@ class SecureApiClient {
           request.headers['X-Timestamp'] = Math.floor(
             Date.now() / 1000
           ).toString();
-          if (request.data) {
-            const originalData = JSON.stringify(request.data);
+          if (request.data !== undefined && request.data !== null) {
+            const body = request.data;
+            let payload: any = body;
+            if (typeof body === 'string') {
+              try {
+                payload = JSON.parse(body);
+              } catch {
+                payload = { payload: body };
+              }
+            }
+            // const enrichedPayload = machineInfo
+            //   ? payload && typeof payload === 'object' && !Array.isArray(payload)
+            //     ? { ...payload, machine_info: machineInfo }
+            //     : { payload, machine_info: machineInfo }
+            //   : payload;
+            const originalData = JSON.stringify(payload);
             if (config.logging.console_enabled) {
               console.log(originalData);
             }
@@ -80,6 +108,7 @@ class SecureApiClient {
             }
             request.data = { data: encryptedData };
           }
+          (request as any)._machineInfoEnriched = true;
           return request;
         } catch (error) {
           console.error('Request interceptor error:', error);
@@ -297,6 +326,7 @@ class SecureApiClient {
     localStorage.removeItem('userData');
     localStorage.removeItem('lastActivity');
     localStorage.removeItem('sessionWarningShown');
+    localStorage.removeItem('localMachineInfo');
     // Redirect to login
     window.location.href = '/login';
   }
@@ -308,7 +338,7 @@ class SecureApiClient {
   ): Promise<ApiResponse<T>> {
     try {
       if (config.logging.console_enabled) {
-        console.log('apiClient', 'post', `Posting to ${url} | ${configs}`);
+        console.log('apiClient', 'GET', `Posting to ${url} | ${configs}`);
       }
       const response: AxiosResponse<T> = await this.axiosInstance.get(
         url,
@@ -332,7 +362,7 @@ class SecureApiClient {
       if (config.logging.console_enabled) {
         console.log(
           'apiClient',
-          'post',
+          'POST',
           `Posting to ${url} with data: ${JSON.stringify(data)}`
         );
       }
@@ -365,7 +395,7 @@ class SecureApiClient {
       if (config.logging.console_enabled) {
         console.log(
           'apiClient',
-          'post',
+          'PUT',
           `Posting to ${url} with data: ${JSON.stringify(data)}`
         );
       }
@@ -389,7 +419,7 @@ class SecureApiClient {
   ): Promise<ApiResponse<T>> {
     try {
       if (config.logging.console_enabled) {
-        console.log('apiClient', 'post', `Posting to ${url}`);
+        console.log('apiClient', 'DELETE', `Posting to ${url}`);
       }
       const response: AxiosResponse<T> = await this.axiosInstance.delete(
         url,

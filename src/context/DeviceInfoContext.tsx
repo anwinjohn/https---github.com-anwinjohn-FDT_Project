@@ -1,42 +1,75 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
-import { fetchLocalMachineInfo } from "../hooks/useLoginServices";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from 'react';
+import { fetchLocalMachineInfo } from '../hooks/useLoginServices';
+import {
+  getLocalMachineInfo,
+  setLocalMachineInfo,
+  type LocalMachineInfo,
+} from '../utils/machineInfoStore';
 
-const LocalMachineContext = createContext(null);
+export type { LocalMachineInfo } from '../utils/machineInfoStore';
 
-export const LocalMachineProvider = ({ children }) => {
-    const [machineInfo, setMachineInfo] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [available, setAvailable] = useState(false);
+interface LocalMachineContextValue {
+  machineInfo: LocalMachineInfo | null;
+  loading: boolean;
+  available: boolean;
+  refreshMachineInfo: () => Promise<LocalMachineInfo | null>;
+}
 
-    const initializedRef = useRef(false);
+const LocalMachineContext = createContext<LocalMachineContextValue | undefined>(undefined);
 
-    useEffect(() => {
-        if (initializedRef.current) return;
-        initializedRef.current = true;
+export const LocalMachineProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const [machineInfo, setMachineInfo] = useState<LocalMachineInfo | null>(getLocalMachineInfo);
+  const [loading, setLoading] = useState(true);
+  const [available, setAvailable] = useState(Boolean(getLocalMachineInfo()));
 
-        const loadLocalInfo = async () => {
-            const result = await fetchLocalMachineInfo();
-            if (result.success) {
-                setMachineInfo(result.data);
-                setAvailable(true);
+  const refreshMachineInfo = useCallback(async (): Promise<LocalMachineInfo | null> => {
+    setLoading(true);
+    try {
+      const result = await fetchLocalMachineInfo();
+      if (result.success && result.data) {
+        const freshInfo = result.data as LocalMachineInfo;
+        setMachineInfo(freshInfo);
+        setAvailable(true);
+        setLocalMachineInfo(freshInfo);
+        return freshInfo;
+      }
 
-            } else {
-                setAvailable(false);
-            }
+      // A temporarily unavailable local agent should not erase the last known device.
+      const cachedInfo = getLocalMachineInfo();
+      setMachineInfo(cachedInfo);
+      setAvailable(Boolean(cachedInfo));
+      return cachedInfo;
+    } catch {
+      const cachedInfo = getLocalMachineInfo();
+      setMachineInfo(cachedInfo);
+      setAvailable(Boolean(cachedInfo));
+      return cachedInfo;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-            setLoading(false);
-        };
+  useEffect(() => {
+    void refreshMachineInfo();
+  }, [refreshMachineInfo]);
 
-        loadLocalInfo();
-    }, []);
-
-    return (
-        <LocalMachineContext.Provider
-            value={{ machineInfo, loading, available }}
-        >
-            {children}
-        </LocalMachineContext.Provider>
-    );
+  return (
+    <LocalMachineContext.Provider value={{ machineInfo, loading, available, refreshMachineInfo }}>
+      {children}
+    </LocalMachineContext.Provider>
+  );
 };
 
-export const useLocalMachine = () => useContext(LocalMachineContext);
+export const useLocalMachine = (): LocalMachineContextValue => {
+  const context = useContext(LocalMachineContext);
+  if (!context) {
+    throw new Error('useLocalMachine must be used within LocalMachineProvider');
+  }
+  return context;
+};

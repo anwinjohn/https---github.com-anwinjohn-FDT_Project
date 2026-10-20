@@ -48,6 +48,7 @@ window.__SECURITY_CONFIG__ = {
       'X-Encrypted',
       'X-Client-Version',
       'X-Client-Type',
+      'X-Machine-Info',
     ],
   },
 };

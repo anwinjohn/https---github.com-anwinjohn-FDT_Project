@@ -6,20 +6,12 @@ import CryptoJS from 'crypto-js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Clock, RefreshCw } from 'lucide-react';
 import { add } from 'date-fns';
-
-
-interface MachineInfo {
-  UserName: string;
-  Domain: string;
-  Identity: string;
-  MachineName: string;
-  Network: string;
-}
+import type { LocalMachineInfo } from '../utils/machineInfoStore';
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: UserInfo | null;
-  login: (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: MachineInfo) => Promise<boolean>;
+  login: (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo) => Promise<boolean>;
   logout: () => void;
   loading: boolean;
   resetSessionTimer: () => void;
@@ -460,7 +452,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const login = async (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: MachineInfo): Promise<boolean> => {
+  const login = async (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo): Promise<boolean> => {
     try {
       // Clear any existing session data
       clearTimers();
@@ -487,9 +479,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Encrypted': 'true'
+          'X-Client-Version': config.app.version,
+          'X-Encrypted': 'true',
         },
-        body: JSON.stringify({ data: encryptedData })
+        body: JSON.stringify({ data: encryptedData }),
       });
 
       const responseData = await response.json();

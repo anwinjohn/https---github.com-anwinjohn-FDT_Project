@@ -12,6 +12,7 @@
  *  PUT    {base}/admin/users/:id/sensitive-data  -> { can_view_sensitive: boolean }
  */
 import apiClient from '../utils/apiClient';
+import type { LocalMachineInfo } from '../utils/machineInfoStore';
 
 export interface UserDetailsPayload {
   id: string;
@@ -44,12 +45,16 @@ export const updateUser = async (
 
 export const setUserStatus = async (
   userId: string,
-  newStatus: 'Active' | 'Inactive'
+  newStatus: 'Active' | 'Inactive',
+  updatedBy: string,
+  machineInfo?: LocalMachineInfo
 ) =>
   (
     await apiClient.post('/admin/users/update/status', {
       user_id: userId,
       new_status: newStatus,
+      updated_by: updatedBy,
+      machine_info: machineInfo ?? null,
     })
   ).data;
 

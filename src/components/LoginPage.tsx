@@ -29,7 +29,7 @@ import { useSystemSettings } from '../hooks/useSystemSettings';
 const LoginPage = () => {
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
-  const { machineInfo, loading, available } = useLocalMachine();
+  const { machineInfo, loading, refreshMachineInfo } = useLocalMachine();
   const [username, setUsername] = useState('');
   const [isReadOnly, setIsReadOnly] = useState(false);
   const {
@@ -40,8 +40,7 @@ const LoginPage = () => {
   const [isLDAPEnabled, setIsLDAPEnabled] = useState(false);
 
   useEffect(() => {
-    if (machineInfo && !loading ) {
-      setIsLoading(false);
+    if (!loading) {
       const detectedUser = machineInfo?.loggedInUser;
       if (detectedUser) {
         setUsername(detectedUser);
@@ -51,7 +50,7 @@ const LoginPage = () => {
         setIsReadOnly(false);
       }
     }
-  }, [machineInfo]);
+  }, [machineInfo, loading]);
 
   useEffect(() => {
     const loadLdapSettings = async () => {
@@ -115,25 +114,19 @@ const LoginPage = () => {
   const appName = config.app.name;
   const appShortName = config.app.shortName;
 
-  interface machineInfo {
-    uniqueId: string | null;
-    systemName: string | null;
-    loggedInUser: string | null;
-    clientMacAddress: string | null;
-    clientIpAddress: string | null;
-  }
-
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
+      // Refresh from the local agent at login time so the authentication request
+      // carries this workstation's latest identity and network details.
+      const currentMachineInfo = await refreshMachineInfo();
       const success = await login(
         username,
         formData.password,
         isLDAPEnabled,
-        machineInfo
+        currentMachineInfo ?? machineInfo ?? undefined
       );
       if (success) {
         setStep('success');

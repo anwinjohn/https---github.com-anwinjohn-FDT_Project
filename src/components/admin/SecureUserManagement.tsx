@@ -65,7 +65,12 @@ import {
   useDark,
   type UserActionKind,
   type EventLogLoader,
+  type RoleOption,
+  type RolesStatus,
+  type UserEditPatch,
 } from './UserManagementDialogs';
+import { useAuth } from '../../context/AuthContext';
+import { useLocalMachine } from '../../context/DeviceInfoContext';
 
 interface UserOnboardingProps {
   apiEndpoint?: string;
@@ -170,6 +175,7 @@ const fetchUserEventLogs: EventLogLoader = async (userId, page, pageSize) => {
     status: r.status ?? r.result ?? null,
     ip_address: r.ip_address ?? r.ip ?? null,
     created_at: r.created_at ?? r.timestamp ?? r.event_time,
+    host_name: r.host_name ?? r.hostname ?? null,
   }));
 
   const hasMore =
@@ -180,6 +186,37 @@ const fetchUserEventLogs: EventLogLoader = async (userId, page, pageSize) => {
         : rows.length === pageSize;
 
   return { items, hasMore };
+};
+
+const ROLES_ENDPOINT = '/api/admin/roles';
+
+const fetchRoles = async (): Promise<RoleOption[]> => {
+  const res = await apiClient.get(ROLES_ENDPOINT);
+  const body = res.data ?? {};
+  const rows: any[] = Array.isArray(body)
+    ? body
+    : (body.data ?? body.roles ?? body.items ?? body.results ?? []);
+
+  const seen = new Set<string>();
+  const out: RoleOption[] = [];
+  rows.forEach((r) => {
+    const value =
+      typeof r === 'string'
+        ? r
+        : String(r.role_name ?? r.name ?? r.role ?? r.user_roles ?? r.id ?? '');
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    out.push({
+      value,
+      label:
+        typeof r === 'string'
+          ? r
+          : String(r.display_name ?? r.role_name ?? r.name ?? r.role ?? value),
+      description:
+        typeof r === 'string' ? undefined : (r.description ?? undefined),
+    });
+  });
+  return out;
 };
 
 const pageWindow = (page: number, total: number) => {
@@ -393,6 +430,8 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
   );
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [exportLoading, setExportLoading] = useState(false);
+  const { user } = useAuth();
+  const { machineInfo } = useLocalMachine();
 
   const [filters, setFilters] = useState<UserOnboardingFilters>({
     search: '',
@@ -423,6 +462,47 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [roles, setRoles] = useState<RoleOption[]>([]);
+  const [rolesStatus, setRolesStatus] = useState<RolesStatus>('idle');
+  const rolesLoaded = useRef(false);
+  const rolesInFlight = useRef(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const ensureRoles = useCallback(async (force = false) => {
+    if (rolesInFlight.current || (rolesLoaded.current && !force)) return;
+    rolesInFlight.current = true;
+    setRolesStatus('loading');
+    try {
+      setRoles(await fetchRoles());
+      rolesLoaded.current = true;
+      setRolesStatus('ready');
+    } catch (error) {
+      console.error('Error loading roles:', error);
+      setRolesStatus('error');
+    } finally {
+      rolesInFlight.current = false;
+    }
+  }, []);
+
+  // "/" jumps to search (unless the user is typing or a dialog is open)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) ||
+          el.isContentEditable)
+      )
+        return;
+      if (document.querySelector('[role="dialog"]')) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const [resetSentUser, setResetSentUser] = useState<UserOnboardingData | null>(
     null
   );
@@ -577,6 +657,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
   const handleEditUser = (user: UserOnboardingData) => {
     setSaveError(null);
     setEditingUser({ ...user });
+    ensureRoles(); // no-op once the role list has been loaded
   };
 
   const requestAction = (kind: UserActionKind, user: UserOnboardingData) => {
@@ -602,12 +683,12 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
     try {
       switch (confirmAction) {
         case 'activate':
-          await setUserStatus(id, 'Active');
+          await setUserStatus(id, 'Active', user?.username || '', machineInfo ?? undefined);
           patchUserInList(id, { active_flag: true, user_status: 'Active' });
           addNotification(`${full_name} activated.`, 'success');
           break;
         case 'deactivate':
-          await setUserStatus(id, 'Inactive');
+          await setUserStatus(id, 'Inactive', user?.username || '', machineInfo ?? undefined);
           patchUserInList(id, { active_flag: false, user_status: 'Inactive' });
           addNotification(`${full_name} deactivated.`, 'success');
           break;
@@ -676,7 +757,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
 
   const handleEditSave = async (
     user: UserOnboardingData,
-    patch: { full_name: string; email_id: string }
+    patch: UserEditPatch
   ) => {
     setActionBusy(true);
     setSaveError(null);
@@ -684,7 +765,12 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
       await updateUser(user.id, patch);
       patchUserInList(user.id, patch);
       setEditingUser(null);
-      addNotification('User details updated.', 'success');
+      addNotification(
+        patch.user_roles
+          ? `User details updated. Role changed to ${patch.user_roles}.`
+          : 'User details updated.',
+        'success'
+      );
     } catch (err) {
       setSaveError(
         err instanceof Error
@@ -729,18 +815,24 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
     setPagination((prev) => ({ ...prev, page: 1 }));
   };
 
-  const setFilter = (key: 'account_status' | 'user_status', value: string) => {
+  const setFilter = (
+    key: 'account_status' | 'user_status' | 'user_roles',
+    value: string
+  ) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
     setPagination((prev) => ({ ...prev, page: 1 }));
   };
 
   const activeFilterCount =
-    (filters.account_status ? 1 : 0) + (filters.user_status ? 1 : 0);
+    (filters.account_status ? 1 : 0) +
+    (filters.user_status ? 1 : 0) +
+    (filters.user_roles ? 1 : 0);
   const hasFilters = !!(
     searchTerm ||
     filters.search ||
     filters.account_status ||
-    filters.user_status
+    filters.user_status ||
+    filters.user_roles
   );
 
   const stats = useMemo(() => {
@@ -1017,6 +1109,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
             )}
           />
           <input
+            ref={searchRef}
             type="text"
             aria-label="Search users"
             value={filters.search}
@@ -1024,6 +1117,11 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
               setFilters((prev) => ({ ...prev, search: e.target.value }))
             }
             placeholder="Search users"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && filters.search) {
+                setFilters((prev) => ({ ...prev, search: '' }));
+              }
+            }}
             className={cx(
               'h-10 w-full rounded-lg border pl-9 pr-9 text-sm outline-none focus:ring-2',
               dark
@@ -1031,6 +1129,18 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                 : 'border-slate-300 bg-white text-slate-900 placeholder-slate-400 focus:border-teal-500 focus:ring-teal-500/30'
             )}
           />
+          {!filters.search && (
+            <kbd
+              aria-hidden
+              className={cx(
+                'pointer-events-none absolute right-2.5 top-1/2 hidden h-5 min-w-[1.25rem] -translate-y-1/2 place-items-center rounded border px-1 font-sans text-xs sm:grid',
+                t.hairline,
+                t.muted
+              )}
+            >
+              /
+            </kbd>
+          )}
           {filters.search && (
             <button
               type="button"
@@ -1050,7 +1160,10 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
 
         <button
           type="button"
-          onClick={() => setShowFilters((s) => !s)}
+          onClick={() => {
+            if (!showFilters) ensureRoles();
+            setShowFilters((s) => !s);
+          }}
           aria-expanded={showFilters}
           aria-controls="um-filters"
           className={btnCls(dark, showFilters ? 'primary' : 'secondary')}
@@ -1102,7 +1215,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                 t.subtle
               )}
             >
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
                 {[
                   {
                     id: 'um-f-account',
@@ -1124,6 +1237,25 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                       ['', 'All users'],
                       ['Active', 'Active'],
                       ['Inactive', 'Inactive'],
+                    ],
+                  },
+                  {
+                    id: 'um-f-role',
+                    label: 'Role',
+                    value: filters.user_roles,
+                    onChange: (v: string) => setFilter('user_roles', v),
+                    options: [
+                      [
+                        '',
+                        rolesStatus === 'loading'
+                          ? 'Loading roles…'
+                          : 'All roles',
+                      ],
+                      ...(filters.user_roles &&
+                      !roles.some((r) => r.value === filters.user_roles)
+                        ? [[filters.user_roles, filters.user_roles]]
+                        : []),
+                      ...roles.map((r) => [r.value, r.label]),
                     ],
                   },
                 ].map((f) => (
@@ -1218,7 +1350,9 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
       </AnimatePresence>
 
       {/* Applied filters */}
-      {(filters.account_status || filters.user_status) && (
+      {(filters.account_status ||
+        filters.user_status ||
+        filters.user_roles) && (
         <div className="flex flex-wrap items-center gap-2 px-6 pb-4">
           <span className={cx('text-xs', t.muted)}>Filtered by</span>
           {filters.user_status && (
@@ -1229,6 +1363,18 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
             >
               {filters.user_status}
               <X className="h-3 w-3" aria-label="Remove user status filter" />
+            </button>
+          )}
+          {filters.user_roles && (
+            <button
+              type="button"
+              onClick={() => setFilter('user_roles', '')}
+              className={cx(btnCls(dark, 'secondary', 'sm'), '!h-7 gap-1.5')}
+            >
+              Role:{' '}
+              {roles.find((r) => r.value === filters.user_roles)?.label ??
+                filters.user_roles}
+              <X className="h-3 w-3" aria-label="Remove role filter" />
             </button>
           )}
           {filters.account_status && (
@@ -1341,7 +1487,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                   </th>
                   {sortableTh('Last login', 'last_login')}
                   <th scope="col" className={thBase}>
-                    MFA
+                    Sensitive data
                   </th>
                   <th scope="col" className={cx(thBase, 'pr-6 text-right')}>
                     <span className="sr-only">Actions</span>
@@ -1459,6 +1605,16 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                             >
                               {user.account_status}
                             </Pill>
+                            {locked && user.account_locked_until && (
+                              <div
+                                className={cx(
+                                  'mt-1 text-xs tabular-nums',
+                                  t.muted
+                                )}
+                              >
+                                Until {stamp(user.account_locked_until, '')}
+                              </div>
+                            )}
                           </td>
 
                           <td className="px-4 py-3">
@@ -1480,7 +1636,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                             <span
                               className={cx(
                                 'inline-flex items-center gap-1.5 text-xs font-medium',
-                                user.mfa_enabled
+                                user.can_view_sensitive
                                   ? dark
                                     ? 'text-emerald-300'
                                     : 'text-emerald-700'
@@ -1489,12 +1645,12 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
                                     : 'text-amber-700'
                               )}
                             >
-                              {user.mfa_enabled ? (
+                              {user.can_view_sensitive ? (
                                 <ShieldCheck className="h-4 w-4" aria-hidden />
                               ) : (
                                 <ShieldAlert className="h-4 w-4" aria-hidden />
                               )}
-                              {user.mfa_enabled ? 'On' : 'Off'}
+                              {user.can_view_sensitive ? 'Allowed' : 'Blocked'}
                             </span>
                           </td>
 
@@ -1597,9 +1753,42 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
             t.hairline
           )}
         >
-          <div className={cx('text-sm tabular-nums', t.muted)}>
-            Showing {rangeStart}–{rangeEnd} of{' '}
-            {pagination.total.toLocaleString()} users
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <div className={cx('text-sm tabular-nums', t.muted)}>
+              Showing {rangeStart}–{rangeEnd} of{' '}
+              {pagination.total.toLocaleString()} users
+            </div>
+            <label className={cx('flex items-center gap-2 text-sm', t.muted)}>
+              Rows
+              <span className="relative">
+                <select
+                  value={pagination.page_size}
+                  onChange={(e) =>
+                    setPagination((prev) => ({
+                      ...prev,
+                      page_size: Number(e.target.value),
+                      page: 1,
+                    }))
+                  }
+                  className={cx(
+                    selectCls,
+                    '!h-8 !w-auto !pl-2.5 !pr-8 text-xs tabular-nums'
+                  )}
+                >
+                  {Array.from(new Set([10, 20, 50, pagination.page_size]))
+                    .sort((a, b) => a - b)
+                    .map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                />
+              </span>
+            </label>
           </div>
 
           {pagination.total_pages > 1 && (
@@ -1691,6 +1880,9 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
         user={editingUser}
         saving={actionBusy}
         error={saveError}
+        roles={roles}
+        rolesStatus={rolesStatus}
+        onRetryRoles={() => ensureRoles(true)}
         onClose={() => setEditingUser(null)}
         onSave={handleEditSave}
       />

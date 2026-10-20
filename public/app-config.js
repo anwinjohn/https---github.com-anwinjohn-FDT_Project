@@ -2,7 +2,7 @@ window.__APP_CONFIG__ = {
   api: {
     baseUrl: 'http://127.0.0.1:8000',
     authBaseUrl: 'http://127.0.0.1:8000',
-    userInfo: 'http://localhost:3000/user',
+    userInfo: 'http://localhost:5050/users',
     aisuggestions: 'http://0.0.0.0:8002',
     timeout: 30000,
   },
@@ -35,8 +35,8 @@ window.__APP_CONFIG__ = {
   environment: 'development',
   logging: {
     console_enabled: false,
-    api_enabled: false,
-    level: 'error',
+    api_enabled: true,
+    level: 'info',
     maxEntries: 1000,
   },
 };
