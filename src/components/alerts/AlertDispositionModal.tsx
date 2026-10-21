@@ -1327,7 +1327,7 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
                                               : 'text-gray-900'
                                           }`}
                                         >
-                                          AI Analysis
+                                          Analysis Result
                                         </div>
                                         <div
                                           className={`text-sm mt-1 ${
