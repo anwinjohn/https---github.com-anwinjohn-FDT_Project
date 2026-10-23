@@ -1,17 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useNotifications } from '../components/notifications';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import CryptoJS from 'crypto-js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Clock, RefreshCw } from 'lucide-react';
 import { add } from 'date-fns';
-
+import type { LocalMachineInfo } from '../utils/machineInfoStore';
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: UserInfo | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo) => Promise<boolean>;
   logout: () => void;
   loading: boolean;
   resetSessionTimer: () => void;
@@ -25,6 +25,7 @@ interface UserInfo {
   role_id: number;
   mfa_enabled: boolean;
   request_username: string;
+  canViewSensitive?: boolean;
 }
 
 // Mock admin user for development
@@ -451,7 +452,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const login = async (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo): Promise<boolean> => {
     try {
       // Clear any existing session data
       clearTimers();
@@ -459,23 +460,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       warningShownRef.current = false;
       isLoggingOutRef.current = false;
 
-      // Mock admin login
-      // if (username === 'admin' && password === 'admin123') {
-      //   localStorage.setItem('authToken', 'admin-token');
-      //   localStorage.setItem('userData', JSON.stringify(MOCK_ADMIN));
-      //   localStorage.setItem('lastActivity', Date.now().toString());
-      //   setUser(MOCK_ADMIN);
-      //   setIsAuthenticated(true);
-      //   resetSessionTimer();
-      //   return true;
-      // }
-      
       // Encrypt the credentials
       const iv = CryptoJS.lib.WordArray.random(16);
       const sessionId = iv.toString();
 
       const encrypted = CryptoJS.AES.encrypt(
-        JSON.stringify({ username, password, sessionId }),
+        JSON.stringify({ username, password, sessionId, isLDAPEnabled, machineInfo }),
         CryptoJS.enc.Utf8.parse(ENCRYPTION_KEY),
         {
           iv: iv,
@@ -485,14 +475,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
       // Combine IV and ciphertext
       const encryptedData = iv.concat(encrypted.ciphertext).toString(CryptoJS.enc.Base64);
-
       const response = await fetch(`${config.api.authBaseUrl}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Encrypted': 'true'
+          'X-Client-Version': config.app.version,
+          'X-Encrypted': 'true',
         },
-        body: JSON.stringify({ data: encryptedData })
+        body: JSON.stringify({ data: encryptedData }),
       });
 
       const responseData = await response.json();

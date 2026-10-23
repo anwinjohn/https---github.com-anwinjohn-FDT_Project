@@ -1,0 +1,21100 @@
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
+import {
+  Activity,
+  AlertTriangle,
+  AreaChart,
+  ArrowLeft,
+  ArrowRight,
+  Banknote,
+  BarChart3,
+  BarChartHorizontal,
+  BellRing,
+  CalendarDays,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  CircleDot,
+  Clock,
+  Copy,
+  CreditCard,
+  Database,
+  Download,
+  Eye,
+  FileText,
+  Filter,
+  FolderOpen,
+  GripVertical,
+  Grid3x3,
+  Hash,
+  Landmark,
+  Layers,
+  LayoutGrid,
+  LayoutTemplate,
+  Lightbulb,
+  LineChart as LineIcon,
+  Loader2,
+  Lock,
+  Maximize2,
+  Monitor,
+  MousePointerClick,
+  Palette as PaletteIcon,
+  Pencil,
+  PieChart,
+  Play,
+  Plus,
+  Redo2,
+  RefreshCw,
+  Save,
+  ScatterChart,
+  Search,
+  Settings2,
+  ShieldAlert,
+  Smartphone,
+  Sparkles,
+  Table2,
+  Trash2,
+  Type,
+  Undo2,
+  Upload,
+  X,
+} from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
+import { Calendar } from 'lucide-react';
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  BarChart2,
+  Circle,
+  Filter as FunnelIcon,
+  Gauge,
+  Heading,
+  Info,
+  LineChart,
+  ListOrdered,
+  Map as MapIcon,
+  ScrollText,
+  Share2,
+  ShieldCheck,
+  Sigma,
+  TrendingUp,
+  Waves,
+  XCircle,
+} from 'lucide-react';
+
+import { useMenuIds } from '../../hooks/useMenuIds';
+import PermissionGuard from '../PermissionGuard';
+import { useNotifications } from '../notifications';
+/* ==========================================================================
+ * Report Builder core (inlined): theme tokens, query contract, widget registry, compiler,
+ * validation, run engine and the fraud / risk widget library.
+ * Single-file by design (same deployment model as before): no extra module paths are required.
+ * ======================================================================== */
+
+/* ---------------- theme.ts ---------------- */
+/**
+ * Design tokens shared by the Report Builder and its extracted modules.
+ * (Moved verbatim out of ReportBuilder.tsx so widgets/components can live in their own files.)
+ */
+
+interface Tokens {
+  dark: boolean;
+  card: string;
+  inset: string;
+  canvas: string;
+  line: string;
+  lineStrong: string;
+  text: string;
+  body: string;
+  muted: string;
+  hover: string;
+  input: string;
+  btn: string;
+  chipIcon: string;
+  selected: string;
+  toggleOff: string;
+  skeleton: string;
+  pop: string;
+}
+const LIGHT: Tokens = {
+  dark: false,
+  card: 'bg-white border-slate-200 shadow-sm',
+  inset: 'bg-slate-50 border-slate-200',
+  canvas: 'bg-slate-100/70',
+  line: 'border-slate-100',
+  lineStrong: 'border-slate-200',
+  text: 'text-slate-900',
+  body: 'text-slate-700',
+  muted: 'text-slate-500',
+  hover: 'hover:bg-slate-50',
+  input: 'bg-white border-slate-200 text-slate-900 placeholder:text-slate-400',
+  btn: 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50',
+  chipIcon: 'bg-blue-50 text-blue-600',
+  selected: 'bg-blue-50 border-blue-500 text-blue-700',
+  toggleOff: 'bg-slate-300',
+  skeleton: 'bg-slate-100',
+  pop: 'bg-white border-slate-200 text-slate-700 shadow-xl',
+};
+const DARK: Tokens = {
+  dark: true,
+  card: 'bg-slate-900/60 border-white/15 shadow-sm',
+  inset: 'bg-white/[0.04] border-white/15',
+  canvas: 'bg-black/20',
+  line: 'border-white/10',
+  lineStrong: 'border-white/15',
+  text: 'text-white',
+  body: 'text-white/80',
+  muted: 'text-white/60',
+  hover: 'hover:bg-white/5',
+  input: 'bg-white/10 border-white/20 text-white placeholder:text-white/50',
+  btn: 'bg-white/10 border-white/20 text-white hover:bg-white/20',
+  chipIcon: 'bg-blue-500/20 text-blue-300',
+  selected: 'bg-blue-500/15 border-blue-400 text-blue-200',
+  toggleOff: 'bg-white/25',
+  skeleton: 'bg-white/10',
+  pop: 'bg-slate-900 border-white/20 text-white/90 shadow-2xl',
+};
+const ThemeCtx = createContext<Tokens>(LIGHT);
+const useT = () => useContext(ThemeCtx);
+
+const FOCUS =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
+const PRIMARY_BTN = `inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`;
+
+/* ---------------- contracts.ts ---------------- */
+/**
+ * Report Builder: data contracts
+ * ----------------------------------------------------------------------------
+ * The browser never aggregates the production dataset. It sends a *report definition compiled into
+ * queries* to the backend and receives *aggregated results*:
+ *
+ *   Browser ── ReportRunRequest (queries) ──▶ Backend query engine ──▶ Database
+ *   Browser ◀── QueryResult (aggregates) ────┘
+ *
+ * Two modes use the same query vocabulary but different executors:
+ *   - PREVIEW  design-time, tiny sample (default latest 100 rows) executed in the browser
+ *   - FINAL    the real report, executed by `ReportDataProvider` on the server
+ *
+ * This file is dependency-free (no React) so it can be shared with the server (Node) as-is.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Periods
+ * ------------------------------------------------------------------------- */
+type DatePreset =
+  | 'today'
+  | 'yesterday'
+  | 'last_7_days'
+  | 'last_30_days'
+  | 'last_90_days'
+  | 'last_6_months'
+  | 'last_12_months'
+  | 'this_month'
+  | 'previous_month'
+  | 'this_quarter'
+  | 'previous_quarter'
+  | 'this_year'
+  | 'previous_year'
+  | 'year_to_date'
+  | 'all_time'
+  | 'custom';
+
+type CompareMode = 'previous_period' | 'previous_year' | 'none';
+
+/** What the user configures (stored in the report definition). */
+interface ReportPeriod {
+  preset: DatePreset;
+  /** ISO dates, only for preset === 'custom'. */
+  from?: string;
+  to?: string;
+  compare: CompareMode;
+}
+
+/** A concrete, inclusive date window (ISO yyyy-mm-dd, in the report time zone). */
+interface ResolvedPeriod {
+  preset: DatePreset;
+  from: string;
+  to: string;
+  days: number;
+  label: string;
+}
+
+/* ---------------------------------------------------------------------------
+ * Queries
+ * ------------------------------------------------------------------------- */
+type QueryOp =
+  | 'eq'
+  | 'neq'
+  | 'in'
+  | 'contains'
+  | 'gt'
+  | 'lt'
+  | 'between'
+  | 'after'
+  | 'before'
+  | 'atleast'
+  | 'atmost';
+
+/**
+ * `in` values are a JSON array string ('["Card","ATM"]'); `between` is 'low|high'.
+ * Keeping `value` a string keeps parity with the existing FilterRule model.
+ */
+interface QueryFilter {
+  field: string;
+  op: QueryOp;
+  value: string;
+}
+
+type QueryAgg =
+  | 'count'
+  | 'sum'
+  | 'avg'
+  | 'min'
+  | 'max'
+  | 'distinct'
+  | 'yes'
+  | 'rate'
+  | 'metric';
+
+interface QueryMeasure {
+  /** Stable id inside the query ('m0', 'm1'...). */
+  id: string;
+  label?: string;
+  agg: QueryAgg;
+  /** Field key, or a calculated-metric key (mt_*) when agg === 'metric'. */
+  field?: string;
+  /** Conditional measure: aggregate only rows matching all of these (e.g. funnel stages). */
+  where?: QueryFilter[];
+}
+
+type TimeBucket = 'day' | 'week' | 'month' | 'quarter' | 'year';
+
+interface QueryDimension {
+  field: string;
+  /** Date dimensions only. `auto` lets the server choose from the period length. */
+  bucket?: TimeBucket | 'auto';
+  /** Numeric dimensions: group into ranges (aging buckets, amount bands). Edges ascending. */
+  bands?: number[];
+}
+
+type QueryShape =
+  | 'scalar' //     one value per measure (+ previous-period value, + sparkline)
+  | 'grouped' //    dimension(s) x measure(s)
+  | 'records' //    row-level page (tables, drill-through)
+  | 'points' //     (x, y[, size][, colour]) sample for scatter / bubble
+  | 'histogram' //  equal-width bins of one numeric field
+  | 'quantiles'; // min / q1 / median / q3 / max per group (box plot)
+
+interface ReportQuery {
+  /** Unique within a run. Widget queries use the widget id (or `${widgetId}#${suffix}`). */
+  id: string;
+  widgetId: string;
+  label: string;
+  sourceId: string;
+  shape: QueryShape;
+  /** null = all time. */
+  period: ResolvedPeriod | null;
+  /** When set, scalar/grouped results also carry previous-period values. */
+  comparePeriod?: ResolvedPeriod | null;
+  filters: QueryFilter[];
+  dimensions: QueryDimension[];
+  measures: QueryMeasure[];
+  sort?: {
+    by: 'measure' | 'label' | 'rank';
+    index?: number;
+    dir: 'asc' | 'desc';
+  };
+  /** Top N groups (grouped) or max rows (records). */
+  limit?: number;
+  offset?: number;
+  /** Roll groups beyond `limit` into an "Others" group. */
+  others?: boolean;
+  /** Max break-down series (second dimension). */
+  seriesLimit?: number;
+  /** records: sort order. */
+  orderBy?: { field: string; dir: 'asc' | 'desc' };
+  /** records: columns to return. */
+  columns?: string[];
+  /** records: also return grand totals of these numeric columns. */
+  totalsFor?: string[];
+  /** scalar: also return a sparkline over the period with this bucket. */
+  spark?: TimeBucket | 'auto';
+  /** points: x/y/size/colour fields and sample cap. */
+  points?: {
+    x: string;
+    y: string;
+    size?: string;
+    colour?: string;
+    max: number;
+  };
+  /** histogram: field and bin count. */
+  bins?: { field: string; count: number };
+  /** quantiles: numeric field to summarise. */
+  quantileField?: string;
+  /** Calculated-metric definitions referenced by `measures` (key -> definition). */
+  metrics?: Record<string, unknown>;
+  /** Custom (derived) field definitions referenced by this query. */
+  derived?: unknown[];
+}
+
+/* ---------------------------------------------------------------------------
+ * Results
+ * ------------------------------------------------------------------------- */
+interface ResultBase {
+  queryId: string;
+  /** Rows scanned / ms taken, for transparency and support. */
+  stats?: { scanned?: number; ms?: number; cached?: boolean };
+  warnings?: string[];
+}
+interface ScalarResult extends ResultBase {
+  shape: 'scalar';
+  /** One per measure. */
+  values: number[];
+  /** Previous-period values (same order), when comparePeriod was requested. */
+  prev?: number[] | null;
+  /** Sparkline of measure 0 over the period. */
+  spark?: number[];
+}
+interface GroupRow {
+  key: string;
+  label?: string;
+  /** One per measure. */
+  values: number[];
+  prev?: number[];
+  /** Rows in the group (for "n=" annotations). */
+  n?: number;
+}
+interface GroupedResult extends ResultBase {
+  shape: 'grouped';
+  groups: GroupRow[];
+  /** Second dimension values (series). */
+  series?: { key: string; label?: string }[];
+  /** `${groupKey}\u0001${seriesKey}` -> value per measure. */
+  cells?: Record<string, number[]>;
+  /** Totals per measure over everything matched (not only the groups returned). */
+  grand: number[];
+  prevGrand?: number[];
+  /** Groups before Top-N, and hidden break-down series. */
+  totalGroups: number;
+  hiddenSeries?: number;
+}
+interface RecordsResult extends ResultBase {
+  shape: 'records';
+  columns: string[];
+  rows: Row[];
+  totalRows: number;
+  offset: number;
+  totals?: Record<string, number>;
+}
+interface PointsResult extends ResultBase {
+  shape: 'points';
+  points: { x: number; y: number; size?: number; c?: string }[];
+  categories: string[];
+  /** 1 in N sampling stride used by the server (0 = not sampled). */
+  sampled: number;
+  total: number;
+}
+interface HistogramResult extends ResultBase {
+  shape: 'histogram';
+  bins: { from: number; to: number; count: number }[];
+  total: number;
+  summary: {
+    min: number;
+    max: number;
+    mean: number;
+    p50: number;
+    p90: number;
+    p99: number;
+  };
+}
+interface QuantileGroup {
+  key: string;
+  label?: string;
+  n: number;
+  min: number;
+  q1: number;
+  median: number;
+  q3: number;
+  max: number;
+  /** Count of points beyond 1.5 x IQR. */
+  outliers: number;
+}
+interface QuantilesResult extends ResultBase {
+  shape: 'quantiles';
+  groups: QuantileGroup[];
+}
+type QueryResult =
+  | ScalarResult
+  | GroupedResult
+  | RecordsResult
+  | PointsResult
+  | HistogramResult
+  | QuantilesResult;
+
+interface QueryFailure {
+  queryId: string;
+  message: string;
+  retryable: boolean;
+}
+
+/* ---------------------------------------------------------------------------
+ * Run request / response
+ * ------------------------------------------------------------------------- */
+interface ReportRunRequest {
+  runId: string;
+  /** Opaque snapshot of the definition for server-side audit & reproducibility. */
+  definition: {
+    name: string;
+    schemaVersion: number;
+    hash: string;
+    sourceId: string;
+  };
+  tenantId?: string;
+  requestedBy?: string;
+  timezone: string;
+  period: ResolvedPeriod | null;
+  comparePeriod: ResolvedPeriod | null;
+  filters: QueryFilter[];
+  queries: ReportQuery[];
+}
+
+interface BatchResult {
+  results: Record<string, QueryResult>;
+  failures: QueryFailure[];
+  meta: {
+    /** Records matching period + report filters (exact). */
+    recordsMatched: number | null;
+    /** Most recent data timestamp the engine used. */
+    dataAsOf?: string;
+    datasetVersion?: string;
+    partial?: boolean;
+    warnings?: string[];
+  };
+}
+
+type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+interface JobStatus {
+  state: JobState;
+  /** 0..1 */
+  progress?: number;
+  message?: string;
+}
+
+interface PreviewRequest {
+  sourceId: string;
+  /** Max rows. The server must return the most recent rows first. */
+  limit: number;
+  signal?: AbortSignal;
+}
+interface PreviewResponse {
+  rows: Row[];
+  /** Total rows that exist in the source (for "100 of 2.4M"). Optional. */
+  totalInSource?: number;
+  asOf?: string;
+}
+
+type ExportFormat = 'pdf' | 'xlsx' | 'csv' | 'pptx';
+
+interface ProviderCapabilities {
+  /** Provider supports submit / poll / cancel / fetchResult (long-running jobs). */
+  asyncJobs?: boolean;
+  export?: ExportFormat[];
+  /** Enables the Network Graph widget. */
+  graph?: boolean;
+  /** Enables a real map in the Geographic widgets. */
+  geo?: boolean;
+}
+
+/**
+ * The only thing a host application must implement to run Report Builder against real data.
+ * Implement `execute` for sub-minute reports, or `submit/poll/fetchResult` for background jobs.
+ */
+interface ReportDataProvider {
+  capabilities?: ProviderCapabilities;
+  loadPreview(req: PreviewRequest): Promise<PreviewResponse>;
+  execute?(
+    run: ReportRunRequest,
+    queries: ReportQuery[],
+    ctx: { signal: AbortSignal }
+  ): Promise<BatchResult>;
+  submit?(
+    run: ReportRunRequest,
+    ctx: { signal: AbortSignal }
+  ): Promise<{ jobId: string }>;
+  poll?(jobId: string, ctx: { signal: AbortSignal }): Promise<JobStatus>;
+  fetchResult?(
+    jobId: string,
+    ctx: { signal: AbortSignal }
+  ): Promise<BatchResult>;
+  cancel?(jobId: string): Promise<void>;
+  /**
+   * Records of the ACTUAL report (selected period + report filters), for exports routed to the host's
+   * export service (`onGenerate`). Omit it when the export service generates the file server-side from
+   * `run` (recommended at large volumes); the payload then carries `rows: []`.
+   */
+  fetchExportRows?(
+    run: ReportRunRequest,
+    ctx: { signal: AbortSignal; maxRows: number }
+  ): Promise<{ rows: Row[]; truncated: boolean }>;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reproducibility metadata
+ * ------------------------------------------------------------------------- */
+interface ReportRunMetadata {
+  runId: string;
+  /** Always 'actual': the preview never produces run metadata. */
+  dataStatus: 'actual';
+  reportName: string;
+  /** Hash of the normalised definition: identical definition => identical hash. */
+  definitionHash: string;
+  schemaVersion: number;
+  sourceId: string;
+  sourceName: string;
+  datasetVersion?: string;
+  dataAsOf?: string;
+  period: ResolvedPeriod | null;
+  comparePeriod: ResolvedPeriod | null;
+  /** Human-readable filter descriptions (report + section) in force when generated. */
+  filters: string[];
+  /** Cross-filter / drill state captured at generation, if any. */
+  viewFilters: string[];
+  generatedAt: string;
+  generatedBy: string;
+  tenantId?: string;
+  timezone: string;
+  recordsMatched: number | null;
+  queryCount: number;
+  durationMs: number;
+  partial: boolean;
+  warnings: string[];
+}
+
+/* ---------------------------------------------------------------------------
+ * Small shared helpers (pure)
+ * ------------------------------------------------------------------------- */
+/** JSON.stringify with sorted keys: equal inputs always give equal output. */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`;
+  const o = v as Record<string, unknown>;
+  return `{${Object.keys(o)
+    .filter((k) => o[k] !== undefined)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(o[k])}`)
+    .join(',')}}`;
+}
+
+/** 53-bit string hash (cyrb53), rendered as 14 hex chars. Not cryptographic: for identity/caching only. */
+function hashString(s: string): string {
+  let h1 = 0xdeadbeef,
+    h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 =
+    Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+    Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 =
+    Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+    Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0))
+    .toString(16)
+    .padStart(14, '0');
+}
+
+/** Cache identity of a query: everything that affects its result, nothing that doesn't (ids/labels). */
+function queryFingerprint(q: ReportQuery): string {
+  const { id: _id, widgetId: _w, label: _l, ...rest } = q;
+  return hashString(stableStringify(rest));
+}
+
+const CELL_SEP = '\u0001';
+const cellKeyOf = (group: string, series: string) =>
+  `${group}${CELL_SEP}${series}`;
+
+/* ---------------- dateRanges.ts ---------------- */
+/**
+ * Report period handling: presets -> concrete windows, and comparison windows.
+ *
+ * Conventions
+ *  - All dates are ISO `yyyy-mm-dd` strings in the REPORT time zone; windows are inclusive.
+ *  - "to-date" presets (this month / quarter / year, YTD) end today. Their comparison window covers the
+ *    SAME ELAPSED DAYS of the previous month / quarter / year, so MTD is never compared with a full month.
+ *  - Full-unit presets (previous month / quarter / year) compare with the unit before them.
+ *  - Rolling presets (today, last N days/months, custom) compare with the equally long window just before.
+ *  - "Previous year" comparison shifts the window back 12 months (29-Feb clamps to 28-Feb).
+ */
+
+const PRESET_LABEL: Record<DatePreset, string> = {
+  today: 'Today',
+  yesterday: 'Yesterday',
+  last_7_days: 'Last 7 days',
+  last_30_days: 'Last 30 days',
+  last_90_days: 'Last 90 days',
+  last_6_months: 'Last 6 months',
+  last_12_months: 'Last 12 months',
+  this_month: 'This month',
+  previous_month: 'Previous month',
+  this_quarter: 'This quarter',
+  previous_quarter: 'Previous quarter',
+  this_year: 'This year',
+  previous_year: 'Previous year',
+  year_to_date: 'Year to date',
+  all_time: 'All time',
+  custom: 'Custom range',
+};
+
+/** Grouped for the picker UI. */
+const PRESET_GROUPS: { label: string; presets: DatePreset[] }[] = [
+  {
+    label: 'Recent',
+    presets: [
+      'today',
+      'yesterday',
+      'last_7_days',
+      'last_30_days',
+      'last_90_days',
+    ],
+  },
+  {
+    label: 'Calendar',
+    presets: [
+      'this_month',
+      'previous_month',
+      'this_quarter',
+      'previous_quarter',
+      'this_year',
+      'previous_year',
+      'year_to_date',
+    ],
+  },
+  { label: 'Rolling', presets: ['last_6_months', 'last_12_months'] },
+  { label: 'Other', presets: ['all_time', 'custom'] },
+];
+
+const COMPARE_LABEL: Record<CompareMode, string> = {
+  previous_period: 'Previous period',
+  previous_year: 'Same period last year',
+  none: 'No comparison',
+};
+
+/* ---- ISO date arithmetic (UTC, no time-zone surprises) ---- */
+const pad = (n: number) => String(n).padStart(2, '0');
+const isoOf = (d: Date) =>
+  `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+const parseISO = (s: string) => new Date(`${s}T00:00:00Z`);
+const isISODate = (s: unknown): s is string =>
+  typeof s === 'string' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(s) &&
+  isoOf(parseISO(s)) === s;
+const addDaysISO = (s: string, n: number) => {
+  const d = parseISO(s);
+  d.setUTCDate(d.getUTCDate() + n);
+  return isoOf(d);
+};
+const daysInMonth = (y: number, m0: number) =>
+  new Date(Date.UTC(y, m0 + 1, 0)).getUTCDate();
+/** Add months, clamping the day (31-Mar + 1 month = 30-Apr). */
+const addMonthsISO = (s: string, n: number) => {
+  const d = parseISO(s);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + n;
+  const ny = y + Math.floor(m / 12);
+  const nm = ((m % 12) + 12) % 12;
+  return isoOf(
+    new Date(Date.UTC(ny, nm, Math.min(d.getUTCDate(), daysInMonth(ny, nm))))
+  );
+};
+const diffDaysISO = (a: string, b: string) =>
+  Math.round((parseISO(b).getTime() - parseISO(a).getTime()) / 864e5);
+const spanDays = (from: string, to: string) => diffDaysISO(from, to) + 1;
+const startOfMonth = (s: string) => `${s.slice(0, 7)}-01`;
+const endOfMonth = (s: string) => {
+  const d = parseISO(s);
+  return isoOf(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)));
+};
+const quarterStart = (s: string) => {
+  const d = parseISO(s);
+  const q = Math.floor(d.getUTCMonth() / 3) * 3;
+  return isoOf(new Date(Date.UTC(d.getUTCFullYear(), q, 1)));
+};
+const startOfYear = (s: string, startMonth = 1) => {
+  const d = parseISO(s);
+  const y = d.getUTCFullYear();
+  const m0 = startMonth - 1;
+  return isoOf(new Date(Date.UTC(d.getUTCMonth() >= m0 ? y : y - 1, m0, 1)));
+};
+
+/** Today's date in a time zone (injectable `now` for tests). */
+function todayIn(tz: string, now: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+  } catch {
+    return isoOf(now);
+  }
+}
+
+const mk = (
+  preset: DatePreset,
+  from: string,
+  to: string,
+  label?: string
+): ResolvedPeriod => ({
+  preset,
+  from,
+  to,
+  days: spanDays(from, to),
+  label: label ?? PRESET_LABEL[preset],
+});
+
+interface ResolveOptions {
+  /** 'yyyy-mm-dd' in the report time zone. */
+  today: string;
+  /** Month the fiscal year starts (1 = January). Affects Year to date only. */
+  fiscalYearStartMonth?: number;
+}
+
+/** Returns null for all-time. Throws nothing: use `periodError` for custom ranges first. */
+function resolvePeriod(
+  p: ReportPeriod,
+  o: ResolveOptions
+): ResolvedPeriod | null {
+  const t = o.today;
+  switch (p.preset) {
+    case 'all_time':
+      return null;
+    case 'custom':
+      return p.from && p.to && p.from <= p.to
+        ? mk('custom', p.from, p.to, 'Custom range')
+        : null;
+    case 'today':
+      return mk('today', t, t);
+    case 'yesterday': {
+      const y = addDaysISO(t, -1);
+      return mk('yesterday', y, y);
+    }
+    case 'last_7_days':
+      return mk(p.preset, addDaysISO(t, -6), t);
+    case 'last_30_days':
+      return mk(p.preset, addDaysISO(t, -29), t);
+    case 'last_90_days':
+      return mk(p.preset, addDaysISO(t, -89), t);
+    case 'last_6_months':
+      return mk(p.preset, addDaysISO(addMonthsISO(t, -6), 1), t);
+    case 'last_12_months':
+      return mk(p.preset, addDaysISO(addMonthsISO(t, -12), 1), t);
+    case 'this_month':
+      return mk(p.preset, startOfMonth(t), t);
+    case 'previous_month': {
+      const prev = addMonthsISO(startOfMonth(t), -1);
+      return mk(p.preset, prev, endOfMonth(prev));
+    }
+    case 'this_quarter':
+      return mk(p.preset, quarterStart(t), t);
+    case 'previous_quarter': {
+      const s = addMonthsISO(quarterStart(t), -3);
+      return mk(p.preset, s, endOfMonth(addMonthsISO(s, 2)));
+    }
+    case 'this_year':
+      return mk(p.preset, `${t.slice(0, 4)}-01-01`, t);
+    case 'previous_year': {
+      const y = Number(t.slice(0, 4)) - 1;
+      return mk(p.preset, `${y}-01-01`, `${y}-12-31`);
+    }
+    case 'year_to_date':
+      return mk(p.preset, startOfYear(t, o.fiscalYearStartMonth ?? 1), t);
+  }
+}
+
+/** The comparison window for a resolved period, or null (all time / no comparison). */
+function resolveComparison(
+  cur: ResolvedPeriod | null,
+  mode: CompareMode,
+  o: ResolveOptions
+): ResolvedPeriod | null {
+  if (!cur || mode === 'none') return null;
+  if (mode === 'previous_year') {
+    return {
+      preset: cur.preset,
+      from: addMonthsISO(cur.from, -12),
+      to: addMonthsISO(cur.to, -12),
+      days: spanDays(addMonthsISO(cur.from, -12), addMonthsISO(cur.to, -12)),
+      label: 'Same period last year',
+    };
+  }
+  // previous_period
+  const unitShift = (months: number, toDate: boolean): ResolvedPeriod => {
+    const from = addMonthsISO(cur.from, -months);
+    const fullEnd = addDaysISO(addMonthsISO(cur.from, 0), -1);
+    const unitEnd = endOfMonth(addMonthsISO(from, months - 1));
+    const to = toDate
+      ? minISO(addDaysISO(from, cur.days - 1), unitEnd)
+      : fullEnd;
+    return {
+      preset: cur.preset,
+      from,
+      to,
+      days: spanDays(from, to),
+      label: 'Previous period',
+    };
+  };
+  switch (cur.preset) {
+    case 'this_month':
+      return unitShift(1, true);
+    case 'this_quarter':
+      return unitShift(3, true);
+    case 'this_year':
+    case 'year_to_date':
+      return unitShift(12, true);
+    case 'previous_month':
+      return unitShift(1, false);
+    case 'previous_quarter':
+      return unitShift(3, false);
+    case 'previous_year':
+      return unitShift(12, false);
+    default: {
+      const to = addDaysISO(cur.from, -1);
+      const from = addDaysISO(to, -(cur.days - 1));
+      return {
+        preset: cur.preset,
+        from,
+        to,
+        days: cur.days,
+        label: 'Previous period',
+      };
+    }
+  }
+}
+const minISO = (a: string, b: string) => (a < b ? a : b);
+
+/** Actionable message for an incomplete / inverted custom range; null when fine. */
+function periodError(p: ReportPeriod): string | null {
+  if (p.preset !== 'custom') return null;
+  if (!p.from || !p.to)
+    return 'Select both a start and an end date for the custom period.';
+  if (!isISODate(p.from) || !isISODate(p.to))
+    return 'The custom period contains an invalid date.';
+  if (p.from > p.to) return 'The custom period starts after it ends.';
+  return null;
+}
+
+/** Formats a window for headers: "01 Jan 2026 – 30 Sep 2026". */
+function describePeriod(r: ResolvedPeriod | null): string {
+  if (!r) return 'All available data';
+  const f = (s: string) =>
+    parseISO(s).toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  return r.from === r.to ? f(r.from) : `${f(r.from)} – ${f(r.to)}`;
+}
+
+/** Maps the v3 `dateRange` key to the v4 period. */
+function legacyRangeToPeriod(
+  range: string | undefined,
+  from?: string,
+  to?: string
+): ReportPeriod {
+  const map: Record<string, DatePreset> = {
+    '7d': 'last_7_days',
+    '30d': 'last_30_days',
+    '90d': 'last_90_days',
+    '6m': 'last_6_months',
+    '12m': 'last_12_months',
+    all: 'all_time',
+    custom: 'custom',
+  };
+  return {
+    preset: map[range ?? ''] ?? 'last_6_months',
+    from: range === 'custom' ? from : undefined,
+    to: range === 'custom' ? to : undefined,
+    compare: range === 'all' ? 'none' : 'none',
+  };
+}
+
+/* ---------------- formula.ts ---------------- */
+/**
+ * Safe formula engine for calculated metrics ("Fraud rate = fraud_txn / total_txn * 100").
+ *
+ * - A real tokenizer + recursive-descent parser. No `eval`, no `Function`.
+ * - Operates on *already aggregated* values (ratio of aggregates), so results are correct at any grouping level.
+ * - The AST is plain JSON: send it to the backend to evaluate there with identical semantics.
+ * - Division by zero / non-finite results evaluate to `null` (shown as "—"), never Infinity or NaN.
+ *
+ * Grammar
+ *   expr    := compare
+ *   compare := sum (('>'|'<'|'>='|'<='|'=='|'!=') sum)?
+ *   sum     := product (('+'|'-') product)*
+ *   product := unary (('*'|'/') unary)*
+ *   unary   := '-' unary | primary
+ *   primary := NUMBER | NAME | NAME '(' args ')' | '(' expr ')'
+ *
+ * Functions: IF(cond, a, b)  MIN(..)  MAX(..)  ABS(x)  ROUND(x[, digits])  PCT(a, b) = a / b * 100
+ *            PREV(term)      -> the term's value in the comparison (previous) period
+ * Growth %   : (fraud - PREV(fraud)) / PREV(fraud) * 100
+ */
+
+type BinOp = '+' | '-' | '*' | '/' | '>' | '<' | '>=' | '<=' | '==' | '!=';
+type Ast =
+  | { t: 'num'; v: number }
+  | { t: 'ref'; name: string }
+  | { t: 'neg'; a: Ast }
+  | { t: 'bin'; op: BinOp; a: Ast; b: Ast }
+  | { t: 'call'; fn: string; args: Ast[] };
+
+type ParseResult =
+  | { ok: true; ast: Ast; refs: string[] }
+  | { ok: false; error: string; pos: number };
+
+const MAX_LEN = 500;
+const MAX_DEPTH = 40;
+const FUNCS: Record<string, [number, number]> = {
+  IF: [3, 3],
+  MIN: [1, 8],
+  MAX: [1, 8],
+  ABS: [1, 1],
+  ROUND: [1, 2],
+  PCT: [2, 2],
+  PREV: [1, 1],
+};
+
+type Tok = {
+  k: 'num' | 'name' | 'op' | 'lp' | 'rp' | 'comma' | 'end';
+  s: string;
+  pos: number;
+};
+
+function tokenize(src: string): Tok[] | { error: string; pos: number } {
+  const out: Tok[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (/[0-9.]/.test(c)) {
+      let j = i;
+      while (j < src.length && /[0-9.]/.test(src[j])) j++;
+      const s = src.slice(i, j);
+      if (!/^(\d+\.?\d*|\.\d+)$/.test(s))
+        return { error: `"${s}" is not a valid number.`, pos: i };
+      out.push({ k: 'num', s, pos: i });
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i;
+      while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j++;
+      out.push({ k: 'name', s: src.slice(i, j), pos: i });
+      i = j;
+      continue;
+    }
+    const two = src.slice(i, i + 2);
+    if (['>=', '<=', '==', '!='].includes(two)) {
+      out.push({ k: 'op', s: two, pos: i });
+      i += 2;
+      continue;
+    }
+    if ('+-*/><'.includes(c)) out.push({ k: 'op', s: c, pos: i });
+    else if (c === '(') out.push({ k: 'lp', s: c, pos: i });
+    else if (c === ')') out.push({ k: 'rp', s: c, pos: i });
+    else if (c === ',') out.push({ k: 'comma', s: c, pos: i });
+    else return { error: `Unexpected character "${c}".`, pos: i };
+    i++;
+  }
+  out.push({ k: 'end', s: '', pos: src.length });
+  return out;
+}
+
+function parseFormula(src: string): ParseResult {
+  if (!src.trim()) return { ok: false, error: 'Enter a formula.', pos: 0 };
+  if (src.length > MAX_LEN)
+    return {
+      ok: false,
+      error: `Formulas are limited to ${MAX_LEN} characters.`,
+      pos: MAX_LEN,
+    };
+  const toks = tokenize(src);
+  if (!Array.isArray(toks)) return { ok: false, ...toks };
+  let p = 0;
+  const refs = new Set<string>();
+  class ParseError extends Error {
+    constructor(
+      m: string,
+      public pos: number
+    ) {
+      super(m);
+    }
+  }
+  const peek = () => toks[p];
+  const eat = () => toks[p++];
+  const expect = (k: Tok['k'], what: string) => {
+    if (peek().k !== k) throw new ParseError(`Expected ${what}.`, peek().pos);
+    return eat();
+  };
+  const parseExpr = (d: number): Ast => {
+    if (d > MAX_DEPTH)
+      throw new ParseError('The formula is nested too deeply.', peek().pos);
+    return parseCompare(d);
+  };
+  const parseCompare = (d: number): Ast => {
+    const a = parseSum(d);
+    const t = peek();
+    if (t.k === 'op' && ['>', '<', '>=', '<=', '==', '!='].includes(t.s)) {
+      eat();
+      return { t: 'bin', op: t.s as BinOp, a, b: parseSum(d) };
+    }
+    return a;
+  };
+  const parseSum = (d: number): Ast => {
+    let a = parseProduct(d);
+    while (peek().k === 'op' && (peek().s === '+' || peek().s === '-')) {
+      const op = eat().s as BinOp;
+      a = { t: 'bin', op, a, b: parseProduct(d) };
+    }
+    return a;
+  };
+  const parseProduct = (d: number): Ast => {
+    let a = parseUnary(d);
+    while (peek().k === 'op' && (peek().s === '*' || peek().s === '/')) {
+      const op = eat().s as BinOp;
+      a = { t: 'bin', op, a, b: parseUnary(d) };
+    }
+    return a;
+  };
+  const parseUnary = (d: number): Ast => {
+    if (peek().k === 'op' && peek().s === '-') {
+      eat();
+      return { t: 'neg', a: parseUnary(d + 1) };
+    }
+    return parsePrimary(d);
+  };
+  const parsePrimary = (d: number): Ast => {
+    const t = eat();
+    if (t.k === 'num') return { t: 'num', v: Number(t.s) };
+    if (t.k === 'lp') {
+      const e = parseExpr(d + 1);
+      expect('rp', '")"');
+      return e;
+    }
+    if (t.k === 'name') {
+      if (peek().k === 'lp') {
+        const fn = t.s.toUpperCase();
+        const spec = FUNCS[fn];
+        if (!spec)
+          throw new ParseError(
+            `Unknown function "${t.s}". Available: ${Object.keys(FUNCS).join(', ')}.`,
+            t.pos
+          );
+        eat();
+        const args: Ast[] = [];
+        if (peek().k !== 'rp') {
+          args.push(parseExpr(d + 1));
+          while (peek().k === 'comma') {
+            eat();
+            args.push(parseExpr(d + 1));
+          }
+        }
+        expect('rp', '")"');
+        if (args.length < spec[0] || args.length > spec[1])
+          throw new ParseError(
+            `${fn} takes ${spec[0] === spec[1] ? spec[0] : `${spec[0]}–${spec[1]}`} argument(s), got ${args.length}.`,
+            t.pos
+          );
+        if (fn === 'PREV' && args[0].t !== 'ref')
+          throw new ParseError(
+            'PREV() takes a single term, e.g. PREV(fraud).',
+            t.pos
+          );
+        return { t: 'call', fn, args };
+      }
+      refs.add(t.s);
+      return { t: 'ref', name: t.s };
+    }
+    if (t.k === 'end')
+      throw new ParseError('The formula ends unexpectedly.', t.pos);
+    throw new ParseError(`Unexpected "${t.s}".`, t.pos);
+  };
+  try {
+    const ast = parseExpr(0);
+    if (peek().k !== 'end')
+      throw new ParseError(`Unexpected "${peek().s}".`, peek().pos);
+    return { ok: true, ast, refs: [...refs] };
+  } catch (e) {
+    if (e instanceof ParseError)
+      return { ok: false, error: e.message, pos: e.pos };
+    throw e;
+  }
+}
+
+interface FormulaEnv {
+  cur: Record<string, number>;
+  prev?: Record<string, number> | null;
+}
+
+/** Evaluates to a finite number, or null when undefined (division by zero, missing term, no comparison data). */
+function evalFormula(ast: Ast, env: FormulaEnv): number | null {
+  const ev = (n: Ast): number | null => {
+    switch (n.t) {
+      case 'num':
+        return n.v;
+      case 'ref': {
+        const v = env.cur[n.name];
+        return typeof v === 'number' && Number.isFinite(v) ? v : null;
+      }
+      case 'neg': {
+        const v = ev(n.a);
+        return v === null ? null : -v;
+      }
+      case 'bin': {
+        const a = ev(n.a);
+        const b = ev(n.b);
+        if (a === null || b === null) return null;
+        switch (n.op) {
+          case '+':
+            return a + b;
+          case '-':
+            return a - b;
+          case '*':
+            return a * b;
+          case '/':
+            return b === 0 ? null : a / b;
+          case '>':
+            return a > b ? 1 : 0;
+          case '<':
+            return a < b ? 1 : 0;
+          case '>=':
+            return a >= b ? 1 : 0;
+          case '<=':
+            return a <= b ? 1 : 0;
+          case '==':
+            return a === b ? 1 : 0;
+          case '!=':
+            return a !== b ? 1 : 0;
+        }
+        return null;
+      }
+      case 'call': {
+        if (n.fn === 'PREV') {
+          const r = n.args[0];
+          const v = r.t === 'ref' ? env.prev?.[r.name] : undefined;
+          return typeof v === 'number' && Number.isFinite(v) ? v : null;
+        }
+        if (n.fn === 'IF') {
+          const c = ev(n.args[0]);
+          if (c === null) return null;
+          return ev(c !== 0 ? n.args[1] : n.args[2]);
+        }
+        const vals = n.args.map(ev);
+        if (vals.some((v) => v === null)) return null;
+        const xs = vals as number[];
+        switch (n.fn) {
+          case 'MIN':
+            return Math.min(...xs);
+          case 'MAX':
+            return Math.max(...xs);
+          case 'ABS':
+            return Math.abs(xs[0]);
+          case 'ROUND': {
+            const m = 10 ** Math.max(0, Math.min(10, Math.trunc(xs[1] ?? 0)));
+            return Math.round(xs[0] * m) / m;
+          }
+          case 'PCT':
+            return xs[1] === 0 ? null : (xs[0] / xs[1]) * 100;
+        }
+        return null;
+      }
+    }
+  };
+  const r = ev(ast);
+  return r !== null && Number.isFinite(r) ? r : null;
+}
+
+/** Terms referenced through PREV(): the backend must also aggregate these for the comparison window. */
+function prevRefs(ast: Ast): string[] {
+  const out = new Set<string>();
+  const walk = (n: Ast) => {
+    if (n.t === 'call') {
+      if (n.fn === 'PREV' && n.args[0].t === 'ref') out.add(n.args[0].name);
+      n.args.forEach(walk);
+    } else if (n.t === 'bin') {
+      walk(n.a);
+      walk(n.b);
+    } else if (n.t === 'neg') walk(n.a);
+  };
+  walk(ast);
+  return [...out];
+}
+
+/** Round-trips an AST to readable text (used to show a formula in a read-only summary). */
+function printFormula(n: Ast): string {
+  switch (n.t) {
+    case 'num':
+      return String(n.v);
+    case 'ref':
+      return n.name;
+    case 'neg':
+      return `-${printFormula(n.a)}`;
+    case 'bin':
+      return `(${printFormula(n.a)} ${n.op} ${printFormula(n.b)})`;
+    case 'call':
+      return `${n.fn}(${n.args.map(printFormula).join(', ')})`;
+  }
+}
+
+/* ---------------- registry.ts ---------------- */
+/**
+ * Widget registry
+ * ----------------------------------------------------------------------------
+ * A widget is described by ONE descriptor: metadata, how to create it, what data it needs (as queries),
+ * how to validate it, how to render it, how it is configured, how it exports and how it interacts.
+ *
+ * Adding a new widget (AI insight, forecast, anomaly detection, Sankey, network graph...) means writing one
+ * descriptor and calling `registerWidget`. The builder, compiler, validator, canvas, inspector and exporters
+ * discover everything through the registry; none of them has a `switch (kind)`.
+ *
+ * The five original widgets (kpi, chart, table, text, insight) keep their existing React views inside
+ * ReportBuilder.tsx; they are registered there so they appear in the same catalogue.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Minimal structural views of host types (so this file has no runtime dependency on the monolith)
+ * ------------------------------------------------------------------------- */
+interface FieldInfo {
+  key: string;
+  label: string;
+  type:
+    | 'text'
+    | 'category'
+    | 'number'
+    | 'decimal'
+    | 'currency'
+    | 'boolean'
+    | 'date'
+    | 'datetime';
+  group: string;
+  order?: string[];
+  currency?: string;
+  unit?: string;
+  sensitive?: boolean;
+  metric?: unknown;
+  derived?: boolean;
+}
+interface SourceInfo {
+  id: string;
+  name: string;
+  recordLabel: string;
+  dateField: string;
+  fields: FieldInfo[];
+}
+
+type WidgetCategory =
+  | 'executive'
+  | 'charts'
+  | 'analytical'
+  | 'risk'
+  | 'investigation'
+  | 'geography'
+  | 'relationship'
+  | 'content';
+
+const CATEGORY_LABEL: Record<WidgetCategory, string> = {
+  executive: 'Executive',
+  charts: 'Charts',
+  analytical: 'Analytical',
+  risk: 'Fraud & risk',
+  investigation: 'Investigation',
+  geography: 'Geography',
+  relationship: 'Relationship',
+  content: 'Content',
+};
+
+type IconType = React.ComponentType<{ className?: string }>;
+
+/**
+ * Widget kinds provided by the registry (closed union keeps TypeScript narrowing precise for the original
+ * five kinds). Third-party / future widgets use the `ext:` prefix, e.g. `ext:sankey`, `ext:forecast`.
+ */
+type BuiltinExtKind =
+  | 'section'
+  | 'kpiGroup'
+  | 'kri'
+  | 'execSummary'
+  | 'periodCompare'
+  | 'detectionFunnel'
+  | 'riskGauge'
+  | 'riskMatrix'
+  | 'aging'
+  | 'pareto'
+  | 'histogram'
+  | 'waterfall'
+  | 'combo'
+  | 'boxplot'
+  | 'bubble'
+  | 'summaryTable'
+  | 'geoTiles'
+  | 'networkGraph';
+type ExtKind = BuiltinExtKind | `ext:${string}`;
+
+/** Every registry widget has at least this shape; kind-specific config lives alongside. */
+interface RegistryWidget {
+  id: string;
+  kind: string;
+  title: string;
+  note?: string;
+  span: 3 | 4 | 6 | 8 | 12;
+  height: 'sm' | 'md' | 'lg';
+  pageBreak?: boolean;
+  filters: { id: string; field: string; op: string; value: string }[];
+  /** Name of a DrillPath in the report definition (drill-down hierarchy). */
+  drillPathId?: string;
+  [config: string]: unknown;
+}
+
+/* ---------------------------------------------------------------------------
+ * Validation
+ * ------------------------------------------------------------------------- */
+type IssueSeverity = 'error' | 'warning' | 'info';
+interface ValidationIssue {
+  id: string;
+  severity: IssueSeverity;
+  code: string;
+  /** Actionable, specific message. */
+  message: string;
+  widgetId?: string;
+  /** Where the user should go to fix it. */
+  fix?: 'data' | 'design' | 'period' | 'filters' | 'output';
+}
+
+interface ValidateCtx {
+  source: SourceInfo;
+  fieldMap: Map<string, FieldInfo>;
+  sources: SourceInfo[];
+  capabilities: ProviderCapabilities;
+}
+
+/* ---------------------------------------------------------------------------
+ * Data requirements
+ * ------------------------------------------------------------------------- */
+/** A widget's query minus everything the compiler fills in (period, filters, ids). */
+type QuerySpec = Partial<
+  Omit<
+    ReportQuery,
+    'id' | 'widgetId' | 'label' | 'period' | 'comparePeriod' | 'filters'
+  >
+> &
+  Pick<ReportQuery, 'shape'> & {
+    /** Result key suffix: results are keyed `${widgetId}` ('' suffix) or `${widgetId}#${suffix}`. */
+    suffix?: string;
+    label?: string;
+    /** Query a different source than the report's (detection funnel stages). */
+    sourceId?: string;
+    /** Extra conditions on top of report / section / widget filters. */
+    extraFilters?: QueryFilter[];
+    /** Request previous-period values (only honoured when the report compares periods). */
+    compare?: boolean;
+  };
+
+interface QueryCtx {
+  source: SourceInfo;
+  fieldMap: Map<string, FieldInfo>;
+  period: ResolvedPeriod | null;
+  autoBucket: 'day' | 'week' | 'month';
+}
+
+/* ---------------------------------------------------------------------------
+ * Configuration schema (drives the generic inspector; progressive disclosure via `advanced`)
+ * ------------------------------------------------------------------------- */
+type Base = {
+  key: string;
+  label: string;
+  hint?: string;
+  advanced?: boolean;
+  showIf?: (w: RegistryWidget) => boolean;
+};
+type ConfigField =
+  | (Base & { type: 'text'; placeholder?: string; multiline?: boolean })
+  | (Base & { type: 'number'; min?: number; max?: number; step?: number })
+  | (Base & { type: 'toggle' })
+  | (Base & { type: 'select'; options: { value: string; label: string }[] })
+  | (Base & {
+      type: 'field';
+      accept: 'dimension' | 'category' | 'date' | 'numeric' | 'measure' | 'any';
+      optional?: boolean;
+      /** key of a sibling `source` property whose fields to offer */ sourceFrom?: string;
+    })
+  | (Base & { type: 'source' })
+  | (Base & { type: 'agg'; fieldKey?: string })
+  | (Base & {
+      type: 'list';
+      item: ConfigField[];
+      max: number;
+      min?: number;
+      addLabel: string;
+      make: () => Record<string, unknown>;
+      itemLabel?: (it: Record<string, unknown>, i: number) => string;
+    });
+
+/* ---------------------------------------------------------------------------
+ * Rendering
+ * ------------------------------------------------------------------------- */
+type ResultStatus = 'ok' | 'loading' | 'error' | 'empty' | 'missing';
+
+interface WidgetEnv {
+  mode: 'preview' | 'final';
+  source: SourceInfo;
+  fieldMap: Map<string, FieldInfo>;
+  colors: string[];
+  currency: string;
+  /** Report compares against a previous period (final) — preview never has deltas. */
+  compare: boolean;
+  period: ResolvedPeriod | null;
+  vars: Record<string, string>;
+  /** Host-provided number formatting so widgets never re-implement decimal / currency rules. */
+  fmt: (
+    value: number,
+    agg: string,
+    field?: string,
+    style?: 'compact' | 'full'
+  ) => string;
+  fmtPct: (value: number, digits?: number) => string;
+  /** Cross-filter on a value (single-active; clicking again clears). */
+  onPick?: (field: string, value: string) => void;
+  /** Open a drill-through to the underlying records for these conditions. */
+  onDrillThrough?: (
+    widgetId: string,
+    filters: QueryFilter[],
+    sourceId?: string
+  ) => void;
+  onExpand?: (id: string) => void;
+  active?: { field: string; value: string } | null;
+}
+
+interface WidgetRenderProps<W extends RegistryWidget = RegistryWidget> {
+  widget: W;
+  /** Results keyed by suffix ('' = primary). */
+  results: Record<string, QueryResult | undefined>;
+  status: ResultStatus;
+  error?: string;
+  env: WidgetEnv;
+}
+
+/* ---------------------------------------------------------------------------
+ * Descriptor
+ * ------------------------------------------------------------------------- */
+interface CreateCtx {
+  source: SourceInfo;
+  fields: FieldInfo[]; // the report's selected fields (+ derived)
+  sources: SourceInfo[];
+}
+
+interface WidgetDescriptor<W extends RegistryWidget = RegistryWidget> {
+  kind: string;
+  label: string;
+  hint: string;
+  category: WidgetCategory;
+  icon: IconType;
+  /** 'planned' widgets are listed as "coming soon" and cannot be added. */
+  maturity?: 'stable' | 'beta' | 'planned';
+  /** Only offered when the provider has this capability (graph, geo). */
+  requiresCapability?: keyof ProviderCapabilities;
+  /** Create with smart defaults from the source's fields, or return a reason it cannot be created. */
+  create(ctx: CreateCtx): W | { unavailable: string };
+  requirements(w: W, ctx: QueryCtx): QuerySpec[];
+  validate(w: W, ctx: ValidateCtx): ValidationIssue[];
+  /** Omitted for the five original widgets, which the host renders with its existing views. */
+  render?: React.ComponentType<WidgetRenderProps<W>>;
+  config: ConfigField[];
+  /** Does a click on this widget set a cross-filter / can it drill? */
+  interactions?: { crossFilter?: boolean; drill?: boolean };
+  /** Cross-filtered by other widgets? default true. The widget that EMITS a filter on field X ignores X. */
+  skipsCrossFilter?: (w: W, xf: { field: string; value: string }) => boolean;
+  /** How the widget is represented in exports. */
+  exportAs: 'visual' | 'table' | 'text' | 'none';
+  /** Tabular form of the widget's data for CSV / Excel / expand-table. */
+  toTable?: (
+    w: W,
+    results: Record<string, QueryResult | undefined>,
+    env: WidgetEnv
+  ) => { headers: string[]; rows: (string | number)[][] } | null;
+  /** Drop or repair references to removed fields. Return null to remove the widget. */
+  reconcile?: (w: W, keys: Set<string>) => W | null;
+  /** Page-structure widgets (sections) carry filters for the widgets below them and have no data. */
+  structural?: boolean;
+}
+
+/* ---------------------------------------------------------------------------
+ * Registry
+ * ------------------------------------------------------------------------- */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const REGISTRY = new Map<string, WidgetDescriptor<any>>();
+
+function registerWidget<W extends RegistryWidget>(
+  d: WidgetDescriptor<W>
+): void {
+  REGISTRY.set(d.kind, d as unknown as WidgetDescriptor);
+}
+const getWidget = (kind: string): WidgetDescriptor | undefined =>
+  REGISTRY.get(kind);
+const hasWidget = (kind: string) => REGISTRY.has(kind);
+const widgetKinds = () => [...REGISTRY.keys()];
+function listWidgets(
+  opts: { category?: WidgetCategory; capabilities?: ProviderCapabilities } = {}
+): WidgetDescriptor[] {
+  return [...REGISTRY.values()].filter(
+    (d) =>
+      (!opts.category || d.category === opts.category) &&
+      (!d.requiresCapability || opts.capabilities?.[d.requiresCapability])
+  );
+}
+/** Test helper. */
+const __resetRegistry = () => REGISTRY.clear();
+
+/* ---------------------------------------------------------------------------
+ * Helpers used by descriptors
+ * ------------------------------------------------------------------------- */
+const isNumericType = (t: FieldInfo['type']) =>
+  t === 'number' || t === 'decimal' || t === 'currency';
+const isDateInfoType = (t: FieldInfo['type']) =>
+  t === 'date' || t === 'datetime';
+const isDimensionType = (t: FieldInfo['type']) =>
+  t === 'category' || t === 'boolean' || isDateInfoType(t);
+
+const issue = (
+  severity: IssueSeverity,
+  code: string,
+  message: string,
+  widgetId?: string,
+  fix: ValidationIssue['fix'] = 'design'
+): ValidationIssue => ({
+  id: `${widgetId ?? 'report'}:${code}`,
+  severity,
+  code,
+  message,
+  widgetId,
+  fix,
+});
+
+/** Common "field exists" check producing an actionable message. */
+function requireField(
+  w: RegistryWidget,
+  prop: string,
+  ctx: ValidateCtx,
+  what: string,
+  accept: (f: FieldInfo) => boolean = () => true
+): ValidationIssue | null {
+  const key = w[prop];
+  if (typeof key !== 'string' || !key)
+    return issue(
+      'error',
+      `missing-${prop}`,
+      `${describeWidget(w)} requires ${what}. Choose one in the inspector.`,
+      w.id
+    );
+  const f = ctx.fieldMap.get(key);
+  if (!f)
+    return issue(
+      'error',
+      `unknown-${prop}`,
+      `${describeWidget(w)}: the field "${key}" is no longer available. Pick another ${what}.`,
+      w.id
+    );
+  if (!accept(f))
+    return issue(
+      'error',
+      `bad-${prop}`,
+      `${describeWidget(w)}: "${f.label}" cannot be used as ${what}.`,
+      w.id
+    );
+  return null;
+}
+const describeWidget = (w: { kind: string; title: string }) => {
+  const d = REGISTRY.get(w.kind);
+  return `${d?.label ?? w.kind} "${w.title || 'Untitled'}"`;
+};
+
+/* ---------------- compiler.ts ---------------- */
+/**
+ * Report compiler
+ * ----------------------------------------------------------------------------
+ * Turns a report definition into the minimal set of backend queries needed to render it.
+ *
+ *   widgets ──(registry.requirements)──▶ query specs
+ *   + period / comparison               ┐
+ *   + report filters                    │
+ *   + section filters (header widgets)  ├─▶ ReportQuery[]  ──dedupe──▶ unique queries to execute
+ *   + widget filters                    │
+ *   + cross-filter / drill state        ┘
+ *
+ * Pure and deterministic: the same definition + period always compile to the same queries (and the same hash),
+ * which is what makes a generated report reproducible and its queries cacheable.
+ */
+
+interface RuleLike {
+  field: string;
+  op: string;
+  value: string;
+}
+
+interface CompilableDefinition {
+  name: string;
+  sourceId: string;
+  schemaVersion: number;
+  timezone: string;
+  period: ReportPeriod;
+  filters: RuleLike[];
+  widgets: RegistryWidget[];
+  /** Calculated metric definitions (key -> def) sent to the server with queries that use them. */
+  metrics?: { key: string }[];
+  derived?: { key: string }[];
+  createdAt?: string;
+}
+
+interface CompileInput {
+  definition: CompilableDefinition;
+  sources: SourceInfo[];
+  /** Field catalogue (incl. derived fields and mt_* metric pseudo-fields) for the report's source. */
+  fieldMap: Map<string, FieldInfo>;
+  today: string;
+  fiscalYearStartMonth?: number;
+  crossFilter?: { field: string; value: string } | null;
+  runId: string;
+  user?: string;
+  tenantId?: string;
+}
+
+interface CompiledReport {
+  request: ReportRunRequest;
+  /** One per widget requirement (+ the record-count query). */
+  queries: ReportQuery[];
+  /** Unique queries actually sent. */
+  unique: ReportQuery[];
+  /** queryId -> id of the unique query whose result it shares. */
+  aliasOf: Record<string, string>;
+  period: ResolvedPeriod | null;
+  comparePeriod: ResolvedPeriod | null;
+  /** Non-fatal observations (e.g. a report filter that does not apply to a funnel stage's source). */
+  notes: string[];
+}
+
+const RECORDS_QUERY_ID = '__records';
+const resultKey = (widgetId: string, suffix = '') =>
+  suffix ? `${widgetId}#${suffix}` : widgetId;
+
+const toQueryFilters = (rules: RuleLike[]): QueryFilter[] =>
+  rules
+    .filter((r) => r.field && r.value !== '')
+    .map((r) => ({ field: r.field, op: r.op as QueryOp, value: r.value }));
+
+function bucketForDays(days: number): 'day' | 'week' | 'month' {
+  return days <= 35 ? 'day' : days <= 100 ? 'week' : 'month';
+}
+
+/**
+ * Section widgets carry filters for every widget after them until the next section.
+ * Returns widgets with those filters merged in front of their own (structural widgets pass through).
+ */
+function applySectionFilters<W extends RegistryWidget>(widgets: W[]): W[] {
+  let inherited: W['filters'] = [];
+  return widgets.map((w) => {
+    if (getWidget(w.kind)?.structural) {
+      inherited = w.filters ?? [];
+      return w;
+    }
+    return inherited.length
+      ? ({ ...w, filters: [...inherited, ...(w.filters ?? [])] } as W)
+      : w;
+  });
+}
+
+/** Definition hash for reproducibility: ignores volatile properties (createdAt). */
+function definitionHash(def: CompilableDefinition): string {
+  const { createdAt: _c, ...rest } = def;
+  return hashString(stableStringify(rest));
+}
+
+function compileReport(input: CompileInput): CompiledReport {
+  const { definition: def, sources, fieldMap, crossFilter } = input;
+  const ropts: ResolveOptions = {
+    today: input.today,
+    fiscalYearStartMonth: input.fiscalYearStartMonth,
+  };
+  const period = resolvePeriod(def.period, ropts);
+  const comparePeriod = resolveComparison(period, def.period.compare, ropts);
+  const source = sources.find((s) => s.id === def.sourceId);
+  if (!source) throw new Error(`Unknown data source "${def.sourceId}".`);
+  const notes: string[] = [];
+  const autoBucket = period ? bucketForDays(period.days) : 'month';
+  const reportFilters = toQueryFilters(def.filters);
+  const metricKeys = new Set((def.metrics ?? []).map((m) => m.key));
+  const derivedKeys = new Set((def.derived ?? []).map((d) => d.key));
+
+  const fieldsOf = (sourceId: string): Set<string> | null => {
+    if (sourceId === source.id) return null; // report source: everything in fieldMap (incl. derived/metrics) is valid
+    const s = sources.find((x) => x.id === sourceId);
+    return s ? new Set(s.fields.map((f) => f.key)) : new Set();
+  };
+
+  const queries: ReportQuery[] = [];
+  const widgets = applySectionFilters(def.widgets);
+
+  for (const w of widgets) {
+    const d = getWidget(w.kind);
+    if (!d || d.structural) continue;
+    const specs = d.requirements(w, { source, fieldMap, period, autoBucket });
+    for (const spec of specs) {
+      const { suffix, label, sourceId, extraFilters, compare, ...rest } = spec;
+      const sid = sourceId ?? source.id;
+      const known = fieldsOf(sid);
+      const skipXf =
+        !crossFilter || (d.skipsCrossFilter?.(w, crossFilter) ?? false);
+      let filters = [
+        ...reportFilters,
+        ...toQueryFilters(w.filters as RuleLike[]),
+        ...(skipXf || !crossFilter
+          ? []
+          : [
+              {
+                field: crossFilter.field,
+                op: 'eq' as const,
+                value: crossFilter.value,
+              },
+            ]),
+        ...(extraFilters ?? []),
+      ];
+      if (known) {
+        const dropped = filters.filter((f) => !known.has(f.field));
+        if (dropped.length)
+          notes.push(
+            `${w.title}: filter on ${[...new Set(dropped.map((x) => x.field))].join(', ')} does not apply to ${sources.find((s) => s.id === sid)?.name ?? sid} and was ignored.`
+          );
+        filters = filters.filter((f) => known.has(f.field));
+      }
+      const bucketed = (rest.dimensions ?? []).map((dim) => ({
+        ...dim,
+        bucket: dim.bucket === 'auto' ? autoBucket : dim.bucket,
+      }));
+      const used = new Set<string>([
+        ...bucketed.map((x) => x.field),
+        ...(rest.measures ?? []).map((m) => m.field ?? ''),
+        ...filters.map((f) => f.field),
+        ...(rest.columns ?? []),
+      ]);
+      const q: ReportQuery = {
+        ...rest,
+        id: resultKey(w.id, suffix),
+        widgetId: w.id,
+        label: label ?? w.title,
+        sourceId: sid,
+        period,
+        comparePeriod: compare && comparePeriod ? comparePeriod : undefined,
+        filters,
+        dimensions: bucketed,
+        measures: rest.measures ?? [],
+        spark: rest.spark === 'auto' ? autoBucket : rest.spark,
+      };
+      if (sid === source.id) {
+        const m = [...used].filter((k) => metricKeys.has(k));
+        if (m.length)
+          q.metrics = Object.fromEntries(
+            m.map((k) => [
+              k,
+              (def.metrics as { key: string }[]).find((x) => x.key === k),
+            ])
+          );
+        const dv = [...used].filter((k) => derivedKeys.has(k));
+        if (dv.length)
+          q.derived = (def.derived as { key: string }[]).filter(
+            (x) => derivedKeys.has(x.key) && dv.includes(x.key)
+          );
+      }
+      queries.push(q);
+    }
+  }
+
+  // Exact record count for the report header ("Records: 2,483,291"): period + report filters only.
+  queries.push({
+    id: RECORDS_QUERY_ID,
+    widgetId: RECORDS_QUERY_ID,
+    label: 'Records in scope',
+    sourceId: source.id,
+    shape: 'scalar',
+    period,
+    filters: reportFilters,
+    dimensions: [],
+    measures: [{ id: 'm0', agg: 'count' }],
+  });
+
+  // De-duplicate identical queries (several widgets often ask for the same aggregate).
+  const aliasOf: Record<string, string> = {};
+  const seen = new Map<string, string>();
+  const unique: ReportQuery[] = [];
+  for (const q of queries) {
+    const fp = queryFingerprint(q);
+    const prior = seen.get(fp);
+    if (prior) aliasOf[q.id] = prior;
+    else {
+      seen.set(fp, q.id);
+      aliasOf[q.id] = q.id;
+      unique.push(q);
+    }
+  }
+
+  return {
+    request: {
+      runId: input.runId,
+      definition: {
+        name: def.name,
+        schemaVersion: def.schemaVersion,
+        hash: definitionHash(def),
+        sourceId: def.sourceId,
+      },
+      tenantId: input.tenantId,
+      requestedBy: input.user,
+      timezone: def.timezone,
+      period,
+      comparePeriod,
+      filters: reportFilters,
+      queries: unique,
+    },
+    queries,
+    unique,
+    aliasOf,
+    period,
+    comparePeriod,
+    notes: [...new Set(notes)],
+  };
+}
+
+/* ---------------- validation.ts ---------------- */
+/**
+ * Pre-generation validation. Every message names the widget / field and says what to do.
+ *   ✗ "Invalid configuration."
+ *   ✓ "KPI card "Fraud rate" requires a measure field. Choose one in the inspector."
+ */
+
+interface ValidateInput {
+  name: string;
+  sourceId: string;
+  period: ReportPeriod;
+  filters: RuleLike[];
+  widgets: RegistryWidget[];
+  schedule?: { frequency: string; recipients: string };
+  format?: ExportFormat;
+  sources: SourceInfo[];
+  fieldMap: Map<string, FieldInfo>;
+  capabilities: ProviderCapabilities;
+  /** Capabilities the host allows for this user (UI hint; the backend re-checks). */
+  canExport?: boolean;
+  canViewSensitive?: boolean;
+  today: string;
+}
+
+const isNum = (s: string) => s.trim() !== '' && Number.isFinite(Number(s));
+
+/** Validates one filter rule; returns a message or null. */
+function filterProblem(
+  r: RuleLike,
+  fieldMap: Map<string, FieldInfo>
+): string | null {
+  const f = fieldMap.get(r.field);
+  if (!f) return `the field "${r.field}" is not available`;
+  const numeric =
+    f.type === 'number' || f.type === 'decimal' || f.type === 'currency';
+  if (r.op === 'between') {
+    const [a, b] = r.value.split('|');
+    if (numeric) {
+      if (!isNum(a ?? '') || !isNum(b ?? ''))
+        return `"${f.label}" needs a low and a high number`;
+      if (Number(a) > Number(b))
+        return `the "${f.label}" range starts above its end`;
+    } else if ((a ?? '') > (b ?? ''))
+      return `the "${f.label}" range starts after it ends`;
+  } else if (r.op === 'in') {
+    try {
+      const v = JSON.parse(r.value);
+      if (!Array.isArray(v) || v.length === 0)
+        return `select at least one "${f.label}" value`;
+    } catch {
+      return `the "${f.label}" selection is malformed`;
+    }
+  } else if (
+    numeric &&
+    ['gt', 'lt', 'eq', 'neq'].includes(r.op) &&
+    !isNum(r.value)
+  ) {
+    return `"${f.label}" needs a numeric value (got "${r.value}")`;
+  } else if (
+    (r.op === 'atleast' || r.op === 'atmost') &&
+    f.order &&
+    !f.order.includes(r.value)
+  ) {
+    return `"${r.value}" is not a level of "${f.label}"`;
+  }
+  return null;
+}
+
+function validateReport(i: ValidateInput): ValidationIssue[] {
+  const out: ValidationIssue[] = [];
+  const source = i.sources.find((s) => s.id === i.sourceId);
+
+  if (!source)
+    out.push(
+      issue(
+        'error',
+        'no-source',
+        'The report has no valid data source. Go back to Data and choose one.',
+        undefined,
+        'data'
+      )
+    );
+  if (!i.name.trim())
+    out.push(
+      issue(
+        'error',
+        'no-name',
+        'Give the report a name; it appears on the cover and in the export file name.',
+        undefined,
+        'data'
+      )
+    );
+
+  // Period
+  const pe = periodError(i.period);
+  if (pe) out.push(issue('error', 'period', pe, undefined, 'period'));
+  else {
+    const p = resolvePeriod(i.period, { today: i.today });
+    if (p && p.from > i.today)
+      out.push(
+        issue(
+          'warning',
+          'period-future',
+          'The reporting period is entirely in the future; the report will contain no data.',
+          undefined,
+          'period'
+        )
+      );
+    if (!p)
+      out.push(
+        issue(
+          'info',
+          'period-all',
+          'No date limit is set. Generating "All time" over a large history can take several minutes.',
+          undefined,
+          'period'
+        )
+      );
+  }
+
+  // Filters
+  i.filters.forEach((r, n) => {
+    if (!r.field || r.value === '') return;
+    const p = filterProblem(r, i.fieldMap);
+    if (p)
+      out.push({
+        ...issue(
+          'error',
+          'filter',
+          `Report filter ${n + 1}: ${p}. Fix or remove it.`,
+          undefined,
+          'filters'
+        ),
+        id: `report:filter:${n}`,
+      });
+  });
+
+  // Widgets
+  const content = i.widgets.filter((w) => !getWidget(w.kind)?.structural);
+  if (content.length === 0)
+    out.push(
+      issue(
+        'error',
+        'empty',
+        'The report is empty. Add at least one widget or start from a template.',
+        undefined,
+        'design'
+      )
+    );
+
+  for (const w of applySectionFilters(i.widgets)) {
+    const d = getWidget(w.kind);
+    if (!d) {
+      out.push(
+        issue(
+          'error',
+          'unknown-kind',
+          `"${w.title || w.kind}" uses a widget type (${w.kind}) that is not installed. Remove it or install the extension that provides it.`,
+          w.id
+        )
+      );
+      continue;
+    }
+    if (d.maturity === 'planned')
+      out.push(
+        issue(
+          'error',
+          'planned',
+          `${describeWidget(w)} is not available yet. Remove it before generating.`,
+          w.id
+        )
+      );
+    if (d.requiresCapability && !i.capabilities[d.requiresCapability])
+      out.push(
+        issue(
+          'error',
+          'capability',
+          `${describeWidget(w)} needs data your connected backend does not provide yet (${String(d.requiresCapability)}). Remove it or ask your administrator to enable it.`,
+          w.id
+        )
+      );
+    (w.filters ?? []).forEach((r, n) => {
+      if (!r.field || r.value === '') return;
+      const p = filterProblem(r as RuleLike, i.fieldMap);
+      if (p)
+        out.push({
+          ...issue(
+            'error',
+            'widget-filter',
+            `${describeWidget(w)}: filter ${n + 1}: ${p}.`,
+            w.id
+          ),
+          id: `${w.id}:filter:${n}`,
+        });
+    });
+    if (source)
+      out.push(
+        ...d.validate(w, {
+          source,
+          fieldMap: i.fieldMap,
+          sources: i.sources,
+          capabilities: i.capabilities,
+        })
+      );
+  }
+
+  // Schedule & output
+  if (i.schedule && i.schedule.frequency !== 'none') {
+    const rcpts = i.schedule.recipients
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (rcpts.length === 0)
+      out.push(
+        issue(
+          'error',
+          'schedule',
+          'A schedule needs at least one recipient. Add an e-mail address or set it to on-demand.',
+          undefined,
+          'output'
+        )
+      );
+    const bad = rcpts.find((x) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+    if (bad)
+      out.push(
+        issue(
+          'error',
+          'schedule-email',
+          `"${bad}" is not a valid e-mail address.`,
+          undefined,
+          'output'
+        )
+      );
+  }
+  if (i.canExport === false)
+    out.push(
+      issue(
+        'error',
+        'permission-export',
+        'You do not have permission to export reports. Ask your administrator for the export entitlement.',
+        undefined,
+        'output'
+      )
+    );
+  if (
+    i.format &&
+    i.format !== 'pdf' &&
+    i.format !== 'csv' &&
+    !i.capabilities.export?.includes(i.format)
+  )
+    out.push(
+      issue(
+        'error',
+        'format',
+        `${i.format.toUpperCase()} export is not enabled for this backend. Choose PDF or CSV, or enable it in the report data provider.`,
+        undefined,
+        'output'
+      )
+    );
+  if (i.canViewSensitive === false && content.some((w) => w.kind === 'table'))
+    out.push(
+      issue(
+        'info',
+        'masked',
+        'Sensitive fields (names, account numbers) will appear masked in tables and exports.',
+        undefined,
+        'output'
+      )
+    );
+
+  // De-duplicate by id (a widget can produce the same issue twice)
+  const seen = new Set<string>();
+  return out.filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)));
+}
+
+const hasErrors = (xs: ValidationIssue[]) =>
+  xs.some((x) => x.severity === 'error');
+const countBySeverity = (xs: ValidationIssue[]) => ({
+  error: xs.filter((x) => x.severity === 'error').length,
+  warning: xs.filter((x) => x.severity === 'warning').length,
+  info: xs.filter((x) => x.severity === 'info').length,
+});
+
+/* ---------------- runEngine.ts ---------------- */
+/**
+ * Report run engine
+ * ----------------------------------------------------------------------------
+ *   compile ─▶ [ provider.execute (chunked, parallel, retried) ]  or  [ submit ▶ poll ▶ fetchResult ]
+ *           ─▶ merge ▶ fan duplicate queries back out ▶ run metadata
+ *
+ * `executeRun` is pure async (injectable sleep/clock) so it is unit-testable. `useReportRun` wraps it for React.
+ * Supports: progress, cancellation (AbortSignal + provider.cancel), retry, partial results, background jobs,
+ * and cheap re-execution of a subset of queries (`refine`, used by cross-filtering).
+ */
+
+type StageId =
+  | 'validate'
+  | 'filters'
+  | 'fetch'
+  | 'calculate'
+  | 'build'
+  | 'finalize';
+const STAGES: { id: StageId; label: string; span: [number, number] }[] = [
+  { id: 'validate', label: 'Validating report', span: [0, 0.05] },
+  { id: 'filters', label: 'Applying filters', span: [0.05, 0.1] },
+  { id: 'fetch', label: 'Fetching data', span: [0.1, 0.72] },
+  { id: 'calculate', label: 'Calculating metrics', span: [0.72, 0.85] },
+  { id: 'build', label: 'Building visualizations', span: [0.85, 0.95] },
+  { id: 'finalize', label: 'Preparing final report', span: [0.95, 1] },
+];
+
+interface RunResult {
+  runId: string;
+  /** Results for EVERY query id (duplicates share the same object). */
+  results: Record<string, QueryResult>;
+  failures: QueryFailure[];
+  meta: ReportRunMetadata;
+  /** True when the report's scope matched zero records. */
+  empty: boolean;
+  partial: boolean;
+  compiled: CompiledReport;
+}
+
+interface Progress {
+  stage: StageId;
+  /** 0..1 overall */
+  progress: number;
+  message?: string;
+}
+
+interface RunContext {
+  reportName: string;
+  sourceName: string;
+  user: string;
+  filterLabels: string[];
+  viewFilterLabels: string[];
+  /** Injectable for tests. */
+  now?: () => number;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  chunkSize?: number;
+  concurrency?: number;
+  maxRetries?: number;
+  /** Give up on a background job after this long. */
+  jobTimeoutMs?: number;
+}
+
+class RunError extends Error {
+  constructor(
+    message: string,
+    public retryable = true
+  ) {
+    super(message);
+    this.name = 'RunError';
+  }
+}
+const isAbort = (e: unknown) => (e as { name?: string })?.name === 'AbortError';
+
+const defaultSleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted)
+      return reject(new DOMException('Aborted', 'AbortError'));
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t);
+        reject(new DOMException('Aborted', 'AbortError'));
+      },
+      { once: true }
+    );
+  });
+
+const within = (stage: StageId, f: number) => {
+  const s = STAGES.find((x) => x.id === stage)!;
+  return s.span[0] + (s.span[1] - s.span[0]) * Math.max(0, Math.min(1, f));
+};
+
+const chunk = <T,>(xs: T[], n: number): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+  return out;
+};
+
+/** Execute `queries` through the provider. Returns merged results + failures. */
+async function fetchQueries(
+  provider: ReportDataProvider,
+  request: ReportRunRequest,
+  queries: ReportQuery[],
+  ctx: RunContext,
+  signal: AbortSignal,
+  onProgress: (f: number, message?: string) => void
+): Promise<BatchResult> {
+  const sleep = ctx.sleep ?? defaultSleep;
+  const now = ctx.now ?? Date.now;
+
+  /* ---- background job path ---- */
+  if (provider.submit && provider.poll && provider.fetchResult) {
+    const { jobId } = await provider.submit(
+      { ...request, queries },
+      { signal }
+    );
+    const started = now();
+    let wait = 500;
+    try {
+      for (;;) {
+        await sleep(wait, signal);
+        wait = Math.min(3000, Math.round(wait * 1.5));
+        const st = await provider.poll(jobId, { signal });
+        onProgress(st.progress ?? 0, st.message);
+        if (st.state === 'succeeded')
+          return await provider.fetchResult(jobId, { signal });
+        if (st.state === 'failed')
+          throw new RunError(
+            st.message || 'The report job failed on the server.',
+            true
+          );
+        if (st.state === 'cancelled')
+          throw new DOMException('Aborted', 'AbortError');
+        if (now() - started > (ctx.jobTimeoutMs ?? 30 * 60_000))
+          throw new RunError(
+            'The report took too long to generate. Narrow the period or filters, or try again later.',
+            true
+          );
+      }
+    } catch (e) {
+      if (isAbort(e) || signal.aborted)
+        await provider.cancel?.(jobId).catch(() => undefined);
+      throw e;
+    }
+  }
+
+  /* ---- synchronous batch path ---- */
+  if (!provider.execute)
+    throw new RunError(
+      'The data provider cannot execute reports (no execute or job API).',
+      false
+    );
+  const batches = chunk(queries, ctx.chunkSize ?? 6);
+  const merged: BatchResult = {
+    results: {},
+    failures: [],
+    meta: { recordsMatched: null },
+  };
+  let done = 0;
+  const maxRetries = ctx.maxRetries ?? 2;
+  const runBatch = async (qs: ReportQuery[]) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const r = await provider.execute!(request, qs, { signal });
+        Object.assign(merged.results, r.results);
+        merged.failures.push(...r.failures);
+        merged.meta = {
+          ...merged.meta,
+          ...r.meta,
+          recordsMatched: r.meta.recordsMatched ?? merged.meta.recordsMatched,
+          partial: merged.meta.partial || r.meta.partial,
+          warnings: [
+            ...(merged.meta.warnings ?? []),
+            ...(r.meta.warnings ?? []),
+          ],
+        };
+        return;
+      } catch (e) {
+        if (isAbort(e) || signal.aborted) throw e;
+        const retryable = !(e instanceof RunError) || e.retryable;
+        if (!retryable || attempt >= maxRetries) {
+          // Degrade to partial: report which queries failed rather than failing the whole report.
+          const msg = e instanceof Error ? e.message : 'Query failed';
+          merged.failures.push(
+            ...qs.map((q) => ({ queryId: q.id, message: msg, retryable }))
+          );
+          return;
+        }
+        await sleep(300 * 2 ** attempt, signal);
+      }
+    }
+  };
+  const conc = Math.max(1, ctx.concurrency ?? 2);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(conc, batches.length) }, async () => {
+      while (next < batches.length) {
+        const mine = batches[next++];
+        await runBatch(mine);
+        done++;
+        onProgress(done / batches.length);
+      }
+    })
+  );
+  return merged;
+}
+
+/** Full run: fetch, fan out duplicates, build metadata. */
+async function executeRun(
+  provider: ReportDataProvider,
+  compiled: CompiledReport,
+  ctx: RunContext,
+  signal: AbortSignal,
+  onProgress: (p: Progress) => void
+): Promise<RunResult> {
+  const now = ctx.now ?? Date.now;
+  const t0 = now();
+  const emit = (stage: StageId, f: number, message?: string) =>
+    onProgress({ stage, progress: within(stage, f), message });
+  const tick = async (stage: StageId) => {
+    emit(stage, 1);
+    await Promise.resolve();
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+  };
+
+  emit('validate', 0);
+  await tick('validate');
+  emit('filters', 0);
+  await tick('filters');
+  emit('fetch', 0);
+  const batch = await fetchQueries(
+    provider,
+    compiled.request,
+    compiled.unique,
+    ctx,
+    signal,
+    (f, m) => emit('fetch', f, m)
+  );
+  emit('calculate', 0.5);
+  await tick('calculate');
+
+  // Fan duplicate queries back out to every id that asked for them.
+  const results: Record<string, QueryResult> = {};
+  const failures: QueryFailure[] = [...batch.failures];
+  for (const q of compiled.queries) {
+    const owner = compiled.aliasOf[q.id];
+    const r = batch.results[owner];
+    if (r) results[q.id] = r;
+    else if (!failures.some((f) => f.queryId === owner))
+      failures.push({
+        queryId: owner,
+        message: 'The server returned no result for this query.',
+        retryable: true,
+      });
+  }
+  for (const f of batch.failures)
+    for (const [id, owner] of Object.entries(compiled.aliasOf))
+      if (owner === f.queryId && id !== f.queryId)
+        failures.push({ ...f, queryId: id });
+
+  emit('build', 0.5);
+  await tick('build');
+
+  const rec = results[RECORDS_QUERY_ID] as ScalarResult | undefined;
+  const recordsMatched = rec?.values?.[0] ?? batch.meta.recordsMatched ?? null;
+  const widgetQueries = compiled.queries.filter(
+    (q) => q.id !== RECORDS_QUERY_ID
+  );
+  const failedWidgets = new Set(
+    failures.filter((f) => f.queryId !== RECORDS_QUERY_ID).map((f) => f.queryId)
+  );
+  if (
+    widgetQueries.length > 0 &&
+    failedWidgets.size >= widgetQueries.length &&
+    !Object.keys(results).some((k) => k !== RECORDS_QUERY_ID)
+  )
+    throw new RunError(
+      failures[0]?.message ?? 'No part of the report could be generated.',
+      failures.every((f) => f.retryable)
+    );
+
+  const warnings = [...compiled.notes, ...(batch.meta.warnings ?? [])];
+  const partial = !!batch.meta.partial || failedWidgets.size > 0;
+  if (failedWidgets.size > 0)
+    warnings.push(
+      `${failedWidgets.size} widget(s) could not be calculated and are marked in the report.`
+    );
+
+  const meta: ReportRunMetadata = {
+    runId: compiled.request.runId,
+    dataStatus: 'actual',
+    reportName: ctx.reportName,
+    definitionHash: compiled.request.definition.hash,
+    schemaVersion: compiled.request.definition.schemaVersion,
+    sourceId: compiled.request.definition.sourceId,
+    sourceName: ctx.sourceName,
+    datasetVersion: batch.meta.datasetVersion,
+    dataAsOf: batch.meta.dataAsOf,
+    period: compiled.period,
+    comparePeriod: compiled.comparePeriod,
+    filters: ctx.filterLabels,
+    viewFilters: ctx.viewFilterLabels,
+    generatedAt: new Date(now()).toISOString(),
+    generatedBy: ctx.user,
+    tenantId: compiled.request.tenantId,
+    timezone: compiled.request.timezone,
+    recordsMatched,
+    queryCount: compiled.unique.length,
+    durationMs: now() - t0,
+    partial,
+    warnings,
+  };
+  emit('finalize', 1);
+  return {
+    runId: meta.runId,
+    results,
+    failures,
+    meta,
+    empty: recordsMatched === 0,
+    partial,
+    compiled,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * React hook
+ * ------------------------------------------------------------------------- */
+type RunPhase = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+interface RunState {
+  phase: RunPhase;
+  stage: StageId | null;
+  progress: number;
+  message?: string;
+  startedAt?: number;
+  /** Rough time remaining in ms (null until enough progress to estimate). */
+  etaMs: number | null;
+  error?: { message: string; retryable: boolean };
+  result?: RunResult;
+  /** A cross-filter refresh is in flight (result stays visible). */
+  refining: boolean;
+}
+const IDLE: RunState = {
+  phase: 'idle',
+  stage: null,
+  progress: 0,
+  etaMs: null,
+  refining: false,
+};
+
+function useReportRun(provider: ReportDataProvider) {
+  const [state, setState] = useState<RunState>(IDLE);
+  const abortRef = useRef<AbortController | null>(null);
+  const lastRef = useRef<{ compiled: CompiledReport; ctx: RunContext } | null>(
+    null
+  );
+  const providerRef = useRef(provider);
+  providerRef.current = provider;
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const start = useCallback(
+    async (compiled: CompiledReport, ctx: RunContext) => {
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      lastRef.current = { compiled, ctx };
+      const t0 = Date.now();
+      setState({ ...IDLE, phase: 'running', stage: 'validate', startedAt: t0 });
+      try {
+        const result = await executeRun(
+          providerRef.current,
+          compiled,
+          ctx,
+          ctrl.signal,
+          (p) => {
+            if (ctrl.signal.aborted) return;
+            const elapsed = Date.now() - t0;
+            setState((s) => ({
+              ...s,
+              stage: p.stage,
+              progress: p.progress,
+              message: p.message,
+              etaMs:
+                p.progress > 0.15 && p.progress < 1
+                  ? Math.round((elapsed / p.progress) * (1 - p.progress))
+                  : null,
+            }));
+          }
+        );
+        if (ctrl.signal.aborted) return;
+        setState({
+          ...IDLE,
+          phase: 'succeeded',
+          progress: 1,
+          stage: 'finalize',
+          result,
+        });
+      } catch (e) {
+        if (isAbort(e) || ctrl.signal.aborted) {
+          setState({ ...IDLE, phase: 'cancelled' });
+          return;
+        }
+        setState({
+          ...IDLE,
+          phase: 'failed',
+          error: {
+            message:
+              e instanceof Error ? e.message : 'Report generation failed.',
+            retryable: e instanceof RunError ? e.retryable : true,
+          },
+        });
+      }
+    },
+    []
+  );
+
+  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  const retry = useCallback(() => {
+    const l = lastRef.current;
+    if (l) void start(l.compiled, l.ctx);
+  }, [start]);
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    lastRef.current = null;
+    setState(IDLE);
+  }, []);
+
+  /** Re-run only some queries against the existing result (cross-filter / drill). Keeps the report visible. */
+  const refine = useCallback(
+    async (
+      compiled: CompiledReport,
+      queryIds: string[],
+      viewFilters: string[]
+    ) => {
+      const cur = stateRef.current.result;
+      const l = lastRef.current;
+      if (!cur || !l) return;
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      setState((s) => ({ ...s, refining: true }));
+      try {
+        const wanted = new Set(
+          queryIds.map((id) => compiled.aliasOf[id] ?? id)
+        );
+        const qs = compiled.unique.filter((q) => wanted.has(q.id));
+        const batch = await fetchQueries(
+          providerRef.current,
+          compiled.request,
+          qs,
+          l.ctx,
+          ctrl.signal,
+          () => undefined
+        );
+        if (ctrl.signal.aborted) return;
+        const results = { ...cur.results };
+        const failures = cur.failures.filter(
+          (f) => !queryIds.includes(f.queryId)
+        );
+        for (const id of queryIds) {
+          const r = batch.results[compiled.aliasOf[id] ?? id];
+          if (r) results[id] = r;
+          else delete results[id];
+        }
+        for (const f of batch.failures)
+          for (const id of queryIds)
+            if ((compiled.aliasOf[id] ?? id) === f.queryId)
+              failures.push({ ...f, queryId: id });
+        setState((s) => ({
+          ...s,
+          refining: false,
+          result: s.result && {
+            ...s.result,
+            results,
+            failures,
+            compiled,
+            meta: { ...s.result.meta, viewFilters },
+          },
+        }));
+      } catch (e) {
+        if (isAbort(e) || ctrl.signal.aborted) return;
+        setState((s) => ({ ...s, refining: false }));
+      }
+    },
+    []
+  );
+
+  return { state, start, cancel, retry, reset, refine };
+}
+
+/* ---------------- legacyDescriptors.ts ---------------- */
+/**
+ * Registry descriptors for the original widgets (kpi, chart, table, text, insight).
+ * Their React views stay in ReportBuilder.tsx (`render` is intentionally omitted); this file adds what the
+ * registry needs: the QUERIES each one requires, validation, and interaction rules.
+ */
+
+type RW = RegistryWidget;
+const AGGS_NEEDING_FIELD = new Set([
+  'sum',
+  'avg',
+  'min',
+  'max',
+  'distinct',
+  'yes',
+  'rate',
+  'metric',
+]);
+const AGG_NOUN: Record<string, string> = {
+  sum: 'a numeric field to add up',
+  avg: 'a numeric field to average',
+  min: 'a numeric field',
+  max: 'a numeric field',
+  distinct: 'a field to count distinct values of',
+  yes: 'a Yes/No field',
+  rate: 'a Yes/No field',
+  metric: 'a calculated metric',
+};
+
+/** A measure is required for every aggregation except plain "count". */
+function measureIssues(w: RW, ctx: ValidateCtx): ValidationIssue[] {
+  const agg = String(w.agg ?? 'count');
+  if (!AGGS_NEEDING_FIELD.has(agg)) return [];
+  const i = requireField(
+    w,
+    'field',
+    ctx,
+    `a measure (${AGG_NOUN[agg] ?? 'a field'})`
+  );
+  if (i) return [i];
+  const f = ctx.fieldMap.get(String(w.field))!;
+  if ((agg === 'sum' || agg === 'avg') && !isNumericType(f.type) && !f.metric)
+    return [
+      issue(
+        'error',
+        'bad-measure',
+        `${describeWidget(w)}: "${f.label}" is not numeric, so it cannot be ${agg === 'sum' ? 'summed' : 'averaged'}. Pick a numeric field or change the calculation to Count.`,
+        w.id
+      ),
+    ];
+  return [];
+}
+
+const measure = (w: RW) => ({
+  id: 'm0',
+  agg: String(w.agg ?? 'count') as QueryAgg,
+  field: w.field as string | undefined,
+});
+
+const kpi: WidgetDescriptor = {
+  kind: 'kpi',
+  label: 'KPI card',
+  hint: 'One headline number with trend and target',
+  category: 'executive',
+  icon: Hash,
+  exportAs: 'visual',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  requirements: (w) => [
+    {
+      shape: 'scalar',
+      measures: [measure(w)],
+      compare: true,
+      spark: w.showSparkline ? 'auto' : undefined,
+    },
+  ],
+  validate: (w, ctx) => measureIssues(w, ctx),
+  interactions: {},
+};
+
+const chart: WidgetDescriptor = {
+  kind: 'chart',
+  label: 'Chart',
+  hint: 'Bar, line, area, donut, scatter, heatmap, pivot',
+  category: 'charts',
+  icon: BarChart3,
+  exportAs: 'visual',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  interactions: { crossFilter: true, drill: true },
+  skipsCrossFilter: (w, xf) =>
+    w.chartType !== 'scatter' && w.groupBy === xf.field,
+  requirements: (w) => {
+    if (w.chartType === 'scatter')
+      return [
+        {
+          shape: 'points',
+          measures: [],
+          points: {
+            x: String(w.xField ?? ''),
+            y: String(w.field ?? ''),
+            colour: (w.breakBy as string) || undefined,
+            max: 1500,
+          },
+        },
+      ];
+    const sort = w.sort as string | undefined;
+    const dims = [
+      {
+        field: String(w.groupBy),
+        bucket: ((w.bucket as string) ?? 'auto') as 'auto',
+      },
+    ];
+    if (w.breakBy) dims.push({ field: String(w.breakBy), bucket: 'auto' });
+    return [
+      {
+        shape: 'grouped',
+        dimensions: dims,
+        measures: [measure(w)],
+        limit: Number(w.topN ?? 6),
+        others: !!w.others,
+        seriesLimit: 6,
+        sort:
+          sort === 'valueDesc'
+            ? { by: 'measure', dir: 'desc' }
+            : sort === 'valueAsc'
+              ? { by: 'measure', dir: 'asc' }
+              : sort === 'label'
+                ? { by: 'label', dir: 'asc' }
+                : undefined,
+      },
+    ];
+  },
+  validate: (w, ctx) => {
+    const out: ValidationIssue[] = [];
+    if (w.chartType === 'scatter') {
+      const x = requireField(w, 'xField', ctx, 'a numeric X-axis field', (f) =>
+        isNumericType(f.type)
+      );
+      const y = requireField(w, 'field', ctx, 'a numeric Y-axis field', (f) =>
+        isNumericType(f.type)
+      );
+      return [x, y].filter((i): i is ValidationIssue => !!i);
+    }
+    const g = requireField(w, 'groupBy', ctx, 'a dimension to group by');
+    if (g) out.push(g);
+    else {
+      const f = ctx.fieldMap.get(String(w.groupBy))!;
+      if (
+        (w.chartType === 'doughnut' || w.chartType === 'pie') &&
+        isDateInfoType(f.type)
+      )
+        out.push(
+          issue(
+            'warning',
+            'pie-date',
+            `${describeWidget(w)}: a pie/donut over dates is hard to read. Use a line or column chart for time.`,
+            w.id
+          )
+        );
+    }
+    if (
+      (w.chartType === 'stacked' ||
+        w.chartType === 'heatmap' ||
+        w.chartType === 'pivot') &&
+      !w.breakBy
+    )
+      out.push(
+        issue(
+          'error',
+          'missing-breakBy',
+          `${describeWidget(w)} requires a second dimension ("Break down by") to ${w.chartType === 'stacked' ? 'stack' : 'fill the grid'}.`,
+          w.id
+        )
+      );
+    return [...out, ...measureIssues(w, ctx)];
+  },
+};
+
+const table: WidgetDescriptor = {
+  kind: 'table',
+  label: 'Table',
+  hint: 'Record-level detail',
+  category: 'analytical',
+  icon: Table2,
+  exportAs: 'table',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  requirements: (w, ctx) => {
+    const cols = (w.columns as string[]) ?? [];
+    const sortBy = w.sortBy as string | undefined;
+    return [
+      {
+        shape: 'records',
+        measures: [],
+        columns: cols,
+        orderBy: sortBy
+          ? { field: sortBy, dir: (w.sortDir as 'asc') ?? 'desc' }
+          : undefined,
+        limit: Number(w.limit ?? 25),
+        totalsFor: w.showTotals
+          ? cols.filter((c) => {
+              const f = ctx.fieldMap.get(c);
+              return f && isNumericType(f.type);
+            })
+          : undefined,
+      },
+    ];
+  },
+  validate: (w, ctx) => {
+    const cols = (w.columns as string[]) ?? [];
+    if (cols.length === 0)
+      return [
+        issue(
+          'error',
+          'no-columns',
+          `${describeWidget(w)} has no columns. Choose at least one in the inspector.`,
+          w.id
+        ),
+      ];
+    const gone = cols.filter((c) => !ctx.fieldMap.has(c));
+    return gone.length
+      ? [
+          issue(
+            'error',
+            'unknown-columns',
+            `${describeWidget(w)} uses fields that no longer exist (${gone.join(', ')}). Remove them from its columns.`,
+            w.id
+          ),
+        ]
+      : [];
+  },
+};
+
+const text: WidgetDescriptor = {
+  kind: 'text',
+  label: 'Commentary',
+  hint: 'Headings, narrative and callouts',
+  category: 'content',
+  icon: FileText,
+  exportAs: 'text',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  requirements: () => [],
+  validate: (w) =>
+    String(w.text ?? '').trim()
+      ? []
+      : [
+          issue(
+            'warning',
+            'empty-text',
+            `${describeWidget(w)} is empty and will print as a blank block.`,
+            w.id
+          ),
+        ],
+};
+
+const insight: WidgetDescriptor = {
+  kind: 'insight',
+  label: 'Key insights',
+  hint: 'Auto-written findings',
+  category: 'executive',
+  icon: Lightbulb,
+  exportAs: 'text',
+  config: [],
+  create: () => ({ unavailable: 'created by the host' }),
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [
+        {
+          field: String(w.groupBy),
+          bucket: ((w.bucket as string) ?? 'auto') as 'auto',
+        },
+      ],
+      measures: [measure(w)],
+      limit: 50,
+      compare: true,
+    },
+    { suffix: 'total', shape: 'scalar', measures: [measure(w)], compare: true },
+  ],
+  validate: (w, ctx) => {
+    const g = requireField(w, 'groupBy', ctx, 'a dimension to analyse');
+    return [...(g ? [g] : []), ...measureIssues(w, ctx)];
+  },
+};
+
+function registerLegacyWidgets() {
+  [kpi, chart, table, text, insight].forEach((d) => {
+    if (!getWidget(d.kind)) registerWidget(d);
+  });
+}
+
+/* ---------------- widgets/shared.tsx ---------------- */
+/** Helpers shared by the registry widgets. */
+
+const newId = () => uuidv4();
+const mkExt = (
+  kind: string,
+  title: string,
+  over: Record<string, unknown> = {}
+): RegistryWidget =>
+  ({
+    id: newId(),
+    kind,
+    title,
+    span: 6,
+    height: 'md',
+    filters: [],
+    ...over,
+  }) as RegistryWidget;
+
+const catOf = (fs: FieldInfo[]) => fs.filter((f) => f.type === 'category');
+const numOf = (fs: FieldInfo[]) => fs.filter((f) => isNumericType(f.type));
+
+/** Smart defaults: first ordinal category, first category, money, any number, boolean, date. */
+function defaultsOf(ctx: CreateCtx) {
+  const fs = ctx.fields.length ? ctx.fields : ctx.source.fields;
+  const cats = catOf(fs).sort((a, b) => Number(!!b.order) - Number(!!a.order));
+  const money = fs.find((f) => f.type === 'currency');
+  const num = money ?? numOf(fs)[0];
+  return {
+    cat: cats[0],
+    cat2: cats[1],
+    ordinal: cats.find((c) => c.order),
+    money,
+    num,
+    bool: fs.find((f) => f.type === 'boolean'),
+    date: fs.find((f) => isDateInfoType(f.type)),
+    score:
+      fs.find((f) => /score/i.test(f.key) && isNumericType(f.type)) ??
+      numOf(fs).find((f) => f.type === 'number'),
+  };
+}
+const defaultMeasure = (ctx: CreateCtx) => {
+  const d = defaultsOf(ctx);
+  return d.money
+    ? { agg: 'sum', field: d.money.key }
+    : { agg: 'count', field: undefined };
+};
+
+const ratio = (n: number, d: number) => (d ? (n / d) * 100 : 0);
+
+/** Change vs previous period: points for rates, % otherwise. null when there is no comparison. */
+function deltaOf(agg: string, cur: number, prev: number | undefined | null) {
+  if (prev === undefined || prev === null) return null;
+  const pts = agg === 'rate';
+  const v = pts
+    ? cur - prev
+    : prev === 0
+      ? null
+      : ((cur - prev) / Math.abs(prev)) * 100;
+  return v === null
+    ? null
+    : {
+        value: v,
+        text: `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}${pts ? ' pts' : '%'}`,
+        up: v >= 0,
+      };
+}
+
+type Rag = 'ok' | 'warn' | 'breach';
+function ragOf(
+  v: number,
+  warn: number | undefined,
+  breach: number | undefined,
+  lowerIsBetter: boolean
+): Rag | null {
+  if (warn === undefined && breach === undefined) return null;
+  if (lowerIsBetter)
+    return breach !== undefined && v >= breach
+      ? 'breach'
+      : warn !== undefined && v >= warn
+        ? 'warn'
+        : 'ok';
+  return breach !== undefined && v <= breach
+    ? 'breach'
+    : warn !== undefined && v <= warn
+      ? 'warn'
+      : 'ok';
+}
+const RAG_STYLE: Record<Rag, { bg: string; fg: string; label: string }> = {
+  ok: { bg: '#dcfce7', fg: '#166534', label: 'Within appetite' },
+  warn: { bg: '#fef3c7', fg: '#92400e', label: 'Warning' },
+  breach: { bg: '#fee2e2', fg: '#991b1b', label: 'Breach' },
+};
+const RagPill: React.FC<{ rag: Rag }> = ({ rag }) => (
+  <span
+    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+    style={{ background: RAG_STYLE[rag].bg, color: RAG_STYLE[rag].fg }}
+  >
+    <span aria-hidden="true">
+      {rag === 'ok' ? '●' : rag === 'warn' ? '▲' : '■'}
+    </span>
+    {RAG_STYLE[rag].label}
+  </span>
+);
+
+const WidgetEmpty: React.FC<{ text?: string }> = ({
+  text = 'No data for the current scope.',
+}) => {
+  const t = useT();
+  return <p className={`py-8 text-center text-xs ${t.muted}`}>{text}</p>;
+};
+/** Standard loading / error / empty handling so each widget only renders the happy path. */
+const Gate: React.FC<{
+  status: string;
+  error?: string;
+  children: React.ReactNode;
+}> = ({ status, error, children }) => {
+  const t = useT();
+  if (status === 'error')
+    return (
+      <p role="alert" className="py-6 text-center text-xs text-red-600">
+        Could not be calculated{error ? `: ${error}` : ''}
+      </p>
+    );
+  if (status === 'loading')
+    return (
+      <div
+        className={`h-24 animate-pulse rounded-lg ${t.skeleton}`}
+        role="status"
+        aria-label="Loading"
+      />
+    );
+  return <>{children}</>;
+};
+
+const grouped = (r: QueryResult | undefined) =>
+  r && r.shape === 'grouped' ? r : undefined;
+const scalar = (r: QueryResult | undefined) =>
+  r && r.shape === 'scalar' ? r : undefined;
+
+const labelOf = (env: WidgetEnv, key?: string) =>
+  key ? (env.fieldMap.get(key)?.label ?? key) : '';
+const measureName = (env: WidgetEnv, agg: string, field?: string) =>
+  agg === 'count' || !field
+    ? 'Count'
+    : `${agg === 'sum' ? 'Total' : agg === 'avg' ? 'Average' : agg === 'rate' ? 'Rate of' : agg === 'distinct' ? 'Distinct' : agg} ${labelOf(env, field).toLowerCase()}`;
+
+const AGG_CHOICES = [
+  { value: 'count', label: 'Count' },
+  { value: 'sum', label: 'Sum' },
+  { value: 'avg', label: 'Average' },
+  { value: 'min', label: 'Min' },
+  { value: 'max', label: 'Max' },
+  { value: 'distinct', label: 'Distinct count' },
+  { value: 'rate', label: 'Rate (% yes)' },
+  { value: 'metric', label: 'Calculated metric' },
+];
+
+/* ---------------- widgets/executive.tsx ---------------- */
+/** Executive widgets: section header, KPI group, KRI panel, executive summary, period comparison. */
+
+type Item = {
+  label: string;
+  agg: QueryAgg;
+  field?: string;
+  lowerIsBetter?: boolean;
+  warn?: number;
+  breach?: number;
+};
+const itemsOf = (w: RegistryWidget) => (w.items as Item[]) ?? [];
+const itemMeasures = (items: Item[]) =>
+  items.map((it, i) => ({
+    id: `m${i}`,
+    agg: it.agg ?? 'count',
+    field: it.field,
+  }));
+const itemIssues = (
+  w: RegistryWidget,
+  ctx: ValidateCtx,
+  min = 1
+): ValidationIssue[] => {
+  const items = itemsOf(w);
+  if (items.length < min)
+    return [
+      issue(
+        'error',
+        'no-items',
+        `${describeWidget(w)} needs at least ${min} metric. Add one in the inspector.`,
+        w.id
+      ),
+    ];
+  return items.flatMap((it, i) => {
+    if (!it.label?.trim())
+      return [
+        issue(
+          'warning',
+          `item-label-${i}`,
+          `${describeWidget(w)}: metric ${i + 1} has no label.`,
+          w.id
+        ),
+      ];
+    return measureIssues(
+      {
+        ...w,
+        agg: it.agg,
+        field: it.field,
+        title: `${w.title} › ${it.label}`,
+      } as RegistryWidget,
+      ctx
+    ).map((x) => ({ ...x, id: `${w.id}:i${i}:${x.code}` }));
+  });
+};
+const itemSchema = (extra: ConfigField[] = []): ConfigField[] => [
+  { type: 'text', key: 'label', label: 'Label' },
+  { type: 'agg', key: 'agg', label: 'Calculation' },
+  {
+    type: 'field',
+    key: 'field',
+    label: 'Measure',
+    accept: 'measure',
+    optional: true,
+  },
+  {
+    type: 'toggle',
+    key: 'lowerIsBetter',
+    label: 'Lower is better',
+    advanced: false,
+  },
+  ...extra,
+];
+const makeItem = (): Record<string, unknown> => ({
+  label: 'New metric',
+  agg: 'count',
+  lowerIsBetter: true,
+});
+
+/* ---- Section header ---- */
+const SectionRender: WidgetDescriptor['render'] = ({ widget }) => {
+  const t = useT();
+  return (
+    <div className="rb-avoid">
+      <h2 className={`text-lg font-bold tracking-tight ${t.text}`}>
+        {widget.title}
+      </h2>
+      {widget.subtitle ? (
+        <p className={`mt-0.5 text-sm ${t.muted}`}>{String(widget.subtitle)}</p>
+      ) : null}
+    </div>
+  );
+};
+registerWidget({
+  kind: 'section',
+  label: 'Section header',
+  hint: 'Heading; its filters apply to every widget below it',
+  category: 'content',
+  icon: Heading,
+  structural: true,
+  exportAs: 'text',
+  requirements: () => [],
+  validate: () => [],
+  create: () =>
+    mkExt('section', 'New section', { span: 12, height: 'sm', subtitle: '' }),
+  config: [{ type: 'text', key: 'subtitle', label: 'Subtitle' }],
+  render: SectionRender,
+});
+
+/* ---- KPI group ---- */
+const KpiGroupRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const items = itemsOf(widget);
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <div
+          className="grid gap-3"
+          style={{
+            gridTemplateColumns: `repeat(${Math.min(items.length, 4)}, minmax(0,1fr))`,
+          }}
+        >
+          {items.map((it, i) => {
+            const v = r.values[i] ?? 0;
+            const d = env.compare ? deltaOf(it.agg, v, r.prev?.[i]) : null;
+            const good = d ? d.up === !it.lowerIsBetter : null;
+            return (
+              <div
+                key={i}
+                className={`rb-avoid rounded-lg border p-3 ${t.inset}`}
+              >
+                <p
+                  className={`text-[11px] font-semibold uppercase tracking-wide ${t.muted}`}
+                >
+                  {it.label}
+                </p>
+                <p className={`mt-1 text-2xl font-bold tabular-nums ${t.text}`}>
+                  {env.fmt(v, it.agg, it.field)}
+                </p>
+                {d ? (
+                  <p
+                    className={`mt-0.5 flex items-center gap-1 text-xs font-medium ${good ? 'text-emerald-600' : 'text-red-600'}`}
+                  >
+                    {d.up ? (
+                      <ArrowUpRight className="h-3 w-3" />
+                    ) : (
+                      <ArrowDownRight className="h-3 w-3" />
+                    )}{' '}
+                    {d.text} <span className={t.muted}>vs prior</span>
+                  </p>
+                ) : (
+                  <p className={`mt-0.5 text-[11px] ${t.muted}`}>
+                    {env.mode === 'preview'
+                      ? 'Comparison appears in the generated report'
+                      : 'No comparison'}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'kpiGroup',
+  label: 'KPI group',
+  hint: 'A row of related headline metrics',
+  category: 'executive',
+  icon: LayoutGrid,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const m = defaultMeasure(ctx);
+    return mkExt('kpiGroup', 'Headline metrics', {
+      span: 12,
+      height: 'sm',
+      items: [
+        {
+          label: `Total ${ctx.source.recordLabel}`,
+          agg: 'count',
+          lowerIsBetter: true,
+        },
+        {
+          label: 'Value at risk',
+          agg: m.agg,
+          field: m.field,
+          lowerIsBetter: true,
+        },
+      ],
+    });
+  },
+  requirements: (w) => [
+    { shape: 'scalar', measures: itemMeasures(itemsOf(w)), compare: true },
+  ],
+  validate: (w, ctx) => itemIssues(w, ctx),
+  config: [
+    {
+      type: 'list',
+      key: 'items',
+      label: 'Metric',
+      max: 6,
+      addLabel: 'Add metric',
+      make: makeItem,
+      item: itemSchema(),
+      itemLabel: (it) => String(it.label ?? ''),
+    },
+  ],
+  toTable: (w, rs, env) => {
+    const r = scalar(rs['']);
+    return r
+      ? {
+          headers: ['Metric', 'Value', 'Previous'],
+          rows: itemsOf(w).map((it, i) => [
+            it.label,
+            r.values[i] ?? 0,
+            r.prev?.[i] ?? '',
+          ]),
+        }
+      : null;
+  },
+  render: KpiGroupRender,
+} as WidgetDescriptor);
+
+/* ---- KRI / threshold panel ---- */
+const KriRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const items = itemsOf(widget);
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <table className="w-full text-left text-xs">
+          <caption className="sr-only">{widget.title}</caption>
+          <thead>
+            <tr className={`${t.inset} ${t.muted}`}>
+              {[
+                'Indicator',
+                'Actual',
+                'Warning',
+                'Breach',
+                'Status',
+                'Trend',
+              ].map((h) => (
+                <th key={h} scope="col" className="px-2 py-1.5 font-medium">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it, i) => {
+              const v = r.values[i] ?? 0;
+              const rag = ragOf(v, it.warn, it.breach, !!it.lowerIsBetter);
+              const d = env.compare ? deltaOf(it.agg, v, r.prev?.[i]) : null;
+              const show = (x?: number) =>
+                x === undefined ? '—' : env.fmt(x, it.agg, it.field);
+              return (
+                <tr
+                  key={i}
+                  className={`border-b last:border-b-0 ${t.line} ${t.body}`}
+                >
+                  <th scope="row" className={`px-2 py-2 font-medium ${t.text}`}>
+                    {it.label}
+                  </th>
+                  <td className="px-2 py-2 font-semibold tabular-nums">
+                    {env.fmt(v, it.agg, it.field)}
+                  </td>
+                  <td className="px-2 py-2 tabular-nums">{show(it.warn)}</td>
+                  <td className="px-2 py-2 tabular-nums">{show(it.breach)}</td>
+                  <td className="px-2 py-2">
+                    {rag ? (
+                      <RagPill rag={rag} />
+                    ) : (
+                      <span className={t.muted}>No threshold</span>
+                    )}
+                  </td>
+                  <td
+                    className={`px-2 py-2 tabular-nums ${d ? (d.up === !it.lowerIsBetter ? 'text-emerald-600' : 'text-red-600') : t.muted}`}
+                  >
+                    {d ? d.text : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'kri',
+  label: 'Risk indicators (KRI)',
+  hint: 'Metrics vs warning / breach thresholds with RAG status',
+  category: 'risk',
+  icon: Gauge,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    return mkExt('kri', 'Key risk indicators', {
+      span: 12,
+      items: [
+        {
+          label: 'Total ' + ctx.source.recordLabel,
+          agg: 'count',
+          lowerIsBetter: true,
+          warn: 500,
+          breach: 1000,
+        },
+        ...(d.bool
+          ? [
+              {
+                label: `${d.bool.label} rate`,
+                agg: 'rate',
+                field: d.bool.key,
+                lowerIsBetter: true,
+                warn: 20,
+                breach: 35,
+              },
+            ]
+          : []),
+      ],
+    });
+  },
+  requirements: (w) => [
+    { shape: 'scalar', measures: itemMeasures(itemsOf(w)), compare: true },
+  ],
+  validate: (w, ctx) => {
+    const out = itemIssues(w, ctx);
+    itemsOf(w).forEach((it, i) => {
+      if (
+        it.warn !== undefined &&
+        it.breach !== undefined &&
+        (it.lowerIsBetter ? it.warn > it.breach : it.warn < it.breach)
+      )
+        out.push(
+          issue(
+            'error',
+            `thr-${i}`,
+            `${describeWidget(w)}: "${it.label}" has its warning level beyond its breach level. ${it.lowerIsBetter ? 'Warning must be below breach' : 'Warning must be above breach'} when ${it.lowerIsBetter ? 'lower' : 'higher'} is better.`,
+            w.id
+          )
+        );
+    });
+    return out;
+  },
+  config: [
+    {
+      type: 'list',
+      key: 'items',
+      label: 'Indicator',
+      max: 8,
+      addLabel: 'Add indicator',
+      make: makeItem,
+      item: itemSchema([
+        { type: 'number', key: 'warn', label: 'Warning at' },
+        { type: 'number', key: 'breach', label: 'Breach at' },
+      ]),
+      itemLabel: (it) => String(it.label ?? ''),
+    },
+  ],
+  toTable: (w, rs) => {
+    const r = scalar(rs['']);
+    return r
+      ? {
+          headers: ['Indicator', 'Actual', 'Warning', 'Breach', 'Status'],
+          rows: itemsOf(w).map((it, i) => [
+            it.label,
+            r.values[i] ?? 0,
+            it.warn ?? '',
+            it.breach ?? '',
+            ragOf(r.values[i] ?? 0, it.warn, it.breach, !!it.lowerIsBetter) ??
+              '',
+          ]),
+        }
+      : null;
+  },
+  render: KriRender,
+} as WidgetDescriptor);
+
+/* ---- Executive summary: auto-written headline + findings + management commentary ---- */
+const ExecRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const items = itemsOf(widget);
+  const lines = r
+    ? items.map((it, i) => {
+        const v = r.values[i] ?? 0;
+        const d = env.compare ? deltaOf(it.agg, v, r.prev?.[i]) : null;
+        const good = d ? d.up === !it.lowerIsBetter : null;
+        return {
+          it,
+          text: `${it.label} was ${env.fmt(v, it.agg, it.field)}${d ? `, ${d.up ? 'up' : 'down'} ${d.text.replace(/^[+−]/, '')} on the prior period` : ''}.`,
+          good,
+          mag: d ? Math.abs(d.value) : 0,
+        };
+      })
+    : [];
+  const worst = [...lines]
+    .filter((l) => l.good === false)
+    .sort((a, b) => b.mag - a.mag)[0];
+  const best = [...lines]
+    .filter((l) => l.good === true)
+    .sort((a, b) => b.mag - a.mag)[0];
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <p
+              className={`text-[11px] font-bold uppercase tracking-wider ${t.muted}`}
+            >
+              Headlines
+            </p>
+            <ul className="mt-1 space-y-1.5">
+              {lines.map((l, i) => (
+                <li
+                  key={i}
+                  className={`flex gap-2 text-sm leading-snug ${t.body}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{
+                      background:
+                        l.good === null
+                          ? env.colors[0]
+                          : l.good
+                            ? '#16a34a'
+                            : '#dc2626',
+                    }}
+                  />
+                  {l.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {(worst || best) && (
+            <div>
+              <p
+                className={`text-[11px] font-bold uppercase tracking-wider ${t.muted}`}
+              >
+                Key findings
+              </p>
+              <ul className="mt-1 space-y-1">
+                {worst && (
+                  <li className="text-sm text-red-700">
+                    Needs attention: {worst.it.label} moved against target the
+                    most.
+                  </li>
+                )}
+                {best && (
+                  <li className="text-sm text-emerald-700">
+                    Improving: {best.it.label} shows the strongest favourable
+                    change.
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+          {String(widget.commentary ?? '').trim() && (
+            <div
+              className={`rounded-lg border-l-4 p-3 ${t.inset}`}
+              style={{ borderLeftColor: env.colors[0] }}
+            >
+              <p
+                className={`text-[11px] font-bold uppercase tracking-wider ${t.muted}`}
+              >
+                Management commentary
+              </p>
+              <p className={`mt-1 whitespace-pre-wrap text-sm ${t.body}`}>
+                {String(widget.commentary)}
+              </p>
+            </div>
+          )}
+          {!env.compare && (
+            <p className={`text-[11px] ${t.muted}`}>
+              {env.mode === 'preview'
+                ? 'Period-over-period wording is added when the report is generated.'
+                : ''}
+            </p>
+          )}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'execSummary',
+  label: 'Executive summary',
+  hint: 'Auto-written headlines, findings and your commentary',
+  category: 'executive',
+  icon: ScrollText,
+  exportAs: 'text',
+  interactions: {},
+  create: (ctx) => {
+    const m = defaultMeasure(ctx);
+    return mkExt('execSummary', 'Executive summary', {
+      span: 12,
+      commentary: '',
+      items: [
+        {
+          label: `Total ${ctx.source.recordLabel}`,
+          agg: 'count',
+          lowerIsBetter: true,
+        },
+        {
+          label: 'Value at risk',
+          agg: m.agg,
+          field: m.field,
+          lowerIsBetter: true,
+        },
+      ],
+    });
+  },
+  requirements: (w) => [
+    { shape: 'scalar', measures: itemMeasures(itemsOf(w)), compare: true },
+  ],
+  validate: (w, ctx) => itemIssues(w, ctx),
+  config: [
+    {
+      type: 'list',
+      key: 'items',
+      label: 'Metric',
+      max: 5,
+      addLabel: 'Add metric',
+      make: makeItem,
+      item: itemSchema(),
+      itemLabel: (it) => String(it.label ?? ''),
+    },
+    {
+      type: 'text',
+      key: 'commentary',
+      label: 'Management commentary',
+      multiline: true,
+      hint: 'Your own narrative, shown under the auto-written findings.',
+    },
+  ],
+  toTable: (w, rs) => {
+    const r = scalar(rs['']);
+    return r
+      ? {
+          headers: ['Metric', 'Value'],
+          rows: itemsOf(w).map((it, i) => [it.label, r.values[i] ?? 0]),
+        }
+      : null;
+  },
+  render: ExecRender,
+} as WidgetDescriptor);
+
+/* ---- Period-over-period by dimension ---- */
+const PeriodRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const agg = String(widget.agg ?? 'count');
+  const field = widget.field as string | undefined;
+  const max = Math.max(
+    1,
+    ...(g?.groups ?? []).flatMap((x) => [x.values[0] ?? 0, x.prev?.[0] ?? 0])
+  );
+  return (
+    <Gate status={status} error={error}>
+      {!g || g.groups.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-2">
+          {!env.compare && (
+            <p className={`text-[11px] ${t.muted}`}>
+              {env.mode === 'preview'
+                ? 'Previous-period bars appear in the generated report.'
+                : 'Enable a comparison period to see change.'}
+            </p>
+          )}
+          {g.groups.map((x) => {
+            const cur = x.values[0] ?? 0,
+              prev = x.prev?.[0];
+            const d = env.compare ? deltaOf(agg, cur, prev) : null;
+            return (
+              <div
+                key={x.key}
+                className="rb-avoid grid grid-cols-[120px_1fr_auto] items-center gap-2 text-xs"
+              >
+                <span className={`truncate ${t.body}`}>{x.label ?? x.key}</span>
+                <div className="space-y-0.5" aria-hidden="true">
+                  <div
+                    className="h-2 rounded"
+                    style={{
+                      width: `${(cur / max) * 100}%`,
+                      background: env.colors[0],
+                    }}
+                  />
+                  {env.compare && (
+                    <div
+                      className="h-1.5 rounded opacity-50"
+                      style={{
+                        width: `${((prev ?? 0) / max) * 100}%`,
+                        background: env.colors[1 % env.colors.length],
+                      }}
+                    />
+                  )}
+                </div>
+                <span className={`tabular-nums ${t.text}`}>
+                  {env.fmt(cur, agg, field, 'compact')}
+                  {d && (
+                    <span
+                      className={`ml-2 font-medium ${d.up ? 'text-red-600' : 'text-emerald-600'}`}
+                    >
+                      {d.text}
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'periodCompare',
+  label: 'Period comparison',
+  hint: 'Current vs previous period by category',
+  category: 'executive',
+  icon: BarChart2,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const m = defaultMeasure(ctx);
+    return d.cat
+      ? mkExt('periodCompare', `${d.cat.label}: this period vs prior`, {
+          groupBy: d.cat.key,
+          agg: m.agg,
+          field: m.field,
+          topN: 6,
+        })
+      : { unavailable: 'Needs a category field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: Number(w.topN ?? 6),
+      compare: true,
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a category to compare by'),
+      ...measureIssues(w, ctx),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'groupBy', label: 'Compare by', accept: 'category' },
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Show top',
+      min: 2,
+      max: 20,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Group', 'Current', 'Previous'],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            x.values[0] ?? 0,
+            x.prev?.[0] ?? '',
+          ]),
+        }
+      : null;
+  },
+  render: PeriodRender,
+} as WidgetDescriptor);
+
+void AGG_CHOICES;
+void labelOf;
+
+/* ---------------- widgets/risk.tsx ---------------- */
+/** Fraud & risk widgets: detection funnel, risk gauge, risk matrix, aging/SLA, geographic tiles, network graph (extension point). */
+
+/* ---------------- Detection funnel ---------------- */
+type Stage = {
+  label: string;
+  sourceId?: string;
+  agg: QueryAgg;
+  field?: string;
+  whereField?: string;
+  whereOp?: QueryOp;
+  whereValue?: string;
+};
+const stagesOf = (w: { [k: string]: unknown }) => (w.stages as Stage[]) ?? [];
+const stageFilters = (s: Stage): QueryFilter[] =>
+  s.whereField && s.whereValue
+    ? [{ field: s.whereField, op: s.whereOp ?? 'eq', value: s.whereValue }]
+    : [];
+
+const FunnelRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const stages = stagesOf(widget);
+  const vals = stages.map((_, i) => scalar(results[`s${i}`])?.values[0]);
+  const ready = vals.every((v) => v !== undefined);
+  const counts = stages.map((s, i) =>
+    s.agg === 'count' || s.agg === 'distinct' ? (vals[i] ?? 0) : null
+  );
+  const top = Math.max(1, ...counts.filter((c): c is number => c !== null));
+  let prevCount: number | null = null;
+  return (
+    <Gate status={status} error={error}>
+      {!ready ? (
+        <WidgetEmpty />
+      ) : (
+        <ol className="space-y-1.5" aria-label="Detection funnel">
+          {stages.map((s, i) => {
+            const v = vals[i] ?? 0;
+            const isCount = counts[i] !== null;
+            const conv =
+              isCount && prevCount !== null && prevCount > 0
+                ? (v / prevCount) * 100
+                : null;
+            if (isCount) prevCount = v;
+            const pct = isCount ? Math.max(3, (v / top) * 100) : 0;
+            const body = (
+              <>
+                <span
+                  className={`w-36 shrink-0 truncate text-left text-xs ${t.body}`}
+                >
+                  {s.label}
+                </span>
+                <span className="relative h-7 flex-1">
+                  {isCount ? (
+                    <span
+                      className="absolute inset-y-0 left-0 rounded"
+                      style={{
+                        width: `${pct}%`,
+                        background: env.colors[i % env.colors.length],
+                        opacity: 0.9,
+                      }}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <span
+                      className={`absolute inset-y-0 left-0 flex items-center text-[11px] ${t.muted}`}
+                    >
+                      value
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={`w-24 shrink-0 text-right text-xs font-semibold tabular-nums ${t.text}`}
+                >
+                  {env.fmt(v, s.agg, s.field, 'compact')}
+                </span>
+                <span
+                  className={`w-14 shrink-0 text-right text-[11px] tabular-nums ${t.muted}`}
+                >
+                  {conv !== null ? `${conv.toFixed(1)}%` : ''}
+                </span>
+              </>
+            );
+            return (
+              <li key={i} className="rb-avoid">
+                {env.onDrillThrough ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      env.onDrillThrough!(
+                        widget.id,
+                        stageFilters(s),
+                        s.sourceId
+                      )
+                    }
+                    title="Open the records in this stage"
+                    className={`flex w-full items-center gap-2 rounded-md px-1 py-0.5 ${t.hover}`}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2 px-1 py-0.5">
+                    {body}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+          <li className={`pt-1 text-[11px] ${t.muted}`}>
+            Percentages show conversion from the previous count stage.
+            {env.mode === 'preview'
+              ? ' Preview values come from small samples and are not comparable between stages.'
+              : ''}
+          </li>
+        </ol>
+      )}
+    </Gate>
+  );
+};
+const fStage = (
+  label: string,
+  sourceId: string | undefined,
+  agg: QueryAgg,
+  field?: string,
+  where?: [string, string]
+): Stage => ({
+  label,
+  sourceId,
+  agg,
+  field,
+  whereField: where?.[0],
+  whereOp: 'eq',
+  whereValue: where?.[1],
+});
+registerWidget({
+  kind: 'detectionFunnel',
+  label: 'Detection funnel',
+  hint: 'Transactions → alerts → cases → confirmed fraud → loss',
+  category: 'risk',
+  icon: FunnelIcon,
+  exportAs: 'table',
+  interactions: { drill: true },
+  create: (ctx) => {
+    const has = (id: string) => ctx.sources.some((s) => s.id === id);
+    const stages: Stage[] =
+      has('transactions') && has('alerts') && has('cases')
+        ? [
+            fStage('Transactions', 'transactions', 'count'),
+            fStage('Alerts raised', 'alerts', 'count'),
+            fStage('Escalated alerts', 'alerts', 'count', undefined, [
+              'is_escalated',
+              'Yes',
+            ]),
+            fStage('Cases opened', 'cases', 'count'),
+            fStage('Confirmed fraud', 'cases', 'count', undefined, [
+              'status',
+              'Confirmed fraud',
+            ]),
+            fStage('Confirmed loss', 'cases', 'sum', 'amt_aed', [
+              'status',
+              'Confirmed fraud',
+            ]),
+            fStage('Recovered', 'cases', 'sum', 'recovered_aed'),
+          ]
+        : [
+            fStage(`All ${ctx.source.recordLabel}`, undefined, 'count'),
+            fStage('Stage 2', undefined, 'count'),
+          ];
+    return mkExt('detectionFunnel', 'Fraud detection funnel', {
+      span: 12,
+      height: 'lg',
+      stages,
+    });
+  },
+  requirements: (w) =>
+    stagesOf(w).map((s, i) => ({
+      suffix: `s${i}`,
+      label: s.label,
+      shape: 'scalar' as const,
+      sourceId: s.sourceId,
+      measures: [{ id: 'm0', agg: s.agg, field: s.field }],
+      extraFilters: stageFilters(s),
+    })),
+  validate: (w, ctx) => {
+    const st = stagesOf(w);
+    const out: ValidationIssue[] =
+      st.length < 2
+        ? [
+            issue(
+              'error',
+              'few-stages',
+              `${describeWidget(w)} needs at least two stages.`,
+              w.id
+            ),
+          ]
+        : [];
+    st.forEach((s, i) => {
+      const src = s.sourceId
+        ? ctx.sources.find((x) => x.id === s.sourceId)
+        : ctx.source;
+      if (!src)
+        return void out.push(
+          issue(
+            'error',
+            `stage-src-${i}`,
+            `${describeWidget(w)}: stage "${s.label}" uses a data source that no longer exists.`,
+            w.id
+          )
+        );
+      const keys = new Set(src.fields.map((f) => f.key));
+      if (s.agg !== 'count' && (!s.field || !keys.has(s.field)))
+        out.push(
+          issue(
+            'error',
+            `stage-m-${i}`,
+            `${describeWidget(w)}: stage "${s.label}" needs a measure field in ${src.name}.`,
+            w.id
+          )
+        );
+      if (s.whereField && !keys.has(s.whereField))
+        out.push(
+          issue(
+            'error',
+            `stage-w-${i}`,
+            `${describeWidget(w)}: stage "${s.label}" filters on "${s.whereField}", which is not in ${src.name}.`,
+            w.id
+          )
+        );
+    });
+    return out;
+  },
+  config: [
+    {
+      type: 'list',
+      key: 'stages',
+      label: 'Stage',
+      min: 2,
+      max: 10,
+      addLabel: 'Add stage',
+      itemLabel: (it) => String(it.label ?? ''),
+      make: () => ({ label: 'New stage', agg: 'count' }),
+      item: [
+        { type: 'text', key: 'label', label: 'Stage name' },
+        { type: 'source', key: 'sourceId', label: 'Data' },
+        { type: 'agg', key: 'agg', label: 'Counts' },
+        {
+          type: 'field',
+          key: 'field',
+          label: 'Measure',
+          accept: 'measure',
+          optional: true,
+          sourceFrom: 'sourceId',
+        },
+        {
+          type: 'field',
+          key: 'whereField',
+          label: 'Only where',
+          accept: 'dimension',
+          optional: true,
+          sourceFrom: 'sourceId',
+          advanced: false,
+        },
+        { type: 'text', key: 'whereValue', label: 'equals' },
+      ],
+    },
+  ],
+  toTable: (w, rs) => ({
+    headers: ['Stage', 'Value'],
+    rows: stagesOf(w).map((s, i) => [
+      s.label,
+      scalar(rs[`s${i}`])?.values[0] ?? 0,
+    ]),
+  }),
+  render: FunnelRender,
+} as WidgetDescriptor);
+
+/* ---------------- Risk gauge ---------------- */
+const arc = (cx: number, cy: number, r: number, a0: number, a1: number) => {
+  const p = (a: number) => [
+    cx + r * Math.cos(Math.PI - a * Math.PI),
+    cy - r * Math.sin(Math.PI - a * Math.PI),
+  ];
+  const [x0, y0] = p(a0),
+    [x1, y1] = p(a1);
+  return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`;
+};
+const GaugeRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = scalar(results['']);
+  const min = Number(widget.min ?? 0),
+    max = Number(widget.max ?? 100);
+  const warn = widget.warn as number | undefined,
+    breach = widget.breach as number | undefined,
+    low = !!widget.lowerIsBetter;
+  const v = r?.values[0] ?? 0;
+  const f = (x: number) =>
+    Math.max(0, Math.min(1, (x - min) / (max - min || 1)));
+  const bands = low
+    ? [
+        [0, warn ?? breach ?? max, '#16a34a'],
+        [warn ?? breach ?? max, breach ?? max, '#f59e0b'],
+        [breach ?? max, max, '#dc2626'],
+      ]
+    : [
+        [min, breach ?? min, '#dc2626'],
+        [breach ?? min, warn ?? min, '#f59e0b'],
+        [warn ?? min, max, '#16a34a'],
+      ];
+  const rag = ragOf(v, warn, breach, low);
+  const ang = f(v);
+  return (
+    <Gate status={status} error={error}>
+      {!r ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid mx-auto max-w-[260px] text-center">
+          <svg
+            viewBox="0 0 200 120"
+            role="img"
+            aria-label={`${widget.title}: ${env.fmt(v, String(widget.agg ?? 'count'), widget.field as string | undefined)}${rag ? `, ${rag}` : ''}`}
+          >
+            {bands.map(([a, b, c], i) =>
+              Number(b) > Number(a) ? (
+                <path
+                  key={i}
+                  d={arc(100, 100, 80, f(Number(a)), f(Number(b)))}
+                  stroke={String(c)}
+                  strokeWidth="16"
+                  fill="none"
+                />
+              ) : null
+            )}
+            <line
+              x1="100"
+              y1="100"
+              x2={100 + 62 * Math.cos(Math.PI - ang * Math.PI)}
+              y2={100 - 62 * Math.sin(Math.PI - ang * Math.PI)}
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+            />
+            <circle cx="100" cy="100" r="6" fill="currentColor" />
+            <text
+              x="20"
+              y="116"
+              fontSize="9"
+              fill="currentColor"
+              opacity=".6"
+              textAnchor="middle"
+            >
+              {min}
+            </text>
+            <text
+              x="180"
+              y="116"
+              fontSize="9"
+              fill="currentColor"
+              opacity=".6"
+              textAnchor="middle"
+            >
+              {max}
+            </text>
+          </svg>
+          <figcaption
+            className={`-mt-2 text-2xl font-bold tabular-nums ${t.text}`}
+          >
+            {env.fmt(
+              v,
+              String(widget.agg ?? 'count'),
+              widget.field as string | undefined
+            )}
+          </figcaption>
+          <p className={`text-[11px] ${t.muted}`}>
+            {rag === 'breach'
+              ? 'Breach'
+              : rag === 'warn'
+                ? 'Warning'
+                : rag === 'ok'
+                  ? 'Within appetite'
+                  : 'No thresholds set'}
+          </p>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'riskGauge',
+  label: 'Risk gauge',
+  hint: 'One metric against warning / breach bands',
+  category: 'risk',
+  icon: Gauge,
+  exportAs: 'visual',
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const f = d.score ?? d.num;
+    return mkExt('riskGauge', 'Average risk score', {
+      span: 4,
+      agg: 'avg',
+      field: f?.key,
+      min: 0,
+      max: 100,
+      warn: 50,
+      breach: 75,
+      lowerIsBetter: true,
+    });
+  },
+  requirements: (w) => [
+    {
+      shape: 'scalar',
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'avg') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      compare: true,
+    },
+  ],
+  validate: (w, ctx) => {
+    const out = measureIssues(w, ctx);
+    if (Number(w.max) <= Number(w.min))
+      out.push(
+        issue(
+          'error',
+          'range',
+          `${describeWidget(w)}: the maximum must be greater than the minimum.`,
+          w.id
+        )
+      );
+    return out;
+  },
+  config: [
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+    { type: 'number', key: 'warn', label: 'Warning at' },
+    { type: 'number', key: 'breach', label: 'Breach at' },
+    { type: 'toggle', key: 'lowerIsBetter', label: 'Lower is better' },
+    { type: 'number', key: 'min', label: 'Scale minimum', advanced: true },
+    { type: 'number', key: 'max', label: 'Scale maximum', advanced: true },
+  ],
+  toTable: (w, rs) => {
+    const r = scalar(rs['']);
+    return r
+      ? { headers: ['Metric', 'Value'], rows: [[w.title, r.values[0] ?? 0]] }
+      : null;
+  },
+  render: GaugeRender,
+} as WidgetDescriptor);
+
+/* ---------------- Risk matrix ---------------- */
+const heat = (z: number) =>
+  `hsl(${Math.round(120 - 120 * z)} 70% ${Math.round(88 - 28 * z)}%)`;
+const MatrixRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const rf = env.fieldMap.get(String(widget.rowField)),
+    cf = env.fieldMap.get(String(widget.colField));
+  const agg = String(widget.agg ?? 'count'),
+    field = widget.field as string | undefined;
+  const cell = (gk: string, sk: string) =>
+    g?.cells?.[cellKeyOf(gk, sk)]?.[0] ?? 0;
+  const ordinal = !!rf?.order && !!cf?.order;
+  const vmax = Math.max(
+    1,
+    ...(g?.groups ?? []).flatMap((x) =>
+      (g?.series ?? []).map((s) => cell(x.key, s.key))
+    )
+  );
+  return (
+    <Gate status={status} error={error}>
+      {!g || g.groups.length === 0 || !g.series?.length ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-separate border-spacing-1 text-center text-xs">
+            <caption className="sr-only">{widget.title}</caption>
+            <thead>
+              <tr>
+                <th className={`p-1 text-left text-[11px] ${t.muted}`}>
+                  {rf?.label} \ {cf?.label}
+                </th>
+                {g.series.map((s) => (
+                  <th
+                    key={s.key}
+                    scope="col"
+                    className={`p-1 font-medium ${t.body}`}
+                  >
+                    {s.label ?? s.key}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {g.groups.map((row, ri) => (
+                <tr key={row.key}>
+                  <th
+                    scope="row"
+                    className={`p-1 text-left font-medium ${t.body}`}
+                  >
+                    {row.label ?? row.key}
+                  </th>
+                  {g.series!.map((s, ci) => {
+                    const v = cell(row.key, s.key);
+                    const z = ordinal
+                      ? ((g.groups.length - 1 - ri) /
+                          Math.max(1, g.groups.length - 1) +
+                          (g.series!.length - 1 - ci) /
+                            Math.max(1, g.series!.length - 1)) /
+                        2
+                      : v / vmax;
+                    return (
+                      <td key={s.key}>
+                        <button
+                          type="button"
+                          disabled={!env.onPick}
+                          onClick={() =>
+                            env.onPick?.(String(widget.rowField), row.key)
+                          }
+                          aria-label={`${row.label ?? row.key}, ${s.label ?? s.key}: ${env.fmt(v, agg, field)}`}
+                          className="h-11 w-full rounded font-semibold tabular-nums text-slate-900 disabled:cursor-default"
+                          style={{
+                            background: v === 0 ? 'transparent' : heat(z),
+                            border: v === 0 ? '1px dashed #cbd5e1' : 'none',
+                          }}
+                        >
+                          {v === 0 ? '' : env.fmt(v, agg, field, 'compact')}
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className={`mt-1 text-[11px] ${t.muted}`}>
+            {ordinal
+              ? 'Colour shows the risk zone (position in both ranked scales); the number is the measure.'
+              : 'Colour intensity shows the measure.'}
+          </p>
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'riskMatrix',
+  label: 'Risk matrix',
+  hint: 'Two ranked dimensions as a coloured grid (e.g. severity × likelihood)',
+  category: 'risk',
+  icon: Grid3x3,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.rowField === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const m = defaultMeasure(ctx);
+    const a = d.ordinal ?? d.cat;
+    const b =
+      ctx.fields.find(
+        (f) => f.type === 'category' && f.key !== a?.key && f.order
+      ) ?? ctx.fields.find((f) => f.type === 'category' && f.key !== a?.key);
+    return a && b
+      ? mkExt('riskMatrix', `Risk matrix: ${a.label} × ${b.label}`, {
+          rowField: a.key,
+          colField: b.key,
+          agg: m.agg,
+          field: m.field,
+        })
+      : { unavailable: 'Needs two category fields.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [
+        { field: String(w.rowField) },
+        { field: String(w.colField) },
+      ],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: 8,
+      seriesLimit: 8,
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'rowField', ctx, 'a row dimension'),
+      requireField(w, 'colField', ctx, 'a column dimension'),
+      ...measureIssues(w, ctx),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'rowField', label: 'Rows', accept: 'category' },
+    { type: 'field', key: 'colField', label: 'Columns', accept: 'category' },
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g?.series
+      ? {
+          headers: ['', ...g.series.map((s) => s.label ?? s.key)],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            ...g.series!.map(
+              (s) => g.cells?.[cellKeyOf(x.key, s.key)]?.[0] ?? 0
+            ),
+          ]),
+        }
+      : null;
+  },
+  render: MatrixRender,
+} as WidgetDescriptor);
+
+/* ---------------- Aging / SLA ---------------- */
+const parseEdges = (s: unknown): number[] =>
+  [
+    ...new Set(
+      String(s ?? '')
+        .split(/[,\s]+/)
+        .map(Number)
+        .filter((n) => Number.isFinite(n))
+    ),
+  ].sort((a, b) => a - b);
+const AgingRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const sla = widget.slaDays as number | undefined;
+  const agg = String(widget.agg ?? 'count'),
+    field = widget.field as string | undefined;
+  const lower = (label: string) =>
+    /^\s*[<≤]/.test(label)
+      ? -Infinity
+      : Number((label.match(/-?\d+(\.\d+)?/) ?? ['0'])[0]);
+  const rows = (g?.groups ?? []).map((x) => ({
+    ...x,
+    v: x.values[0] ?? 0,
+    late: sla !== undefined && lower(String(x.label ?? x.key)) >= sla,
+  }));
+  const total = rows.reduce((a, x) => a + x.v, 0),
+    lateTotal = rows.filter((x) => x.late).reduce((a, x) => a + x.v, 0);
+  const max = Math.max(1, ...rows.map((x) => x.v));
+  return (
+    <Gate status={status} error={error}>
+      {!g || rows.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-2">
+          {sla !== undefined && (
+            <p className={`text-xs ${t.body}`}>
+              <strong
+                className={lateTotal ? 'text-red-600' : 'text-emerald-600'}
+              >
+                {total ? ((lateTotal / total) * 100).toFixed(1) : '0.0'}%
+              </strong>{' '}
+              beyond the {sla}-day SLA (
+              {env.fmt(lateTotal, agg, field, 'compact')} of{' '}
+              {env.fmt(total, agg, field, 'compact')})
+            </p>
+          )}
+          {rows.map((x) => (
+            <div
+              key={x.key}
+              className="rb-avoid grid grid-cols-[96px_1fr_auto] items-center gap-2 text-xs"
+            >
+              <span className={t.body}>{x.label ?? x.key}</span>
+              <span className={`h-4 rounded ${t.skeleton}`}>
+                <span
+                  className="block h-4 rounded"
+                  style={{
+                    width: `${(x.v / max) * 100}%`,
+                    background: x.late ? '#dc2626' : env.colors[0],
+                  }}
+                />
+              </span>
+              <span className={`tabular-nums ${t.text}`}>
+                {env.fmt(x.v, agg, field, 'compact')}
+                {x.late && (
+                  <span className="ml-1 text-[10px] font-semibold text-red-600">
+                    SLA
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'aging',
+  label: 'Aging & SLA',
+  hint: 'Open items by age bucket with SLA breach highlighted',
+  category: 'investigation',
+  icon: Clock,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const f =
+      ctx.fields.find(
+        (x) => /days|age/i.test(x.key) && isNumericType(x.type)
+      ) ??
+      ctx.source.fields.find(
+        (x) => /days|age/i.test(x.key) && isNumericType(x.type)
+      );
+    return f
+      ? mkExt('aging', 'Case aging', {
+          ageField: f.key,
+          edges: '1, 3, 7, 14, 30',
+          slaDays: 14,
+          agg: 'count',
+        })
+      : {
+          unavailable: 'Needs a numeric "age in days" field (e.g. days_open).',
+        };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.ageField), bands: parseEdges(w.edges) }],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: 20,
+      sort: { by: 'rank', dir: 'asc' },
+    },
+  ],
+  validate: (w, ctx) => {
+    const out = [
+      requireField(w, 'ageField', ctx, 'a numeric age field (days)', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x);
+    if (parseEdges(w.edges).length === 0)
+      out.push(
+        issue(
+          'error',
+          'edges',
+          `${describeWidget(w)} needs bucket boundaries, e.g. "1, 3, 7, 14, 30".`,
+          w.id
+        )
+      );
+    return [...out, ...measureIssues(w, ctx)];
+  },
+  config: [
+    {
+      type: 'field',
+      key: 'ageField',
+      label: 'Age (days) field',
+      accept: 'numeric',
+    },
+    {
+      type: 'text',
+      key: 'edges',
+      label: 'Bucket boundaries (days)',
+      placeholder: '1, 3, 7, 14, 30',
+    },
+    { type: 'number', key: 'slaDays', label: 'SLA (days)' },
+    { type: 'agg', key: 'agg', label: 'Calculation', advanced: true },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Age', 'Value'],
+          rows: g.groups.map((x) => [x.label ?? x.key, x.values[0] ?? 0]),
+        }
+      : null;
+  },
+  render: AgingRender,
+} as WidgetDescriptor);
+
+/* ---------------- Geographic tiles (layout registry; swap in a real map via the `geo` capability) ---------------- */
+const GEO_LAYOUTS: Record<
+  string,
+  { label: string; cells: Record<string, [number, number]> }
+> = {
+  'world-regions': {
+    label: 'World regions',
+    cells: {
+      'north america': [0, 0],
+      latam: [1, 1],
+      emea: [0, 2],
+      'middle east': [1, 3],
+      apac: [0, 4],
+    },
+  },
+  uae: {
+    label: 'UAE emirates',
+    cells: {
+      'abu dhabi': [0, 0],
+      dubai: [0, 1],
+      sharjah: [0, 2],
+      ajman: [1, 1],
+      'umm al quwain': [1, 2],
+      'ras al khaimah': [0, 3],
+      fujairah: [1, 3],
+    },
+  },
+};
+const GeoRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const agg = String(widget.agg ?? 'count'),
+    field = widget.field as string | undefined;
+  const layout = GEO_LAYOUTS[String(widget.layout)];
+  const max = Math.max(1, ...(g?.groups ?? []).map((x) => x.values[0] ?? 0));
+  const items = (g?.groups ?? []).filter((x) => x.key !== '__others');
+  const placed = layout
+    ? items.filter((x) => layout.cells[String(x.label ?? x.key).toLowerCase()])
+    : [];
+  const rest = items.filter((x) => !placed.includes(x));
+  const rowsN =
+    Math.max(
+      0,
+      ...placed.map(
+        (x) => layout!.cells[String(x.label ?? x.key).toLowerCase()][0]
+      )
+    ) + 1;
+  const tile = (x: (typeof items)[number], style?: React.CSSProperties) => {
+    const v = x.values[0] ?? 0,
+      a = 0.15 + 0.85 * (v / max),
+      act =
+        env.active?.field === String(widget.groupBy) &&
+        env.active.value === x.key;
+    return (
+      <button
+        key={x.key}
+        type="button"
+        style={{
+          ...style,
+          background: env.colors[0],
+          backgroundImage: `linear-gradient(rgba(255,255,255,${1 - a}),rgba(255,255,255,${1 - a}))`,
+        }}
+        disabled={!env.onPick}
+        onClick={() => env.onPick?.(String(widget.groupBy), x.key)}
+        aria-pressed={act}
+        aria-label={`${x.label ?? x.key}: ${env.fmt(v, agg, field)}`}
+        className={`flex min-h-[64px] flex-col items-center justify-center rounded-lg p-1 text-center text-slate-900 ${act ? 'ring-2 ring-slate-900' : ''} disabled:cursor-default`}
+      >
+        <span className="text-[11px] font-semibold">{x.label ?? x.key}</span>
+        <span className="text-sm font-bold tabular-nums">
+          {env.fmt(v, agg, field, 'compact')}
+        </span>
+      </button>
+    );
+  };
+  return (
+    <Gate status={status} error={error}>
+      {!g || items.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="space-y-2">
+          {layout && placed.length > 0 && (
+            <div
+              className="grid gap-1.5"
+              style={{
+                gridTemplateColumns: `repeat(${Math.max(...placed.map((x) => layout.cells[String(x.label ?? x.key).toLowerCase()][1])) + 1}, minmax(0,1fr))`,
+                gridTemplateRows: `repeat(${rowsN}, auto)`,
+              }}
+            >
+              {placed.map((x) => {
+                const [r, c] =
+                  layout.cells[String(x.label ?? x.key).toLowerCase()];
+                return tile(x, { gridRow: r + 1, gridColumn: c + 1 });
+              })}
+            </div>
+          )}
+          {rest.length > 0 && (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-1.5">
+              {rest.map((x) => tile(x))}
+            </div>
+          )}
+          <p className={`text-[11px] ${t.muted}`}>
+            Tile map: position is schematic, colour intensity shows the measure.
+          </p>
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'geoTiles',
+  label: 'Geographic risk',
+  hint: 'Regional risk as a tile map (click to filter)',
+  category: 'geography',
+  icon: MapIcon,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const f =
+      ctx.fields.find(
+        (x) =>
+          /region|country|branch|emirate|city/i.test(x.key) &&
+          x.type === 'category'
+      ) ??
+      ctx.source.fields.find(
+        (x) =>
+          /region|country|branch|emirate|city/i.test(x.key) &&
+          x.type === 'category'
+      );
+    const m = defaultMeasure(ctx);
+    return f
+      ? mkExt(
+          'geoTiles',
+          `${m.agg === 'count' ? 'Volume' : 'Exposure'} by ${f.label.toLowerCase()}`,
+          {
+            groupBy: f.key,
+            agg: m.agg,
+            field: m.field,
+            layout: 'world-regions',
+          }
+        )
+      : { unavailable: 'Needs a region / country / branch field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [
+        {
+          id: 'm0',
+          agg: String(w.agg ?? 'count') as QueryAgg,
+          field: w.field as string | undefined,
+        },
+      ],
+      limit: 30,
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a geographic field'),
+      ...measureIssues(w, ctx),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    {
+      type: 'field',
+      key: 'groupBy',
+      label: 'Location field',
+      accept: 'category',
+    },
+    { type: 'agg', key: 'agg', label: 'Calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Measure',
+      accept: 'measure',
+      optional: true,
+    },
+    {
+      type: 'select',
+      key: 'layout',
+      label: 'Tile layout',
+      advanced: true,
+      options: [
+        { value: 'auto', label: 'Automatic grid' },
+        ...Object.entries(GEO_LAYOUTS).map(([value, l]) => ({
+          value,
+          label: l.label,
+        })),
+      ],
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: [String(w.groupBy), 'Value'],
+          rows: g.groups.map((x) => [x.label ?? x.key, x.values[0] ?? 0]),
+        }
+      : null;
+  },
+  render: GeoRender,
+} as WidgetDescriptor);
+
+/* ---------------- Network graph: extension point (needs the provider's `graph` capability) ---------------- */
+registerWidget({
+  kind: 'networkGraph',
+  label: 'Network graph',
+  hint: 'Customer → account → device → IP → merchant relationships',
+  category: 'relationship',
+  icon: Share2,
+  maturity: 'planned',
+  requiresCapability: 'graph',
+  exportAs: 'visual',
+  create: () => ({
+    unavailable:
+      'Relationship analysis needs a graph-capable backend (provider.capabilities.graph).',
+  }),
+  requirements: () => [],
+  validate: (w) => [
+    issue(
+      'error',
+      'planned',
+      `${describeWidget(w)} is not available yet.`,
+      w.id
+    ),
+  ],
+  config: [],
+  render: () => (
+    <WidgetEmpty text="Network graph requires a graph-enabled data provider." />
+  ),
+} as WidgetDescriptor);
+
+void labelOf;
+
+/* ---------------- widgets/analytic.tsx ---------------- */
+/** Analytical widgets: Pareto, histogram, waterfall, combo, box plot, summary/ranking table, bubble. */
+
+const agg = (w: RegistryWidget, k = 'agg') =>
+  String(w[k] ?? 'count') as QueryAgg;
+const meas = (w: RegistryWidget, id = 'm0', a = 'agg', f = 'field') => ({
+  id,
+  agg: agg(w, a),
+  field: w[f] as string | undefined,
+});
+const catMeasure: ConfigField[] = [
+  { type: 'field', key: 'groupBy', label: 'Group by', accept: 'category' },
+  { type: 'agg', key: 'agg', label: 'Calculation' },
+  {
+    type: 'field',
+    key: 'field',
+    label: 'Measure',
+    accept: 'measure',
+    optional: true,
+  },
+];
+const catValidate = (
+  w: RegistryWidget,
+  ctx: Parameters<WidgetDescriptor['validate']>[1]
+) =>
+  [
+    requireField(w, 'groupBy', ctx, 'a category to group by'),
+    ...measureIssues(w, ctx),
+  ].filter((x): x is ValidationIssue => !!x);
+const catCreate =
+  (
+    kind: string,
+    title: (l: string) => string,
+    extra: Record<string, unknown> = {}
+  ): WidgetDescriptor['create'] =>
+  (ctx) => {
+    const d = defaultsOf(ctx),
+      m = defaultMeasure(ctx);
+    return d.cat
+      ? mkExt(kind, title(d.cat.label), {
+          groupBy: d.cat.key,
+          agg: m.agg,
+          field: m.field,
+          ...extra,
+        })
+      : { unavailable: 'Needs a category field.' };
+  };
+const trunc = (s: string, n = 12) =>
+  s.length > n ? `${s.slice(0, n - 1)}…` : s;
+const W = 600,
+  H = 240,
+  PL = 44,
+  PR = 44,
+  PT = 14,
+  PB = 40;
+
+/* ---- Pareto ---- */
+const ParetoRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const a = agg(widget),
+    f = widget.field as string | undefined;
+  const rows = g?.groups ?? [];
+  const total =
+    g?.grand[0] || rows.reduce((s, x) => s + (x.values[0] ?? 0), 0) || 1;
+  let run = 0;
+  const pts = rows.map((x) => ({ x, cum: (run += x.values[0] ?? 0) / total }));
+  const max = Math.max(1, ...rows.map((x) => x.values[0] ?? 0));
+  const bw = (W - PL - PR) / Math.max(1, rows.length);
+  const n80 = pts.findIndex((p) => p.cum >= 0.8) + 1;
+  const top3 = pts[Math.min(2, pts.length - 1)]?.cum ?? 0;
+  const y = (v: number) => PT + (H - PT - PB) * (1 - v);
+  return (
+    <Gate status={status} error={error}>
+      {rows.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={`Pareto: top 3 account for ${(top3 * 100).toFixed(0)}% of the total`}
+            className="w-full"
+          >
+            {[0, 0.5, 1].map((v) => (
+              <g key={v}>
+                <line
+                  x1={PL}
+                  x2={W - PR}
+                  y1={y(v)}
+                  y2={y(v)}
+                  stroke="currentColor"
+                  opacity=".1"
+                />
+                <text
+                  x={W - PR + 4}
+                  y={y(v) + 3}
+                  fontSize="9"
+                  fill="currentColor"
+                  opacity=".6"
+                >
+                  {v * 100}%
+                </text>
+              </g>
+            ))}
+            <line
+              x1={PL}
+              x2={W - PR}
+              y1={y(0.8)}
+              y2={y(0.8)}
+              stroke="#dc2626"
+              strokeDasharray="4 3"
+              opacity=".7"
+            />
+            {rows.map((x, i) => {
+              const v = x.values[0] ?? 0,
+                h = (H - PT - PB) * (v / max);
+              return (
+                <g key={x.key}>
+                  <rect
+                    x={PL + i * bw + 4}
+                    y={H - PB - h}
+                    width={Math.max(2, bw - 8)}
+                    height={h}
+                    fill={env.colors[0]}
+                    rx="2"
+                  />
+                  <text
+                    x={PL + i * bw + bw / 2}
+                    y={H - PB + 13}
+                    fontSize="9"
+                    textAnchor="middle"
+                    fill="currentColor"
+                    opacity=".75"
+                  >
+                    {trunc(x.label ?? x.key, Math.max(6, Math.floor(bw / 5)))}
+                  </text>
+                </g>
+              );
+            })}
+            <polyline
+              fill="none"
+              stroke={env.colors[1 % env.colors.length]}
+              strokeWidth="2"
+              points={pts
+                .map((p, i) => `${PL + i * bw + bw / 2},${y(p.cum)}`)
+                .join(' ')}
+            />
+            {pts.map((p, i) => (
+              <circle
+                key={i}
+                cx={PL + i * bw + bw / 2}
+                cy={y(p.cum)}
+                r="3"
+                fill={env.colors[1 % env.colors.length]}
+              />
+            ))}
+            <text
+              x={PL - 4}
+              y={PT + 8}
+              fontSize="9"
+              textAnchor="end"
+              fill="currentColor"
+              opacity=".6"
+            >
+              {env.fmt(max, a, f, 'compact')}
+            </text>
+          </svg>
+          <figcaption className={`text-xs ${t.body}`}>
+            Top 3 account for <strong>{(top3 * 100).toFixed(0)}%</strong>
+            {n80 > 0 && (
+              <>
+                {' '}
+                · {n80} of {g!.totalGroups} categories reach 80%
+              </>
+            )}
+            . Concentration is high when few categories drive most of the total.
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'pareto',
+  label: 'Pareto / concentration',
+  hint: 'Which few categories drive most of the total (80/20)',
+  category: 'analytical',
+  icon: TrendingUp,
+  exportAs: 'table',
+  interactions: {},
+  create: catCreate('pareto', (l) => `${l} concentration (Pareto)`, {
+    topN: 10,
+  }),
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [meas(w)],
+      limit: Number(w.topN ?? 10),
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: catValidate,
+  config: [
+    ...catMeasure,
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Categories shown',
+      min: 3,
+      max: 20,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Category', 'Value'],
+          rows: g.groups.map((x) => [x.label ?? x.key, x.values[0] ?? 0]),
+        }
+      : null;
+  },
+  render: ParetoRender,
+} as WidgetDescriptor);
+
+/* ---- Histogram ---- */
+const HistRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = results[''];
+  const h = r && r.shape === 'histogram' ? r : undefined;
+  const max = Math.max(1, ...(h?.bins ?? []).map((b) => b.count));
+  const bw = (W - PL - 10) / Math.max(1, h?.bins.length ?? 1);
+  const fx = (v: number) =>
+    env.fmt(v, 'avg', widget.field as string | undefined, 'compact');
+  return (
+    <Gate status={status} error={error}>
+      {!h || h.total === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={`Distribution of ${env.fieldMap.get(String(widget.field))?.label}`}
+            className="w-full"
+          >
+            {h.bins.map((b, i) => {
+              const hh = (H - PT - PB) * (b.count / max);
+              return (
+                <g key={i}>
+                  <rect
+                    x={PL + i * bw + 1}
+                    y={H - PB - hh}
+                    width={Math.max(1, bw - 2)}
+                    height={hh}
+                    fill={env.colors[0]}
+                  />
+                  <title>{`${fx(b.from)} – ${fx(b.to)}: ${b.count}`}</title>
+                </g>
+              );
+            })}
+            <text
+              x={PL}
+              y={H - PB + 14}
+              fontSize="9"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {fx(h.summary.min)}
+            </text>
+            <text
+              x={W - 10}
+              y={H - PB + 14}
+              fontSize="9"
+              textAnchor="end"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {fx(h.summary.max)}
+            </text>
+            <text
+              x={PL - 4}
+              y={PT + 8}
+              fontSize="9"
+              textAnchor="end"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {max}
+            </text>
+          </svg>
+          <figcaption className={`flex flex-wrap gap-x-4 text-xs ${t.body}`}>
+            <span>n = {h.total.toLocaleString()}</span>
+            <span>Mean {fx(h.summary.mean)}</span>
+            <span>Median {fx(h.summary.p50)}</span>
+            <span>P90 {fx(h.summary.p90)}</span>
+            <span>P99 {fx(h.summary.p99)}</span>
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'histogram',
+  label: 'Histogram / distribution',
+  hint: 'Shape of a numeric field (risk score, amount) with percentiles',
+  category: 'analytical',
+  icon: BarChart3,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const f = d.score ?? d.num;
+    return f
+      ? mkExt('histogram', `${f.label} distribution`, {
+          field: f.key,
+          bins: 20,
+        })
+      : { unavailable: 'Needs a numeric field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'histogram',
+      measures: [],
+      bins: {
+        field: String(w.field),
+        count: Math.max(5, Math.min(60, Number(w.bins ?? 20))),
+      },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'field', ctx, 'a numeric field', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'field', label: 'Field', accept: 'numeric' },
+    {
+      type: 'number',
+      key: 'bins',
+      label: 'Bins',
+      min: 5,
+      max: 60,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const r = rs[''];
+    return r && r.shape === 'histogram'
+      ? {
+          headers: ['From', 'To', 'Count'],
+          rows: r.bins.map((b) => [b.from, b.to, b.count]),
+        }
+      : null;
+  },
+  render: HistRender,
+} as WidgetDescriptor);
+
+/* ---- Waterfall (what drove the change) ---- */
+const WaterfallRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const a = agg(widget),
+    f = widget.field as string | undefined;
+  if (status === 'ok' && (!g?.prevGrand || !env.compare))
+    return (
+      <WidgetEmpty
+        text={
+          env.mode === 'preview'
+            ? 'The change bridge needs a comparison period and appears in the generated report.'
+            : 'Turn on a comparison period to see what drove the change.'
+        }
+      />
+    );
+  const start = g?.prevGrand?.[0] ?? 0,
+    end = g?.grand[0] ?? 0;
+  const steps = (g?.groups ?? []).map((x) => ({
+    label: x.label ?? x.key,
+    d: (x.values[0] ?? 0) - (x.prev?.[0] ?? 0),
+  }));
+  const other = end - start - steps.reduce((s, x) => s + x.d, 0);
+  if (Math.abs(other) > 1e-9) steps.push({ label: 'Other', d: other });
+  const bars: {
+    label: string;
+    from: number;
+    to: number;
+    kind: 'total' | 'up' | 'down';
+  }[] = [{ label: 'Previous', from: 0, to: start, kind: 'total' }];
+  let cur = start;
+  steps.forEach((s) => {
+    bars.push({
+      label: s.label,
+      from: cur,
+      to: cur + s.d,
+      kind: s.d >= 0 ? 'up' : 'down',
+    });
+    cur += s.d;
+  });
+  bars.push({ label: 'Current', from: 0, to: end, kind: 'total' });
+  const hi = Math.max(1e-9, ...bars.flatMap((b) => [b.from, b.to])),
+    lo = Math.min(0, ...bars.flatMap((b) => [b.from, b.to]));
+  const y = (v: number) => PT + (H - PT - PB) * (1 - (v - lo) / (hi - lo || 1));
+  const bw = (W - PL - 10) / bars.length;
+  const lowerBetter = widget.lowerIsBetter !== false;
+  return (
+    <Gate status={status} error={error}>
+      <figure className="rb-avoid">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          role="img"
+          aria-label={`Change from ${env.fmt(start, a, f, 'compact')} to ${env.fmt(end, a, f, 'compact')}`}
+          className="w-full"
+        >
+          <line
+            x1={PL}
+            x2={W - 10}
+            y1={y(0)}
+            y2={y(0)}
+            stroke="currentColor"
+            opacity=".25"
+          />
+          {bars.map((b, i) => {
+            const y0 = y(Math.max(b.from, b.to)),
+              h = Math.max(2, Math.abs(y(b.from) - y(b.to)));
+            const good = b.kind === 'up' ? !lowerBetter : lowerBetter;
+            const fill =
+              b.kind === 'total' ? env.colors[0] : good ? '#16a34a' : '#dc2626';
+            return (
+              <g key={i}>
+                <rect
+                  x={PL + i * bw + 5}
+                  y={y0}
+                  width={Math.max(2, bw - 10)}
+                  height={h}
+                  fill={fill}
+                  rx="2"
+                />
+                <text
+                  x={PL + i * bw + bw / 2}
+                  y={y0 - 3}
+                  fontSize="9"
+                  textAnchor="middle"
+                  fill="currentColor"
+                >
+                  {b.kind === 'total'
+                    ? env.fmt(b.to, a, f, 'compact')
+                    : `${b.to >= b.from ? '+' : '−'}${env.fmt(Math.abs(b.to - b.from), a, f, 'compact')}`}
+                </text>
+                <text
+                  x={PL + i * bw + bw / 2}
+                  y={H - PB + 13}
+                  fontSize="9"
+                  textAnchor="middle"
+                  fill="currentColor"
+                  opacity=".75"
+                >
+                  {trunc(b.label, Math.max(6, Math.floor(bw / 5)))}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+        <figcaption className={`text-xs ${t.muted}`}>
+          Bridge from the previous period to the current period by{' '}
+          {env.fieldMap.get(String(widget.groupBy))?.label.toLowerCase()}. Red =
+          adverse, green = favourable.
+        </figcaption>
+      </figure>
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'waterfall',
+  label: 'Waterfall (change drivers)',
+  hint: 'What drove the change between periods',
+  category: 'executive',
+  icon: Waves,
+  exportAs: 'table',
+  interactions: {},
+  create: catCreate(
+    'waterfall',
+    (l) => `Change drivers by ${l.toLowerCase()}`,
+    { topN: 6, lowerIsBetter: true }
+  ),
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [meas(w)],
+      limit: Number(w.topN ?? 6),
+      compare: true,
+      sort: { by: 'measure', dir: 'desc' },
+    },
+  ],
+  validate: catValidate,
+  config: [
+    ...catMeasure,
+    { type: 'toggle', key: 'lowerIsBetter', label: 'An increase is adverse' },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Drivers shown',
+      min: 2,
+      max: 12,
+      advanced: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: ['Driver', 'Current', 'Previous', 'Change'],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            x.values[0] ?? 0,
+            x.prev?.[0] ?? 0,
+            (x.values[0] ?? 0) - (x.prev?.[0] ?? 0),
+          ]),
+        }
+      : null;
+  },
+  render: WaterfallRender,
+} as WidgetDescriptor);
+
+/* ---- Combo: bars + line on a second axis ---- */
+const ComboRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const rows = g?.groups ?? [];
+  const a1 = agg(widget),
+    f1 = widget.field as string | undefined,
+    a2 = agg(widget, 'agg2'),
+    f2 = widget.field2 as string | undefined;
+  const m1 = Math.max(1e-9, ...rows.map((x) => x.values[0] ?? 0)),
+    m2 = Math.max(1e-9, ...rows.map((x) => x.values[1] ?? 0));
+  const bw = (W - PL - PR) / Math.max(1, rows.length);
+  const y = (v: number, m: number) => PT + (H - PT - PB) * (1 - v / m);
+  return (
+    <Gate status={status} error={error}>
+      {rows.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={widget.title}
+            className="w-full"
+          >
+            {rows.map((x, i) => {
+              const v = x.values[0] ?? 0;
+              return (
+                <g key={x.key}>
+                  <rect
+                    x={PL + i * bw + 3}
+                    y={y(v, m1)}
+                    width={Math.max(2, bw - 6)}
+                    height={H - PB - y(v, m1)}
+                    fill={env.colors[0]}
+                    rx="2"
+                  />
+                  {(rows.length <= 12 ||
+                    i % Math.ceil(rows.length / 12) === 0) && (
+                    <text
+                      x={PL + i * bw + bw / 2}
+                      y={H - PB + 13}
+                      fontSize="9"
+                      textAnchor="middle"
+                      fill="currentColor"
+                      opacity=".75"
+                    >
+                      {trunc(x.label ?? x.key, 9)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+            <polyline
+              fill="none"
+              stroke={env.colors[1 % env.colors.length]}
+              strokeWidth="2.5"
+              points={rows
+                .map(
+                  (x, i) => `${PL + i * bw + bw / 2},${y(x.values[1] ?? 0, m2)}`
+                )
+                .join(' ')}
+            />
+            {rows.map((x, i) => (
+              <circle
+                key={i}
+                cx={PL + i * bw + bw / 2}
+                cy={y(x.values[1] ?? 0, m2)}
+                r="3"
+                fill={env.colors[1 % env.colors.length]}
+              />
+            ))}
+            <text
+              x={PL - 4}
+              y={PT + 8}
+              fontSize="9"
+              textAnchor="end"
+              fill={env.colors[0]}
+            >
+              {env.fmt(m1, a1, f1, 'compact')}
+            </text>
+            <text
+              x={W - PR + 4}
+              y={PT + 8}
+              fontSize="9"
+              fill={env.colors[1 % env.colors.length]}
+            >
+              {env.fmt(m2, a2, f2, 'compact')}
+            </text>
+          </svg>
+          <figcaption className={`flex gap-4 text-xs ${t.body}`}>
+            <span>
+              <i
+                className="mr-1 inline-block h-2 w-3"
+                style={{ background: env.colors[0] }}
+              />
+              {String(widget.label1 ?? 'Bars')} (left axis)
+            </span>
+            <span>
+              <i
+                className="mr-1 inline-block h-0.5 w-3 align-middle"
+                style={{ background: env.colors[1 % env.colors.length] }}
+              />
+              {String(widget.label2 ?? 'Line')} (right axis)
+            </span>
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'combo',
+  label: 'Combo (bars + line)',
+  hint: 'Volume bars with a rate line on a second axis',
+  category: 'charts',
+  icon: LineChart,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const by = d.date ?? d.cat;
+    return by
+      ? mkExt('combo', `Volume and rate by ${by.label.toLowerCase()}`, {
+          groupBy: by.key,
+          agg: 'count',
+          label1: 'Volume',
+          agg2: d.bool ? 'rate' : 'count',
+          field2: d.bool?.key,
+          label2: d.bool ? `${d.bool.label} rate` : 'Volume',
+          topN: 12,
+        })
+      : { unavailable: 'Needs a dimension.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy), bucket: 'auto' }],
+      measures: [meas(w), meas(w, 'm1', 'agg2', 'field2')],
+      limit: Number(w.topN ?? 12),
+      sort: { by: 'rank', dir: 'asc' },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a dimension for the x-axis'),
+      ...measureIssues(w, ctx),
+      ...measureIssues(
+        {
+          ...w,
+          agg: w.agg2,
+          field: w.field2,
+          title: `${w.title} (line)`,
+        } as RegistryWidget,
+        ctx
+      ).map((x) => ({ ...x, id: `${x.id}:2` })),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'groupBy', label: 'X-axis', accept: 'dimension' },
+    { type: 'text', key: 'label1', label: 'Bars label' },
+    { type: 'agg', key: 'agg', label: 'Bars calculation' },
+    {
+      type: 'field',
+      key: 'field',
+      label: 'Bars measure',
+      accept: 'measure',
+      optional: true,
+    },
+    { type: 'text', key: 'label2', label: 'Line label' },
+    { type: 'agg', key: 'agg2', label: 'Line calculation' },
+    {
+      type: 'field',
+      key: 'field2',
+      label: 'Line measure',
+      accept: 'measure',
+      optional: true,
+    },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: [
+            'Group',
+            String(w.label1 ?? 'Bars'),
+            String(w.label2 ?? 'Line'),
+          ],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            x.values[0] ?? 0,
+            x.values[1] ?? 0,
+          ]),
+        }
+      : null;
+  },
+  render: ComboRender,
+} as WidgetDescriptor);
+
+/* ---- Box plot ---- */
+const BoxRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = results[''];
+  const q = r && r.shape === 'quantiles' ? r.groups.filter((x) => x.n > 0) : [];
+  const f = widget.field as string | undefined;
+  const hi = Math.max(1e-9, ...q.map((x) => x.max)),
+    lo = Math.min(0, ...q.map((x) => x.min));
+  const x = (v: number) => 120 + (W - 130) * ((v - lo) / (hi - lo || 1));
+  const rh = Math.min(34, (H - 30) / Math.max(1, q.length));
+  return (
+    <Gate status={status} error={error}>
+      {q.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${Math.max(90, q.length * rh + 28)}`}
+            role="img"
+            aria-label={`Spread of ${env.fieldMap.get(String(f))?.label} by group`}
+            className="w-full"
+          >
+            {q.map((b, i) => {
+              const cy = 16 + i * rh + rh / 2;
+              return (
+                <g key={b.key}>
+                  <text
+                    x="114"
+                    y={cy + 3}
+                    fontSize="10"
+                    textAnchor="end"
+                    fill="currentColor"
+                    opacity=".85"
+                  >
+                    {trunc(b.label ?? b.key, 18)}
+                  </text>
+                  <line
+                    x1={x(b.min)}
+                    x2={x(b.max)}
+                    y1={cy}
+                    y2={cy}
+                    stroke="currentColor"
+                    opacity=".5"
+                  />
+                  <rect
+                    x={x(b.q1)}
+                    y={cy - rh * 0.3}
+                    width={Math.max(2, x(b.q3) - x(b.q1))}
+                    height={rh * 0.6}
+                    fill={env.colors[i % env.colors.length]}
+                    opacity=".75"
+                    rx="2"
+                  />
+                  <line
+                    x1={x(b.median)}
+                    x2={x(b.median)}
+                    y1={cy - rh * 0.3}
+                    y2={cy + rh * 0.3}
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  />
+                  {b.outliers > 0 && (
+                    <text
+                      x={x(b.max) + 4}
+                      y={cy + 3}
+                      fontSize="9"
+                      fill="#dc2626"
+                    >
+                      {b.outliers} outlier{b.outliers > 1 ? 's' : ''}
+                    </text>
+                  )}
+                  <title>{`${b.label ?? b.key}: min ${env.fmt(b.min, 'avg', f)}, Q1 ${env.fmt(b.q1, 'avg', f)}, median ${env.fmt(b.median, 'avg', f)}, Q3 ${env.fmt(b.q3, 'avg', f)}, max ${env.fmt(b.max, 'avg', f)}, n=${b.n}`}</title>
+                </g>
+              );
+            })}
+          </svg>
+          <figcaption className={`text-xs ${t.muted}`}>
+            Box = middle 50%, line = median, whiskers = min–max; outliers are
+            beyond 1.5 × IQR.
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'boxplot',
+  label: 'Box plot',
+  hint: 'Spread and outliers of a numeric field by category',
+  category: 'analytical',
+  icon: Sigma,
+  exportAs: 'table',
+  interactions: {},
+  create: (ctx) => {
+    const d = defaultsOf(ctx);
+    const f = d.score ?? d.num;
+    return d.cat && f
+      ? mkExt('boxplot', `${f.label} by ${d.cat.label.toLowerCase()}`, {
+          groupBy: d.cat.key,
+          field: f.key,
+          topN: 8,
+        })
+      : { unavailable: 'Needs a category and a numeric field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'quantiles',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: [],
+      quantileField: String(w.field),
+      limit: Number(w.topN ?? 8),
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'groupBy', ctx, 'a category'),
+      requireField(w, 'field', ctx, 'a numeric field', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'groupBy', label: 'Group by', accept: 'category' },
+    { type: 'field', key: 'field', label: 'Numeric field', accept: 'numeric' },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Groups shown',
+      min: 2,
+      max: 15,
+      advanced: true,
+    },
+  ],
+  toTable: (_w, rs) => {
+    const r = rs[''];
+    return r && r.shape === 'quantiles'
+      ? {
+          headers: [
+            'Group',
+            'n',
+            'Min',
+            'Q1',
+            'Median',
+            'Q3',
+            'Max',
+            'Outliers',
+          ],
+          rows: r.groups.map((b) => [
+            b.label ?? b.key,
+            b.n,
+            b.min,
+            b.q1,
+            b.median,
+            b.q3,
+            b.max,
+            b.outliers,
+          ]),
+        }
+      : null;
+  },
+  render: BoxRender,
+} as WidgetDescriptor);
+
+/* ---- Summary / ranking table (rule performance, investigator workload, branch scorecard...) ---- */
+type Col = { label: string; agg: QueryAgg; field?: string };
+const colsOf = (w: RegistryWidget) => (w.measures as Col[]) ?? [];
+const SummaryRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const g = grouped(results['']);
+  const cols = colsOf(widget);
+  const maxes = cols.map((_, j) =>
+    Math.max(1e-9, ...(g?.groups ?? []).map((x) => Math.abs(x.values[j] ?? 0)))
+  );
+  return (
+    <Gate status={status} error={error}>
+      {!g || g.groups.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <caption className="sr-only">{widget.title}</caption>
+            <thead>
+              <tr className={`${t.inset} ${t.muted}`}>
+                <th className="px-2 py-1.5 font-medium">#</th>
+                <th scope="col" className="px-2 py-1.5 font-medium">
+                  {env.fieldMap.get(String(widget.groupBy))?.label}
+                </th>
+                {cols.map((c, j) => (
+                  <th
+                    key={j}
+                    scope="col"
+                    className="px-2 py-1.5 text-right font-medium"
+                  >
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {g.groups.map((x, i) => (
+                <tr
+                  key={x.key}
+                  className={`border-b last:border-b-0 ${t.line} ${t.body}`}
+                >
+                  <td className={`px-2 py-1.5 ${t.muted}`}>{i + 1}</td>
+                  <th
+                    scope="row"
+                    className={`px-2 py-1.5 font-medium ${t.text}`}
+                  >
+                    {env.onPick ? (
+                      <button
+                        type="button"
+                        className="text-left hover:underline"
+                        onClick={() =>
+                          env.onPick!(String(widget.groupBy), x.key)
+                        }
+                      >
+                        {x.label ?? x.key}
+                      </button>
+                    ) : (
+                      (x.label ?? x.key)
+                    )}
+                  </th>
+                  {cols.map((c, j) => {
+                    const v = x.values[j] ?? 0,
+                      p =
+                        widget.dataBars === false
+                          ? 0
+                          : (Math.abs(v) / maxes[j]) * 100;
+                    return (
+                      <td
+                        key={j}
+                        className="px-2 py-1.5 text-right tabular-nums"
+                        style={
+                          p
+                            ? {
+                                background: `linear-gradient(90deg, ${env.colors[j % env.colors.length]}26 ${p}%, transparent ${p}%)`,
+                              }
+                            : undefined
+                        }
+                      >
+                        {env.fmt(v, c.agg, c.field, 'compact')}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+            {widget.showTotal !== false && (
+              <tfoot>
+                <tr
+                  className={`border-t font-semibold ${t.lineStrong} ${t.text}`}
+                >
+                  <td />
+                  <td className="px-2 py-1.5">Total</td>
+                  {cols.map((c, j) => (
+                    <td key={j} className="px-2 py-1.5 text-right tabular-nums">
+                      {env.fmt(g.grand[j] ?? 0, c.agg, c.field, 'compact')}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+          {g.totalGroups > g.groups.length && (
+            <p className={`mt-1 text-[11px] ${t.muted}`}>
+              Showing {g.groups.length} of {g.totalGroups}.
+            </p>
+          )}
+        </div>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'summaryTable',
+  label: 'Ranking / summary table',
+  hint: 'Group by a dimension with several measures (rules, analysts, branches)',
+  category: 'analytical',
+  icon: ListOrdered,
+  exportAs: 'table',
+  interactions: { crossFilter: true },
+  skipsCrossFilter: (w, xf) => w.groupBy === xf.field,
+  create: (ctx) => {
+    const d = defaultsOf(ctx),
+      m = defaultMeasure(ctx);
+    return d.cat
+      ? mkExt('summaryTable', `${d.cat.label} ranking`, {
+          span: 12,
+          groupBy: d.cat.key,
+          topN: 10,
+          sortIndex: 0,
+          sortDir: 'desc',
+          showTotal: true,
+          dataBars: true,
+          measures: [
+            { label: ctx.source.recordLabel, agg: 'count' },
+            ...(m.field
+              ? [{ label: 'Amount', agg: m.agg, field: m.field }]
+              : []),
+          ],
+        })
+      : { unavailable: 'Needs a category field.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'grouped',
+      dimensions: [{ field: String(w.groupBy) }],
+      measures: colsOf(w).map((c, i) => ({
+        id: `m${i}`,
+        agg: c.agg ?? 'count',
+        field: c.field,
+      })),
+      limit: Number(w.topN ?? 10),
+      others: false,
+      sort: {
+        by: 'measure',
+        index: Number(w.sortIndex ?? 0),
+        dir: (w.sortDir as 'asc') ?? 'desc',
+      },
+    },
+  ],
+  validate: (w, ctx) => {
+    const out = [requireField(w, 'groupBy', ctx, 'a category to rank')].filter(
+      (x): x is ValidationIssue => !!x
+    );
+    if (colsOf(w).length === 0)
+      out.push(
+        issue(
+          'error',
+          'no-measures',
+          `${describeWidget(w)} needs at least one measure column.`,
+          w.id
+        )
+      );
+    colsOf(w).forEach((c, i) =>
+      out.push(
+        ...measureIssues(
+          {
+            ...w,
+            agg: c.agg,
+            field: c.field,
+            title: `${w.title} › ${c.label}`,
+          } as RegistryWidget,
+          ctx
+        ).map((x) => ({ ...x, id: `${w.id}:c${i}:${x.code}` }))
+      )
+    );
+    return out;
+  },
+  config: [
+    { type: 'field', key: 'groupBy', label: 'Rank by', accept: 'category' },
+    {
+      type: 'list',
+      key: 'measures',
+      label: 'Column',
+      max: 6,
+      addLabel: 'Add column',
+      make: () => ({ label: 'New column', agg: 'count' }),
+      itemLabel: (it) => String(it.label ?? ''),
+      item: [
+        { type: 'text', key: 'label', label: 'Heading' },
+        { type: 'agg', key: 'agg', label: 'Calculation' },
+        {
+          type: 'field',
+          key: 'field',
+          label: 'Measure',
+          accept: 'measure',
+          optional: true,
+        },
+      ],
+    },
+    {
+      type: 'number',
+      key: 'sortIndex',
+      label: 'Sort by column # (0 = first)',
+      min: 0,
+      max: 5,
+      advanced: true,
+    },
+    {
+      type: 'select',
+      key: 'sortDir',
+      label: 'Order',
+      advanced: true,
+      options: [
+        { value: 'desc', label: 'Highest first' },
+        { value: 'asc', label: 'Lowest first' },
+      ],
+    },
+    {
+      type: 'number',
+      key: 'topN',
+      label: 'Rows',
+      min: 3,
+      max: 50,
+      advanced: true,
+    },
+    { type: 'toggle', key: 'showTotal', label: 'Total row', advanced: true },
+    { type: 'toggle', key: 'dataBars', label: 'Data bars', advanced: true },
+  ],
+  toTable: (w, rs) => {
+    const g = grouped(rs['']);
+    return g
+      ? {
+          headers: [String(w.groupBy), ...colsOf(w).map((c) => c.label)],
+          rows: g.groups.map((x) => [
+            x.label ?? x.key,
+            ...colsOf(w).map((_, j) => x.values[j] ?? 0),
+          ]),
+        }
+      : null;
+  },
+  render: SummaryRender,
+} as WidgetDescriptor);
+
+/* ---- Bubble ---- */
+const BubbleRender: WidgetDescriptor['render'] = ({
+  widget,
+  results,
+  status,
+  error,
+  env,
+}) => {
+  const t = useT();
+  const r = results[''];
+  const p = r && r.shape === 'points' ? r : undefined;
+  const xs = p?.points.map((q) => q.x) ?? [],
+    ys = p?.points.map((q) => q.y) ?? [],
+    ss = p?.points.map((q) => q.size ?? 1) ?? [];
+  const [x0, x1, y0, y1, sm] = [
+    Math.min(...xs),
+    Math.max(...xs),
+    Math.min(...ys),
+    Math.max(...ys),
+    Math.max(1e-9, ...ss),
+  ];
+  const X = (v: number) => PL + (W - PL - 14) * ((v - x0) / (x1 - x0 || 1)),
+    Y = (v: number) => PT + (H - PT - PB) * (1 - (v - y0) / (y1 - y0 || 1));
+  return (
+    <Gate status={status} error={error}>
+      {!p || p.points.length === 0 ? (
+        <WidgetEmpty />
+      ) : (
+        <figure className="rb-avoid">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={widget.title}
+            className="w-full"
+          >
+            <line
+              x1={PL}
+              x2={W - 14}
+              y1={H - PB}
+              y2={H - PB}
+              stroke="currentColor"
+              opacity=".3"
+            />
+            <line
+              x1={PL}
+              x2={PL}
+              y1={PT}
+              y2={H - PB}
+              stroke="currentColor"
+              opacity=".3"
+            />
+            {p.points.map((q, i) => (
+              <circle
+                key={i}
+                cx={X(q.x)}
+                cy={Y(q.y)}
+                r={4 + 14 * Math.sqrt((q.size ?? 1) / sm)}
+                fill={
+                  env.colors[
+                    Math.max(0, p.categories.indexOf(q.c ?? '')) %
+                      env.colors.length
+                  ]
+                }
+                opacity=".55"
+              />
+            ))}
+            <text
+              x={W / 2}
+              y={H - 6}
+              fontSize="10"
+              textAnchor="middle"
+              fill="currentColor"
+              opacity=".7"
+            >
+              {env.fieldMap.get(String(widget.xField))?.label}
+            </text>
+            <text
+              x="10"
+              y={H / 2}
+              fontSize="10"
+              textAnchor="middle"
+              fill="currentColor"
+              opacity=".7"
+              transform={`rotate(-90 10 ${H / 2})`}
+            >
+              {env.fieldMap.get(String(widget.yField))?.label}
+            </text>
+          </svg>
+          <figcaption className={`text-xs ${t.muted}`}>
+            Bubble size ={' '}
+            {env.fieldMap.get(String(widget.sizeField))?.label ?? 'count'}.
+            {p.sampled
+              ? ` Sampled 1 in ${p.sampled} of ${p.total.toLocaleString()} records.`
+              : ''}
+          </figcaption>
+        </figure>
+      )}
+    </Gate>
+  );
+};
+registerWidget({
+  kind: 'bubble',
+  label: 'Bubble chart',
+  hint: 'Three numeric measures: x, y and bubble size',
+  category: 'charts',
+  icon: Circle,
+  exportAs: 'visual',
+  interactions: {},
+  create: (ctx) => {
+    const n = (ctx.fields.length ? ctx.fields : ctx.source.fields).filter((f) =>
+      isNumericType(f.type)
+    );
+    const d = defaultsOf(ctx);
+    return n.length >= 2
+      ? mkExt('bubble', `${n[1].label} vs ${n[0].label}`, {
+          xField: n[0].key,
+          yField: n[1].key,
+          sizeField: n[2]?.key,
+          colour: d.cat?.key,
+        })
+      : { unavailable: 'Needs at least two numeric fields.' };
+  },
+  requirements: (w) => [
+    {
+      shape: 'points',
+      measures: [],
+      points: {
+        x: String(w.xField),
+        y: String(w.yField),
+        size: (w.sizeField as string) || undefined,
+        colour: (w.colour as string) || undefined,
+        max: 400,
+      },
+    },
+  ],
+  validate: (w, ctx) =>
+    [
+      requireField(w, 'xField', ctx, 'a numeric X field', (f) =>
+        isNumericType(f.type)
+      ),
+      requireField(w, 'yField', ctx, 'a numeric Y field', (f) =>
+        isNumericType(f.type)
+      ),
+    ].filter((x): x is ValidationIssue => !!x),
+  config: [
+    { type: 'field', key: 'xField', label: 'X axis', accept: 'numeric' },
+    { type: 'field', key: 'yField', label: 'Y axis', accept: 'numeric' },
+    {
+      type: 'field',
+      key: 'sizeField',
+      label: 'Bubble size',
+      accept: 'numeric',
+      optional: true,
+    },
+    {
+      type: 'field',
+      key: 'colour',
+      label: 'Colour by',
+      accept: 'category',
+      optional: true,
+    },
+  ],
+  render: BubbleRender,
+} as WidgetDescriptor);
+
+/* ---------------- components/PeriodPicker.tsx ---------------- */
+/**
+ * Reporting-period picker: presets (grouped), custom range, comparison mode, and a live preview of the
+ * concrete dates the backend will receive. Edits the ACTUAL report period only; the design-time preview
+ * sample is never filtered by it.
+ */
+
+const lbl = 'mb-1 block text-[11px] font-semibold';
+
+const PeriodPicker: React.FC<{
+  value: ReportPeriod;
+  onChange: (p: ReportPeriod) => void;
+  timezone: string;
+  fiscalYearStartMonth?: number;
+  compact?: boolean;
+}> = ({ value, onChange, timezone, fiscalYearStartMonth, compact }) => {
+  const t = useT();
+  const today = todayIn(timezone);
+  const err = periodError(value);
+  const { cur, cmp } = useMemo(() => {
+    const o = { today, fiscalYearStartMonth };
+    const c = resolvePeriod(value, o);
+    return { cur: c, cmp: resolveComparison(c, value.compare, o) };
+  }, [value, today, fiscalYearStartMonth]);
+  const field = `h-8 w-full rounded-lg border px-2 text-[13px] ${t.input} ${FOCUS}`;
+  return (
+    <div className="space-y-2">
+      <div>
+        <label className={`${lbl} ${t.muted}`} htmlFor="rb-period">
+          Report period
+        </label>
+        <select
+          id="rb-period"
+          className={field}
+          value={value.preset}
+          onChange={(e) =>
+            onChange({ ...value, preset: e.target.value as DatePreset })
+          }
+        >
+          {PRESET_GROUPS.map((g) => (
+            <optgroup key={g.label} label={g.label}>
+              {g.presets.map((p) => (
+                <option key={p} value={p}>
+                  {PRESET_LABEL[p]}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+      {value.preset === 'custom' && (
+        <div className="grid grid-cols-2 gap-2">
+          {(['from', 'to'] as const).map((k) => (
+            <div key={k}>
+              <label className={`${lbl} ${t.muted}`} htmlFor={`rb-period-${k}`}>
+                {k === 'from' ? 'From' : 'To'}
+              </label>
+              <input
+                id={`rb-period-${k}`}
+                type="date"
+                className={field}
+                value={value[k] ?? ''}
+                onChange={(e) => onChange({ ...value, [k]: e.target.value })}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      {!compact && value.preset !== 'all_time' && (
+        <div>
+          <label className={`${lbl} ${t.muted}`} htmlFor="rb-compare">
+            Compare with
+          </label>
+          <select
+            id="rb-compare"
+            className={field}
+            value={value.compare}
+            onChange={(e) =>
+              onChange({ ...value, compare: e.target.value as CompareMode })
+            }
+          >
+            {(Object.keys(COMPARE_LABEL) as CompareMode[]).map((k) => (
+              <option key={k} value={k}>
+                {COMPARE_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <p
+        role={err ? 'alert' : undefined}
+        className={`text-[11px] ${err ? 'text-red-600' : t.muted}`}
+      >
+        {err ?? (
+          <>
+            {describePeriod(cur)}
+            {cmp && <> · vs {describePeriod(cmp)}</>}
+          </>
+        )}
+      </p>
+    </div>
+  );
+};
+
+/* ---------------- components/RunPanel.tsx ---------------- */
+/**
+ * Preview vs actual-data UX.
+ *   PreviewBanner  : "you are designing on a small sample"
+ *   ActualBanner   : "this is the generated report" + traceability (period, records, filters, run id, data status)
+ *   RunDialog      : staged progress, ETA, cancel, retry, error
+ *   IssuesPanel    : pre-generation validation with jump-to-fix
+ */
+
+/* ---------------------------------------------------------------------------
+ * Preview banner
+ * ------------------------------------------------------------------------- */
+interface PreviewInfo {
+  limit: number;
+  loaded: number;
+  /** Rows in the whole source, when the backend reports it. */
+  total?: number;
+  from?: string;
+  to?: string;
+  loadedAt?: string;
+  sourceName: string;
+  recordLabel: string;
+}
+
+const fmtN = (n: number) => n.toLocaleString('en-US');
+const fmtDay = (s?: string) =>
+  s
+    ? new Date(`${s}T00:00:00Z`).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+      })
+    : '—';
+
+const PreviewBanner: React.FC<{
+  info: PreviewInfo;
+  options: number[];
+  onLimit: (n: number) => void;
+  onRefresh: () => void;
+  loading?: boolean;
+  periodLabel: string;
+}> = ({ info, options, onLimit, onRefresh, loading, periodLabel }) => {
+  const t = useT();
+  return (
+    <div
+      role="status"
+      className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950"
+      data-testid="preview-banner"
+    >
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+        <div className="min-w-[240px] flex-1">
+          <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider">
+            <span className="rounded bg-amber-500 px-1.5 py-0.5 text-white">
+              Preview mode
+            </span>
+            Design sample only
+          </p>
+          <p className="mt-1 text-[13px] font-semibold">
+            Showing the latest {fmtN(info.loaded)} {info.recordLabel} for report
+            design
+            {info.total
+              ? ` (of ${fmtN(info.total)} in ${info.sourceName})`
+              : ''}
+            .
+          </p>
+          <p className="mt-0.5 text-xs text-amber-900/80">
+            Numbers here are <strong>not</strong> the reporting period. Actual
+            report data is retrieved when you generate, using{' '}
+            <strong>{periodLabel}</strong> and your filters.
+          </p>
+        </div>
+        <dl className="grid grid-cols-2 gap-x-5 gap-y-0.5 text-[11px] text-amber-900/90">
+          <dt className="font-semibold">Sample spans</dt>
+          <dd>
+            {fmtDay(info.from)} → {fmtDay(info.to)}
+          </dd>
+          <dt className="font-semibold">Refreshed</dt>
+          <dd>
+            {info.loadedAt
+              ? new Date(info.loadedAt).toLocaleTimeString('en-GB')
+              : '—'}
+          </dd>
+        </dl>
+        <div className="flex items-end gap-2">
+          <label className="text-[11px] font-semibold">
+            Sample size
+            <select
+              className={`mt-0.5 block h-8 rounded-lg border border-amber-300 bg-white px-2 text-xs text-slate-900 ${FOCUS}`}
+              value={info.limit}
+              onChange={(e) => onLimit(Number(e.target.value))}
+              aria-label="Preview sample size"
+            >
+              {options.map((n) => (
+                <option key={n} value={n}>
+                  Latest {fmtN(n)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 text-xs font-medium text-slate-800 hover:bg-amber-100 disabled:opacity-60 ${FOCUS}`}
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+            />{' '}
+            Refresh
+          </button>
+        </div>
+      </div>
+      <span className="sr-only">{t.dark ? '' : ''}</span>
+    </div>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * Actual-report banner
+ * ------------------------------------------------------------------------- */
+const ActualBanner: React.FC<{
+  meta: ReportRunMetadata;
+  stale: boolean;
+  refining: boolean;
+  onRegenerate: () => void;
+  onBackToDesign: () => void;
+}> = ({ meta, stale, refining, onRegenerate, onBackToDesign }) => {
+  const t = useT();
+  return (
+    <div
+      role="status"
+      className={`rounded-xl border px-4 py-3 ${stale ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-emerald-300 bg-emerald-50 text-emerald-950'}`}
+      data-testid="actual-banner"
+    >
+      <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+        <div className="min-w-[200px]">
+          <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider">
+            <span
+              className={`rounded px-1.5 py-0.5 text-white ${stale ? 'bg-amber-600' : 'bg-emerald-600'}`}
+            >
+              {stale ? 'Out of date' : 'Report generated'}
+            </span>
+            {meta.partial && (
+              <span className="rounded bg-amber-500 px-1.5 py-0.5 text-white">
+                Partial data
+              </span>
+            )}
+          </p>
+          <p className="mt-1 flex items-center gap-1.5 text-[13px] font-semibold">
+            <ShieldCheck className="h-4 w-4" /> Actual data
+          </p>
+        </div>
+        <dl className="grid flex-1 grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs sm:grid-cols-[auto_1fr_auto_1fr]">
+          <dt className="font-semibold">Period</dt>
+          <dd>{describePeriod(meta.period)}</dd>
+          <dt className="font-semibold">Records</dt>
+          <dd className="tabular-nums">
+            {meta.recordsMatched === null ? '—' : fmtN(meta.recordsMatched)}
+          </dd>
+          <dt className="font-semibold">Filters</dt>
+          <dd>{meta.filters.length ? meta.filters.join(' · ') : 'None'}</dd>
+          <dt className="font-semibold">Generated</dt>
+          <dd>
+            {new Date(meta.generatedAt).toLocaleString('en-GB')} by{' '}
+            {meta.generatedBy}
+          </dd>
+          <dt className="font-semibold">Data as of</dt>
+          <dd>
+            {meta.dataAsOf
+              ? new Date(meta.dataAsOf).toLocaleString('en-GB')
+              : 'Not reported'}
+          </dd>
+          <dt className="font-semibold">Run</dt>
+          <dd className="font-mono text-[11px]">
+            {meta.runId.slice(0, 8)} · def {meta.definitionHash.slice(0, 8)}
+            {meta.datasetVersion ? ` · ${meta.datasetVersion}` : ''}
+          </dd>
+          {meta.viewFilters.length > 0 && (
+            <>
+              <dt className="font-semibold">View filter</dt>
+              <dd>
+                {meta.viewFilters.join(' · ')}
+                {refining ? ' (updating…)' : ''}
+              </dd>
+            </>
+          )}
+        </dl>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onBackToDesign}
+            className={`inline-flex h-8 items-center rounded-lg border px-2.5 text-xs font-medium ${t.btn} ${FOCUS}`}
+          >
+            Back to design
+          </button>
+          <button type="button" onClick={onRegenerate} className={PRIMARY_BTN}>
+            <RefreshCw className="h-3.5 w-3.5" /> Regenerate
+          </button>
+        </div>
+      </div>
+      {stale && (
+        <p className="mt-2 text-xs font-medium">
+          The report definition changed after this was generated. Regenerate
+          before exporting or sharing.
+        </p>
+      )}
+      {meta.warnings.length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs">
+          {meta.warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * Generation dialog
+ * ------------------------------------------------------------------------- */
+const fmtEta = (ms: number | null) => {
+  if (ms === null) return 'Estimating…';
+  const s = Math.max(1, Math.round(ms / 1000));
+  return s < 60
+    ? `About ${s}s remaining`
+    : `About ${Math.ceil(s / 60)} min remaining`;
+};
+
+const RunDialog: React.FC<{
+  state: RunState;
+  reportName: string;
+  onCancel: () => void;
+  onRetry: () => void;
+  onClose: () => void;
+}> = ({ state, reportName, onCancel, onRetry, onClose }) => {
+  const t = useT();
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => btn.current?.focus(), [state.phase]);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) =>
+      e.key === 'Escape' &&
+      (state.phase === 'running' ? onCancel() : onClose());
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [state.phase, onCancel, onClose]);
+  const idx = STAGES.findIndex((s) => s.id === state.stage);
+  const pct = Math.round(state.progress * 100);
+  const running = state.phase === 'running';
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rb-run-title"
+        className={`w-full max-w-md rounded-2xl border p-5 ${t.card} ${t.text}`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 id="rb-run-title" className="text-base font-bold">
+              {state.phase === 'failed'
+                ? 'Report could not be generated'
+                : state.phase === 'cancelled'
+                  ? 'Generation cancelled'
+                  : 'Generating report'}
+            </h2>
+            <p className={`mt-0.5 text-xs ${t.muted}`}>{reportName}</p>
+          </div>
+          {!running && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className={`rounded p-1 ${t.hover} ${FOCUS}`}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {running && (
+          <>
+            <ol className="mt-4 space-y-2" aria-label="Progress">
+              {STAGES.map((s, i) => {
+                const done =
+                  i < idx || (i === idx && state.progress >= s.span[1]);
+                const active = i === idx && !done;
+                return (
+                  <li
+                    key={s.id}
+                    className={`flex items-center gap-2 text-[13px] ${done ? t.text : active ? t.text : t.muted}`}
+                  >
+                    {done ? (
+                      <CheckCircle2
+                        className="h-4 w-4 text-emerald-600"
+                        aria-label="done"
+                      />
+                    ) : active ? (
+                      <Loader2
+                        className="h-4 w-4 animate-spin text-blue-600"
+                        aria-label="in progress"
+                      />
+                    ) : (
+                      <Circle
+                        className="h-4 w-4 opacity-40"
+                        aria-label="pending"
+                      />
+                    )}
+                    <span className={active ? 'font-semibold' : ''}>
+                      {s.label}
+                    </span>
+                    {active && s.id === 'fetch' && state.message && (
+                      <span className={`text-xs ${t.muted}`}>
+                        · {state.message}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="mt-4">
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                aria-label="Report generation progress"
+                className={`h-2 w-full overflow-hidden rounded-full ${t.skeleton}`}
+              >
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-[width] duration-300"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p
+                className={`mt-1.5 flex justify-between text-xs ${t.muted}`}
+                aria-live="polite"
+              >
+                <span>{pct}%</span>
+                <span>{fmtEta(state.etaMs)}</span>
+              </p>
+            </div>
+            <p className={`mt-3 text-xs ${t.muted}`}>
+              Large reports run on the server. You can cancel at any time;
+              nothing is exported until you choose to.
+            </p>
+            <div className="mt-4 flex justify-end">
+              <button
+                ref={btn}
+                type="button"
+                onClick={onCancel}
+                className={`inline-flex h-9 items-center rounded-lg border px-3 text-[13px] font-medium ${t.btn} ${FOCUS}`}
+              >
+                Cancel generation
+              </button>
+            </div>
+          </>
+        )}
+
+        {state.phase === 'failed' && (
+          <>
+            <div
+              role="alert"
+              className="mt-4 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800"
+            >
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-semibold">{state.error?.message}</p>
+                <p className="mt-0.5">
+                  {state.error?.retryable
+                    ? 'This looks temporary. You can try again.'
+                    : 'Retrying will not help; check the report configuration or permissions.'}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className={`inline-flex h-9 items-center rounded-lg border px-3 text-[13px] font-medium ${t.btn} ${FOCUS}`}
+              >
+                Back to design
+              </button>
+              {state.error?.retryable && (
+                <button
+                  ref={btn}
+                  type="button"
+                  onClick={onRetry}
+                  className={PRIMARY_BTN}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" /> Retry
+                </button>
+              )}
+            </div>
+          </>
+        )}
+
+        {state.phase === 'cancelled' && (
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className={`inline-flex h-9 items-center rounded-lg border px-3 text-[13px] font-medium ${t.btn} ${FOCUS}`}
+            >
+              Close
+            </button>
+            <button
+              ref={btn}
+              type="button"
+              onClick={onRetry}
+              className={PRIMARY_BTN}
+            >
+              Start again
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * Validation issues
+ * ------------------------------------------------------------------------- */
+const SEV = {
+  error: { icon: XCircle, cls: 'text-red-600', label: 'Error' },
+  warning: { icon: AlertTriangle, cls: 'text-amber-600', label: 'Warning' },
+  info: { icon: Info, cls: 'text-blue-600', label: 'Note' },
+} as const;
+
+const IssuesPanel: React.FC<{
+  issues: ValidationIssue[];
+  onJump: (issue: ValidationIssue) => void;
+}> = ({ issues, onJump }) => {
+  const t = useT();
+  if (issues.length === 0)
+    return (
+      <p className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+        <CheckCircle2 className="h-4 w-4" /> Ready to generate. No issues found.
+      </p>
+    );
+  const order = { error: 0, warning: 1, info: 2 } as const;
+  const sorted = [...issues].sort(
+    (a, b) => order[a.severity] - order[b.severity]
+  );
+  return (
+    <ul
+      className={`divide-y rounded-lg border ${t.lineStrong} ${t.line}`}
+      aria-label="Report checks"
+    >
+      {sorted.map((i) => {
+        const S = SEV[i.severity];
+        return (
+          <li key={i.id} className="flex items-start gap-2 px-3 py-2 text-xs">
+            <S.icon
+              className={`mt-0.5 h-4 w-4 shrink-0 ${S.cls}`}
+              aria-label={S.label}
+            />
+            <span className={`flex-1 ${t.body}`}>{i.message}</span>
+            {(i.widgetId || i.fix) && (
+              <button
+                type="button"
+                onClick={() => onJump(i)}
+                className={`shrink-0 rounded px-1.5 py-0.5 font-semibold text-blue-600 hover:underline ${FOCUS}`}
+              >
+                Fix
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
+
+/* ---------------- components/SchemaInspector.tsx ---------------- */
+/**
+ * Generic, schema-driven inspector for registry widgets. Basic options are always visible; `advanced` ones sit
+ * behind "More options" (progressive disclosure). Adding a widget never requires bespoke inspector UI.
+ */
+
+type Rec = Record<string, unknown>;
+const accepts = (a: string, f: FieldInfo) =>
+  a === 'any' ||
+  (a === 'category' && f.type === 'category') ||
+  (a === 'dimension' &&
+    (f.type === 'category' ||
+      f.type === 'boolean' ||
+      isDateInfoType(f.type))) ||
+  (a === 'date' && isDateInfoType(f.type)) ||
+  (a === 'numeric' && isNumericType(f.type)) ||
+  (a === 'measure' && (isNumericType(f.type) || f.type === 'boolean'));
+
+const FieldRow: React.FC<{
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+  id: string;
+}> = ({ label, hint, children, id }) => {
+  const t = useT();
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className={`mb-1 block text-[11px] font-semibold ${t.muted}`}
+      >
+        {label}
+      </label>
+      {children}
+      {hint && <p className={`mt-1 text-[11px] ${t.muted}`}>{hint}</p>}
+    </div>
+  );
+};
+
+const Fields: React.FC<{
+  schema: ConfigField[];
+  value: Rec;
+  onChange: (p: Rec, key?: string) => void;
+  fields: FieldInfo[];
+  sources: SourceInfo[];
+  widget: RegistryWidget;
+  path: string;
+}> = ({ schema, value, onChange, fields, sources, widget, path }) => {
+  const t = useT();
+  const input = `h-8 w-full rounded-lg border px-2 text-[13px] ${t.input} ${FOCUS}`;
+  return (
+    <div className="space-y-3">
+      {schema.map((f) => {
+        if (f.showIf && !f.showIf({ ...widget, ...value } as RegistryWidget))
+          return null;
+        const id = `${path}-${f.key}`;
+        const v = value[f.key];
+        const set = (x: unknown, k?: string) =>
+          onChange({ [f.key]: x }, k ? `${id}` : undefined);
+        switch (f.type) {
+          case 'text':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                {f.multiline ? (
+                  <textarea
+                    id={id}
+                    rows={4}
+                    className={`w-full rounded-lg border p-2 text-[13px] ${t.input} ${FOCUS}`}
+                    value={String(v ?? '')}
+                    placeholder={f.placeholder}
+                    onChange={(e) => set(e.target.value, 'k')}
+                  />
+                ) : (
+                  <input
+                    id={id}
+                    className={input}
+                    value={String(v ?? '')}
+                    placeholder={f.placeholder}
+                    onChange={(e) => set(e.target.value, 'k')}
+                  />
+                )}
+              </FieldRow>
+            );
+          case 'number':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <input
+                  id={id}
+                  type="number"
+                  className={input}
+                  min={f.min}
+                  max={f.max}
+                  step={f.step ?? 'any'}
+                  value={v === undefined || v === null ? '' : String(v)}
+                  onChange={(e) =>
+                    set(
+                      e.target.value === ''
+                        ? undefined
+                        : Number(e.target.value),
+                      'k'
+                    )
+                  }
+                />
+              </FieldRow>
+            );
+          case 'toggle':
+            return (
+              <label
+                key={f.key}
+                className={`flex items-center gap-2 text-[13px] ${t.body}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!v}
+                  onChange={(e) => set(e.target.checked)}
+                />{' '}
+                {f.label}
+              </label>
+            );
+          case 'select':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? '')}
+                  onChange={(e) => set(e.target.value)}
+                >
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          case 'source':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? '')}
+                  onChange={(e) =>
+                    onChange({
+                      [f.key]: e.target.value || undefined,
+                      ...(path.includes('#') ? {} : {}),
+                    })
+                  }
+                >
+                  <option value="">This report&apos;s data</option>
+                  {sources.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          case 'agg':
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? 'count')}
+                  onChange={(e) => set(e.target.value)}
+                >
+                  {AGG_CHOICES.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          case 'field': {
+            const srcId = f.sourceFrom
+              ? (value[f.sourceFrom] as string | undefined)
+              : undefined;
+            const pool = srcId
+              ? (sources.find((s) => s.id === srcId)?.fields ?? [])
+              : fields;
+            const opts = pool.filter((x) => accepts(f.accept, x));
+            return (
+              <FieldRow key={f.key} id={id} label={f.label} hint={f.hint}>
+                <select
+                  id={id}
+                  className={input}
+                  value={String(v ?? '')}
+                  onChange={(e) => set(e.target.value || undefined)}
+                >
+                  {(f.optional || !v) && (
+                    <option value="">{f.optional ? 'None' : 'Select…'}</option>
+                  )}
+                  {opts.map((o) => (
+                    <option key={o.key} value={o.key}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+            );
+          }
+          case 'list': {
+            const items = (Array.isArray(v) ? v : []) as Rec[];
+            return (
+              <fieldset
+                key={f.key}
+                className={`space-y-2 rounded-lg border p-2 ${t.lineStrong}`}
+              >
+                <legend className={`px-1 text-[11px] font-semibold ${t.muted}`}>
+                  {f.label}
+                </legend>
+                {items.map((it, i) => (
+                  <div
+                    key={i}
+                    className={`space-y-2 rounded-lg border p-2 ${t.inset}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[11px] font-semibold ${t.body}`}>
+                        {f.itemLabel?.(it, i) ?? `${f.label} ${i + 1}`}
+                      </span>
+                      {items.length > (f.min ?? 1) && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${f.label} ${i + 1}`}
+                          onClick={() => set(items.filter((_, j) => j !== i))}
+                          className={`rounded p-1 ${t.hover} ${FOCUS}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <Fields
+                      schema={f.item}
+                      value={it}
+                      fields={fields}
+                      sources={sources}
+                      widget={widget}
+                      path={`${id}-${i}`}
+                      onChange={(p) =>
+                        set(items.map((x, j) => (j === i ? { ...x, ...p } : x)))
+                      }
+                    />
+                  </div>
+                ))}
+                {items.length < f.max && (
+                  <button
+                    type="button"
+                    onClick={() => set([...items, f.make()])}
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium ${t.btn} ${FOCUS}`}
+                  >
+                    <Plus className="h-3.5 w-3.5" /> {f.addLabel}
+                  </button>
+                )}
+              </fieldset>
+            );
+          }
+        }
+      })}
+    </div>
+  );
+};
+
+const SchemaInspector: React.FC<{
+  widget: RegistryWidget;
+  schema: ConfigField[];
+  fields: FieldInfo[];
+  sources: SourceInfo[];
+  onPatch: (p: Rec, coalesceKey?: string) => void;
+}> = ({ widget, schema, fields, sources, onPatch }) => {
+  const t = useT();
+  const [more, setMore] = useState(false);
+  const basic = schema.filter((f) => !f.advanced);
+  const adv = schema.filter((f) => f.advanced);
+  const common = {
+    value: widget as Rec,
+    fields,
+    sources,
+    widget,
+    onChange: (p: Rec, k?: string) =>
+      onPatch(p, k ? `${widget.id}-${Object.keys(p)[0]}` : undefined),
+  };
+  return (
+    <div className="space-y-3">
+      <Fields schema={basic} path={widget.id} {...common} />
+      {adv.length > 0 && (
+        <>
+          <button
+            type="button"
+            aria-expanded={more}
+            onClick={() => setMore((m) => !m)}
+            className={`text-xs font-semibold text-blue-600 hover:underline ${FOCUS}`}
+          >
+            {more ? 'Fewer options' : 'More options'}
+          </button>
+          {more && (
+            <Fields schema={adv} path={`${widget.id}-adv`} {...common} />
+          )}
+        </>
+      )}
+      <span className="sr-only">{t.dark ? '' : ''}</span>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Types
+ * ======================================================================== */
+type FieldType =
+  | 'text'
+  | 'category'
+  | 'number'
+  | 'decimal'
+  | 'currency'
+  | 'boolean'
+  | 'date'
+  | 'datetime';
+/** A normalised cell: decimals are canonical strings ("1234.50"), booleans are true/false, missing is null. */
+export type Cell = string | number | boolean | null;
+export type Row = Record<string, Cell>;
+
+export interface FieldDef {
+  key: string;
+  label: string;
+  /**
+   * text | category | number (float/int) | decimal (exact, e.g. NUMERIC(18,2)) | currency (decimal + currency code)
+   * | boolean (true/false, 1/0, yes/no, Y/N, T/F all accepted) | date | datetime
+   */
+  type: FieldType;
+  group: string;
+  /** Render category values as coloured pills (priority, severity, status...). */
+  badge?: boolean;
+  /**
+   * Ordinal ranking of a category, highest first, e.g. ['Critical','High','Medium','Low'].
+   * Ordinal fields sort by rank, keep a stable legend order, use semantic colours and
+   * support "at least / at most" filters. Inferred automatically for badge fields that use severity words.
+   */
+  order?: string[];
+  /** Decimal precision (total digits) and scale (digits after the point), e.g. 18 and 2 for NUMERIC(18,2). */
+  precision?: number;
+  scale?: number;
+  /** ISO 4217 code for currency fields (e.g. 'AED'); overrides the page-level default. */
+  currency?: string;
+  /** Suffix shown after numbers, e.g. '%'. */
+  unit?: string;
+  /** Masked unless `canViewSensitive` is set (PII such as account numbers, names). */
+  sensitive?: boolean;
+  /** Sort category values naturally (A→Z, 2024 → 2025) instead of by frequency. */
+  naturalSort?: boolean;
+  /** Distinct values (filled in automatically). */
+  values?: string[];
+  /** True for user-defined custom fields. */
+  derived?: boolean;
+  /** Set on calculated-metric pseudo fields (ratio of aggregates). Never selectable as a column. */
+  metric?: CalculatedMetric;
+  /** More distinct values than the picker cap: use a typed search instead of a dropdown. */
+  valuesTruncated?: boolean;
+}
+
+export interface RowLoadResult {
+  rows: Row[];
+  truncated: boolean;
+  /** Rows that exist in the source for this request (shown as "100 of N"). Optional. */
+  total?: number;
+}
+
+export interface LoadContext {
+  /** Aborted when the source changes, the view unmounts or the user refreshes. */
+  signal: AbortSignal;
+  /** The client will not use more than this many rows. Return the MOST RECENT rows first. */
+  maxRows: number;
+  /**
+   * 'preview'  design-time sample: return the latest `limit` rows (no date range).
+   * 'report'   the user clicked Generate: return the rows of the selected reporting period
+   *            (`fromDate`..`toDate`, inclusive, ISO yyyy-mm-dd; both undefined = all time).
+   * A source called without `purpose` behaves as 'preview'.
+   */
+  purpose?: 'preview' | 'report';
+  /** Preview sample size. */
+  limit?: number;
+  /** Reporting period (purpose === 'report'). Covers the comparison period too. */
+  fromDate?: string;
+  toDate?: string;
+  /** Report-level filters, so the API can filter server-side. The client re-applies them. */
+  filters?: { field: string; op: string; value: string }[];
+}
+
+export interface ReportSource {
+  id: string;
+  name: string;
+  description: string;
+  recordLabel: string;
+  icon: React.ComponentType<{ className?: string }>;
+  /** Field used for the report date range and date bucketing. */
+  dateField: string;
+  fields: FieldDef[];
+  defaultFields: string[];
+  /** Dates must be ISO strings (YYYY-MM-DD). */
+  loadRows: (
+    ctx?: LoadContext
+  ) => Promise<RowLoadResult | Row[]> | RowLoadResult | Row[];
+  /** Certified metric catalogue (ratio-of-aggregates measures owned by the data team). */
+  metrics?: CalculatedMetric[];
+}
+
+type Agg =
+  | 'count'
+  | 'sum'
+  | 'avg'
+  | 'min'
+  | 'max'
+  | 'distinct'
+  | 'yes'
+  | 'rate'
+  | 'metric';
+type SimpleAgg = Exclude<Agg, 'metric'>;
+interface MetricSide {
+  agg: SimpleAgg;
+  field?: string;
+  /** All rules must match (AND). */
+  where: FilterRule[];
+}
+/**
+ * Ratio of aggregates: numerator / denominator, each with its own aggregation and conditions.
+ * e.g. False-positive ratio = count(status = False positive) / count(all)
+ * Correct at any grouping level (unlike averaging a row-level percentage).
+ */
+export interface CalculatedMetric {
+  id: string;
+  key: string;
+  label: string;
+  description?: string;
+  unit: 'pct' | 'bps' | 'ratio';
+  numerator: MetricSide;
+  denominator: MetricSide;
+  certified?: boolean;
+  /**
+   * Formula metric (e.g. growth %, weighted score). When present it takes precedence over numerator/denominator:
+   * each named term is aggregated, then the expression is evaluated on the aggregates (correct at any grouping).
+   */
+  formula?: { expression: string; terms: Record<string, MetricSide> };
+}
+const METRIC_PREFIX = 'mt_';
+type FilterOp =
+  | 'eq'
+  | 'neq'
+  | 'in'
+  | 'between'
+  | 'contains'
+  | 'gt'
+  | 'lt'
+  | 'after'
+  | 'before'
+  | 'atleast'
+  | 'atmost';
+type DateRangeKey = '7d' | '30d' | '90d' | '6m' | '12m' | 'all' | 'custom';
+type Tone = 'blue' | 'red' | 'green' | 'violet' | 'amber' | 'slate';
+type ChartType =
+  | 'doughnut'
+  | 'pie'
+  | 'bar'
+  | 'stacked'
+  | 'hbar'
+  | 'line'
+  | 'area'
+  | 'scatter'
+  | 'heatmap'
+  | 'pivot';
+type Bucket = 'day' | 'week' | 'month';
+type BucketPref = Bucket | 'auto';
+type Span = 3 | 4 | 6 | 8 | 12;
+type Height = 'sm' | 'md' | 'lg';
+type PaletteKey =
+  | 'corporate'
+  | 'vivid'
+  | 'ocean'
+  | 'sunset'
+  | 'mono'
+  | 'forest'
+  | 'berry'
+  | 'earth'
+  | 'slate'
+  | 'royal'
+  | 'pastel'
+  | 'citrus'
+  | 'nordic'
+  | 'ember'
+  | 'aurora'
+  | 'desert'
+  | 'teal'
+  | 'plum'
+  | 'arctic'
+  | 'candy'
+  | 'contrast';
+type Classification = 'none' | 'internal' | 'confidential' | 'restricted';
+
+interface FilterRule {
+  id: string;
+  field: string;
+  op: FilterOp;
+  value: string;
+}
+
+interface BaseWidget {
+  id: string;
+  title: string;
+  /** Short annotation shown under the title (executive commentary). */
+  note?: string;
+  span: Span;
+  height: Height;
+  /** Start this widget on a new page when printing / exporting to PDF. */
+  pageBreak?: boolean;
+  filters: FilterRule[];
+  /** Drill-down hierarchy (see ReportDefinition.drillPaths) that a click on this widget walks down. */
+  drillPathId?: string;
+}
+interface KpiWidget extends BaseWidget {
+  kind: 'kpi';
+  agg: Agg;
+  field?: string;
+  tone: Tone;
+  showTrend: boolean;
+  showSparkline: boolean;
+  lowerIsBetter: boolean;
+  target?: number;
+  /** Warning threshold: between target and this value shows Warning, beyond it Breach. */
+  warn?: number;
+  /** compact = AED 1.2M, full = AED 1,234,567.89 (uses the field's scale). */
+  format?: 'compact' | 'full';
+}
+interface ChartWidget extends BaseWidget {
+  kind: 'chart';
+  chartType: ChartType;
+  groupBy: string;
+  /** Second dimension: series (column/line/area/stacked) or columns (heatmap) or colour (scatter). */
+  breakBy?: string;
+  /** Scatter only: X-axis numeric field (Y is `field`). */
+  xField?: string;
+  bucket: BucketPref;
+  agg: Agg;
+  field?: string;
+  topN: number;
+  showLegend: boolean;
+  showLabels: boolean;
+  showPercentage: boolean;
+  /** Category ordering: auto = rank/natural order, else by value or label. */
+  sort?: 'auto' | 'valueDesc' | 'valueAsc' | 'label';
+  /** Roll groups beyond "top N" into an "Others" bar. */
+  others?: boolean;
+  /** Stacked: show each bar as 100%. */
+  normalize?: boolean;
+  /** Dashed reference line (target / SLA) on column, line, area and stacked charts. */
+  refLine?: number;
+  /** Pivot: show row and column totals. */
+  showTotals?: boolean;
+}
+interface TableWidget extends BaseWidget {
+  kind: 'table';
+  columns: string[];
+  sortBy?: string;
+  sortDir: 'asc' | 'desc';
+  limit: number;
+  showTotals: boolean;
+  dataBars: boolean;
+}
+interface TextWidget extends BaseWidget {
+  kind: 'text';
+  text: string;
+  variant: 'heading' | 'paragraph' | 'callout';
+}
+interface InsightWidget extends BaseWidget {
+  kind: 'insight';
+  groupBy: string;
+  agg: Agg;
+  field?: string;
+  bucket: BucketPref;
+  /** Noun used in generated sentences, e.g. "cases". */
+  subject: string;
+}
+/**
+ * Widgets provided through the widget registry (see ./report-builder/registry). Their configuration is
+ * kind-specific, validated by their descriptor, and rendered from query results rather than raw rows.
+ */
+interface ExtWidget extends BaseWidget {
+  kind: ExtKind;
+  [config: string]: unknown;
+}
+type Widget =
+  | KpiWidget
+  | ChartWidget
+  | TableWidget
+  | TextWidget
+  | InsightWidget
+  | ExtWidget;
+
+type DerivedBase = { id: string; key: string; label: string };
+/** Numeric field → ordered ranges, e.g. < 1,000 | 1,000 – 4,999 | ≥ 5,000. */
+type BandsDerived = DerivedBase & {
+  kind: 'bands';
+  source: string;
+  edges: number[];
+  labels?: string[];
+};
+/** Category values → your own groups, e.g. Card fraud + Identity theft → "Customer-facing". */
+type GroupsDerived = DerivedBase & {
+  kind: 'groups';
+  source: string;
+  groups: { name: string; values: string[] }[];
+  other: string;
+};
+type DatePart =
+  | 'year'
+  | 'quarter'
+  | 'yearQuarter'
+  | 'month'
+  | 'weekday'
+  | 'hour';
+type DatePartDerived = DerivedBase & {
+  kind: 'dateparts';
+  source: string;
+  part: DatePart;
+};
+type CalcOp = 'add' | 'sub' | 'mul' | 'div' | 'pct';
+/** Row-level arithmetic between two numeric fields (Net loss = Amount − Recovered, Recovery % ...). */
+type CalcDerived = DerivedBase & {
+  kind: 'calc';
+  a: string;
+  b: string;
+  op: CalcOp;
+};
+/** CASE WHEN segmentation: first matching case wins; optional Yes/No flag output. */
+type RulesDerived = DerivedBase & {
+  kind: 'rules';
+  cases: { id: string; label: string; rules: FilterRule[] }[];
+  otherwise: string;
+  asBoolean?: boolean;
+};
+type DerivedField =
+  | BandsDerived
+  | GroupsDerived
+  | DatePartDerived
+  | CalcDerived
+  | RulesDerived;
+type DerivedKind = DerivedField['kind'];
+
+interface DrillLevel {
+  field: string;
+  label?: string;
+}
+interface DrillPath {
+  id: string;
+  name: string;
+  levels: DrillLevel[];
+}
+interface FilterPreset {
+  id: string;
+  name: string;
+  rules: FilterRule[];
+}
+interface Presentation {
+  subtitle?: string;
+  brandName?: string;
+  /** Hex accent for the report masthead. */
+  accent?: string;
+  headerText?: string;
+  footerText?: string;
+  showPageNumbers: boolean;
+  coverPage: boolean;
+  preparedFor?: string;
+}
+type ScheduleFrequency = 'none' | 'daily' | 'weekly' | 'monthly';
+interface Schedule {
+  frequency: ScheduleFrequency;
+  recipients: string;
+}
+
+export interface ReportDefinition {
+  name: string;
+  description: string;
+  sourceId: string;
+  fields: string[];
+  widgets: Widget[];
+  filters: FilterRule[];
+  /** Reporting period for the ACTUAL report (never applied to the design-time preview sample). */
+  period: ReportPeriod;
+  /** @deprecated v3 range keys; read only by normalizeDefinition to migrate to `period`. */
+  dateRange?: DateRangeKey;
+  /** @deprecated see dateRange. */
+  customFrom?: string;
+  /** @deprecated see dateRange. */
+  customTo?: string;
+  /** Rows loaded for design-time preview (latest N). Default: the `previewLimit` prop (100). */
+  previewLimit?: number;
+  /** Data-driven drill hierarchies, e.g. Channel > Region > Branch. Widgets opt in via `drillPathId`. */
+  drillPaths?: DrillPath[];
+  /** Saved filter sets that can be re-applied in one click. */
+  filterPresets?: FilterPreset[];
+  /** Cover / header / footer / branding of the generated report. */
+  presentation?: Presentation;
+  palette: PaletteKey;
+  classification: Classification;
+  /** Compare KPI cards with the previous period. */
+  compare: boolean;
+  schedule: Schedule;
+  /** Custom fields (bands, groups, date parts, calculations, rule segments). */
+  derived: DerivedField[];
+  createdAt: string;
+  /** Definition format version (see SCHEMA_VERSION / normalizeDefinition). */
+  schemaVersion?: number;
+  /** IANA time zone used for relative dates, day bucketing and hour/weekday parts. */
+  timezone?: string;
+  /** Report-level calculated metrics (ratio of aggregates). */
+  metrics?: CalculatedMetric[];
+  audience?: 'executive' | 'management' | 'analytical';
+  tags?: string;
+  businessUnit?: string;
+}
+
+export type TemplateVisibility = 'private' | 'team' | 'org';
+
+export interface ReportTemplate {
+  id: string;
+  name: string;
+  description: string;
+  definition: ReportDefinition;
+  isDraft: boolean;
+  visibility: TemplateVisibility;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  builtIn?: boolean;
+}
+
+export interface ReportTemplateStore {
+  list: () => Promise<ReportTemplate[]>;
+  save: (template: ReportTemplate) => Promise<ReportTemplate>;
+  remove: (id: string) => Promise<void>;
+}
+
+type OutputFormat = 'pdf' | 'csv' | 'xlsx';
+interface OutputOptions {
+  format: OutputFormat;
+  orientation: 'portrait' | 'landscape';
+  paper: 'A4' | 'Letter';
+}
+
+export interface GeneratePayload {
+  definition: ReportDefinition;
+  templateId?: string;
+  /**
+   * The ACTUAL generated report (metadata, compiled request and aggregated results).
+   * Prefer re-rendering server-side from `run.meta.runId` (the server holds the full results).
+   */
+  run: {
+    meta: ReportRunMetadata;
+    request: ReportRunRequest;
+    results: Record<string, QueryResult>;
+  };
+  /**
+   * Ready-to-write tables of the ACTUAL report, one per widget that has tabular data, in report order.
+   * Use these to build Excel / CSV / PowerPoint files without interpreting `run.results`.
+   */
+  tables: {
+    widgetId: string;
+    title: string;
+    headers: string[];
+    rows: (string | number)[][];
+  }[];
+  /**
+   * Records of the ACTUAL report: rows of the selected period + report filters, fetched from the API when the
+   * report was generated (never the preview sample). Empty for PDF, or when the data provider does not expose
+   * `fetchExportRows` (then generate server-side from `run.request`). Capped at 100,000 (see `rowsTruncated`).
+   */
+  rows: Row[];
+  rowsTruncated?: boolean;
+  columns: FieldDef[];
+  format: OutputFormat;
+  options: OutputOptions;
+  schedule: Schedule;
+}
+
+export interface AuditEvent {
+  type: 'report.save' | 'report.export' | 'report.delete' | 'report.import';
+  reportName: string;
+  detail?: string;
+  at: string;
+}
+
+export interface ReportBuilderProps {
+  sources?: ReportSource[];
+  templateStore?: ReportTemplateStore;
+  onGenerate?: (payload: GeneratePayload) => Promise<void> | void;
+  onBack?: () => void;
+  currentUser?: string;
+  currency?: string;
+  theme?: 'light' | 'dark';
+  /** CSS height of the workspace on xl screens. */
+  height?: string;
+  /** Show fields flagged `sensitive` unmasked (preview, tables, exports). Default: masked. */
+  canViewSensitive?: boolean;
+  /**
+   * UI hints only (hide/disable controls). The backend must re-check every action.
+   * Default: everything allowed.
+   */
+  capabilities?: { canExport?: boolean };
+  /** Receives client-side audit events; forward them to your audit service. */
+  onAudit?: (event: AuditEvent) => void;
+  /**
+   * Data backend. `loadPreview` feeds design mode (latest N rows); `execute` (or submit/poll/fetchResult for
+   * background jobs) produces the ACTUAL report from the full dataset with server-side filtering + aggregation.
+   * Default: an in-browser demo provider over each source's `loadRows` (do not use with large data).
+   */
+  provider?: ReportDataProvider;
+  /** Rows loaded for design-time preview. Default 100 (max 1000). */
+  previewLimit?: number;
+  /** Tenant id forwarded with every report run (multi-tenant backends). */
+  tenantId?: string;
+  /** First month of the fiscal year (1-12), used by "Year to date". Default 1. */
+  fiscalYearStartMonth?: number;
+}
+
+/* Register the widget catalogue (original five + executive / analytical / fraud-risk widgets). */
+registerLegacyWidgets();
+
+/* ==========================================================================
+ * Small utilities
+ * ======================================================================== */
+const uid = () => uuidv4();
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+const parseIso = (s: string) => new Date(`${s}T00:00:00Z`);
+const addDays = (d: Date, n: number) => {
+  const x = new Date(d);
+  x.setUTCDate(x.getUTCDate() + n);
+  return x;
+};
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/* ---- report time zone -------------------------------------------------------
+ * Dates are plain ISO strings; datetimes carry an instant. "Which day is it" must be answered in the
+ * report's time zone (a UAE bank at UTC+4 otherwise gets day boundaries wrong). The active zone is a
+ * module variable set once per render by the page (setReportTimezone) so the pure helpers stay simple. */
+const DEFAULT_TZ = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+})();
+let REPORT_TZ = DEFAULT_TZ;
+const setReportTimezone = (tz: string) => {
+  REPORT_TZ = tz || DEFAULT_TZ;
+};
+const TIMEZONES = [
+  ...new Set([
+    DEFAULT_TZ,
+    'Asia/Dubai',
+    'UTC',
+    'Europe/London',
+    'Europe/Paris',
+    'Asia/Riyadh',
+    'Asia/Kolkata',
+    'Asia/Singapore',
+    'America/New_York',
+  ]),
+];
+const tzFormatters = new Map<string, Intl.DateTimeFormat>();
+const tzFormatter = (kind: 'day' | 'parts' | 'time') => {
+  const key = `${kind}|${REPORT_TZ}`;
+  let f = tzFormatters.get(key);
+  if (!f) {
+    f =
+      kind === 'day'
+        ? new Intl.DateTimeFormat('en-CA', {
+            timeZone: REPORT_TZ,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          })
+        : kind === 'time'
+          ? new Intl.DateTimeFormat('en-GB', {
+              timeZone: REPORT_TZ,
+              hour: '2-digit',
+              minute: '2-digit',
+              hourCycle: 'h23',
+            })
+          : new Intl.DateTimeFormat('en-US', {
+              timeZone: REPORT_TZ,
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              hourCycle: 'h23',
+              weekday: 'short',
+            });
+    tzFormatters.set(key, f);
+  }
+  return f;
+};
+const hasZone = (s: string) => /[zZ]|[+-]\d\d:?\d\d$/.test(s);
+/** YYYY-MM-DD of a date or datetime *in the report time zone*. Date-only values pass through unchanged. */
+const dayOf = (s: string): string => {
+  if (!s) return '';
+  if (s.length <= 10) return s;
+  const d = new Date(
+    hasZone(s) ? s.replace(' ', 'T') : `${s.replace(' ', 'T')}Z`
+  );
+  if (Number.isNaN(d.getTime())) return s.slice(0, 10);
+  return tzFormatter('day').format(d);
+};
+const WD_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const zonedParts = (dt: Date) => {
+  const p = Object.fromEntries(
+    tzFormatter('parts')
+      .formatToParts(dt)
+      .map((x) => [x.type, x.value])
+  );
+  return {
+    y: Number(p.year),
+    m: Number(p.month) - 1,
+    h: Number(p.hour) % 24,
+    wd: Math.max(0, WD_SHORT.indexOf(p.weekday)),
+  };
+};
+/** Never hold more rows than this in the browser. Real sources must aggregate server-side. */
+/** Design-time sample: the browser never holds more than this many rows (the real report runs server-side). */
+const DEFAULT_PREVIEW_LIMIT = 100;
+const MAX_PREVIEW_LIMIT = 1000;
+const PREVIEW_LIMIT_OPTIONS = [50, 100, 250, 500, 1000];
+/** Max distinct values offered in pickers (above it, filters become typed search). */
+const MAX_FIELD_VALUES = 200;
+const SCHEMA_VERSION = 4;
+
+function rng(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const slug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'report';
+
+const fmtDate = (s: string) =>
+  s
+    ? parseIso(s.slice(0, 10)).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+      })
+    : '';
+
+const fmtDateTime = (s: string) => {
+  if (!s) return '';
+  const t = s.length > 10 ? s : `${s}T00:00:00Z`;
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : `${t}Z`);
+  return Number.isNaN(d.getTime())
+    ? s
+    : `${fmtDate(dayOf(s))} ${tzFormatter('time').format(d)}`;
+};
+
+/* ==========================================================================
+ * Built-in mock fraud datasets (replace through the `sources` prop)
+ *
+ * Values arrive "messy" on purpose, the way real drivers return them:
+ *   - NUMERIC(18,2) as strings ("1234.50")      → normalised to exact decimals
+ *   - booleans as Y/N, 1/0, true/false, yes/no  → normalised to true/false
+ *   - timestamps as ISO strings                  → datetime
+ * ======================================================================== */
+interface Gen {
+  r: () => number;
+  pick<T>(a: T[]): T;
+  uniform<T>(a: T[]): T;
+  w<T>(pairs: [T, number][]): T;
+  day(max?: number): string;
+  stamp(max?: number): string;
+  /** NUMERIC(18,2) the way node-postgres returns it: a string with two decimals. */
+  dec(min: number, max: number): string;
+  /** Boolean in a random real-world encoding. */
+  flag(p: number): string | number | boolean;
+}
+
+function makeRows(
+  seed: number,
+  n: number,
+  build: (g: Gen, i: number) => Row
+): Row[] {
+  const r = rng(seed);
+  const now = new Date();
+  const g: Gen = {
+    r,
+    pick: (a) => a[Math.floor(r() ** 1.5 * a.length)],
+    uniform: (a) => a[Math.floor(r() * a.length)],
+    w: (pairs) => {
+      let x = r() * pairs.reduce((s, p) => s + p[1], 0);
+      for (const [v, wt] of pairs) if ((x -= wt) <= 0) return v;
+      return pairs[0][0];
+    },
+    day: (max = 400) => iso(addDays(now, -Math.floor(r() ** 1.25 * max))),
+    stamp: (max = 400) => {
+      const hh = String(Math.floor(r() * 24)).padStart(2, '0');
+      const mm = String(Math.floor(r() * 60)).padStart(2, '0');
+      return `${iso(addDays(now, -Math.floor(r() ** 1.25 * max)))}T${hh}:${mm}:00Z`;
+    },
+    dec: (min, max) => (min + r() ** 3 * (max - min)).toFixed(2),
+    flag: (p) => {
+      const v = r() < p;
+      const style = Math.floor(r() * 4);
+      return [v ? 'Y' : 'N', v ? 1 : 0, v, v ? 'yes' : 'no'][style];
+    },
+  };
+  return Array.from({ length: n }, (_, i) => build(g, i));
+}
+
+const f = (
+  key: string,
+  label: string,
+  type: FieldType,
+  group: string,
+  o: Partial<FieldDef> = {}
+): FieldDef => ({
+  key,
+  label,
+  type,
+  group,
+  ...o,
+});
+/** NUMERIC(18,2) amount in AED. */
+const aed = (key: string, label: string, group = 'Financial'): FieldDef =>
+  f(key, label, 'currency', group, {
+    precision: 18,
+    scale: 2,
+    currency: 'AED',
+  });
+
+type SideSpec = {
+  agg?: SimpleAgg;
+  field?: string;
+  where?: [string, FilterOp, string][];
+};
+const mside = (s: SideSpec = {}): MetricSide => ({
+  agg: s.agg ?? 'count',
+  field: s.field,
+  where: (s.where ?? []).map(([field, op, value]) => ({
+    id: uid(),
+    field,
+    op,
+    value,
+  })),
+});
+const certMetric = (
+  key: string,
+  label: string,
+  unit: CalculatedMetric['unit'],
+  numerator: SideSpec,
+  denominator: SideSpec,
+  description: string
+): CalculatedMetric => ({
+  id: key,
+  key,
+  label,
+  unit,
+  description,
+  certified: true,
+  numerator: mside(numerator),
+  denominator: mside(denominator),
+});
+
+const CHANNELS = [
+  'Online',
+  'Mobile app',
+  'POS',
+  'ATM',
+  'Branch',
+  'Call centre',
+];
+const REGIONS = ['North America', 'EMEA', 'APAC', 'LATAM', 'Middle East'];
+const ANALYSTS = [
+  'A. Hassan',
+  'M. Rossi',
+  'J. Okafor',
+  'L. Chen',
+  'S. Patel',
+  'R. Duarte',
+];
+const FRAUD_TYPES = [
+  'Card fraud',
+  'Account takeover',
+  'Identity theft',
+  'Payment fraud',
+  'Application fraud',
+  'Insider fraud',
+];
+const CASE_TITLES: Record<string, string[]> = {
+  'Card fraud': ['Cloned card used abroad', 'Card-not-present burst'],
+  'Account takeover': ['Credential stuffing login', 'SIM-swap password reset'],
+  'Identity theft': ['Synthetic identity onboarding', 'Stolen ID loan request'],
+  'Payment fraud': ['Mule account transfers', 'Authorised push payment scam'],
+  'Application fraud': [
+    'Falsified income documents',
+    'Duplicate application ring',
+  ],
+  'Insider fraud': ['Unusual staff override', 'Dormant account manipulation'],
+};
+const MERCHANTS = [
+  'TechMart',
+  'AeroTickets',
+  'QuickFuel',
+  'LuxWatch Co',
+  'GameVault',
+  'GiftCardHub',
+  'FreshGrocer',
+  'CryptoBridge',
+  'HomeDepotX',
+  'StreamPlus',
+];
+const PRIORITY = ['Critical', 'High', 'Medium', 'Low'];
+
+const SOURCES: ReportSource[] = [
+  {
+    id: 'cases',
+    name: 'Fraud cases',
+    description: 'Investigations with severity, status, exposure and recovery.',
+    recordLabel: 'cases',
+    icon: ShieldAlert,
+    dateField: 'opened',
+    fields: [
+      f('case_id', 'Case ID', 'text', 'Case information'),
+      f('title', 'Case title', 'text', 'Case information'),
+      f('fraud_type', 'Fraud type', 'category', 'Case information'),
+      f('channel', 'Channel', 'category', 'Case information'),
+      f('severity', 'Severity', 'category', 'Case information', {
+        badge: true,
+      }),
+      f('status', 'Status', 'category', 'Case information', { badge: true }),
+      f('is_repeat', 'Repeat customer', 'boolean', 'Case information'),
+      aed('amt_aed', 'Amount at risk'),
+      aed('recovered_aed', 'Recovered amount'),
+      f('investigator', 'Investigator', 'category', 'Assignment'),
+      f('region', 'Region', 'category', 'Assignment'),
+      f('customer_ref', 'Customer reference', 'text', 'Assignment', {
+        sensitive: true,
+      }),
+      f('opened', 'Opened date', 'date', 'Dates'),
+      f('days_open', 'Days open', 'number', 'Dates'),
+    ],
+    defaultFields: [
+      'case_id',
+      'title',
+      'fraud_type',
+      'severity',
+      'status',
+      'amt_aed',
+      'investigator',
+      'opened',
+    ],
+    metrics: [
+      certMetric(
+        'mt_recovery_rate',
+        'Recovery rate',
+        'pct',
+        { agg: 'sum', field: 'recovered_aed' },
+        { agg: 'sum', field: 'amt_aed' },
+        'Recovered amount ÷ amount at risk.'
+      ),
+      certMetric(
+        'mt_confirmed_rate',
+        'Confirmed fraud rate',
+        'pct',
+        { where: [['status', 'eq', 'Confirmed fraud']] },
+        {},
+        'Cases confirmed as fraud ÷ all cases.'
+      ),
+      certMetric(
+        'mt_critical_share',
+        'Critical case share',
+        'pct',
+        { where: [['severity', 'eq', 'Critical']] },
+        {},
+        'Critical severity cases ÷ all cases.'
+      ),
+    ],
+    loadRows: () =>
+      makeRows(11, 320, (g, i) => {
+        const type = g.pick(FRAUD_TYPES);
+        const status = g.w([
+          ['Open', 3],
+          ['Under investigation', 3],
+          ['Escalated', 1],
+          ['Confirmed fraud', 2],
+          ['Closed', 3],
+        ]);
+        const amount = g.dec(250, 95000);
+        const settled = status === 'Closed' || status === 'Confirmed fraud';
+        return {
+          case_id: `FC-${2000 + i}`,
+          title: `${type}: ${g.uniform(CASE_TITLES[type])}`,
+          fraud_type: type,
+          channel: g.pick(CHANNELS),
+          severity: g.w([
+            ['Low', 3],
+            ['Medium', 4],
+            ['High', 3],
+            ['Critical', 1],
+          ]),
+          status,
+          is_repeat: g.flag(0.22),
+          amt_aed: amount,
+          recovered_aed: settled
+            ? (Number(amount) * g.r() * 0.7).toFixed(2)
+            : '0.00',
+          investigator: g.uniform(ANALYSTS),
+          region: g.uniform(REGIONS),
+          customer_ref: `CUST-${100000 + Math.floor(g.r() * 899999)}`,
+          opened: g.day(),
+          days_open: Math.max(1, Math.round(g.r() ** 1.5 * 45)),
+        };
+      }),
+  },
+  {
+    id: 'alerts',
+    name: 'Fraud alerts',
+    description:
+      'Rule and model alerts with priority, escalation and SAR outcomes.',
+    recordLabel: 'alerts',
+    icon: BellRing,
+    dateField: 'triggered',
+    fields: [
+      f('alert_id', 'Alert ID', 'text', 'Alert information'),
+      f('rule', 'Detection rule', 'category', 'Alert information'),
+      f('rule_priority', 'Rule priority', 'category', 'Alert information', {
+        badge: true,
+        order: PRIORITY,
+      }),
+      f('severity', 'Severity', 'category', 'Alert information', {
+        badge: true,
+      }),
+      f('status', 'Status', 'category', 'Alert information', { badge: true }),
+      f('channel', 'Channel', 'category', 'Alert information'),
+      f('score', 'Risk score', 'number', 'Scoring'),
+      aed('amt_aed', 'Transaction amount'),
+      f('is_escalated', 'Escalated', 'boolean', 'Outcome'),
+      f('sar_filed', 'SAR filed', 'boolean', 'Outcome'),
+      f('analyst', 'Analyst', 'category', 'Assignment'),
+      f('customer_ref', 'Customer reference', 'text', 'Assignment', {
+        sensitive: true,
+      }),
+      f('triggered', 'Triggered at', 'datetime', 'Dates'),
+    ],
+    defaultFields: [
+      'alert_id',
+      'rule',
+      'rule_priority',
+      'status',
+      'score',
+      'amt_aed',
+      'is_escalated',
+      'analyst',
+      'triggered',
+    ],
+    metrics: [
+      certMetric(
+        'mt_fp_ratio',
+        'False-positive ratio',
+        'pct',
+        { where: [['status', 'eq', 'False positive']] },
+        {},
+        'Alerts closed as false positive ÷ all alerts.'
+      ),
+      certMetric(
+        'mt_precision',
+        'Alert precision',
+        'pct',
+        { where: [['status', 'eq', 'Confirmed']] },
+        {
+          where: [
+            ['status', 'neq', 'New'],
+            ['status', 'neq', 'In review'],
+          ],
+        },
+        'Confirmed alerts ÷ alerts already reviewed (excludes New and In review).'
+      ),
+      certMetric(
+        'mt_escalation_rate',
+        'Escalation rate',
+        'pct',
+        { where: [['is_escalated', 'eq', 'Yes']] },
+        {},
+        'Escalated alerts ÷ all alerts.'
+      ),
+      certMetric(
+        'mt_escalated_value_share',
+        'Escalated value share',
+        'pct',
+        {
+          agg: 'sum',
+          field: 'amt_aed',
+          where: [['is_escalated', 'eq', 'Yes']],
+        },
+        { agg: 'sum', field: 'amt_aed' },
+        'Value of escalated alerts ÷ value of all alerts.'
+      ),
+    ],
+    loadRows: () =>
+      makeRows(23, 520, (g, i) => {
+        const priority = g.w([
+          ['Critical', 1],
+          ['High', 2],
+          ['Medium', 4],
+          ['Low', 4],
+        ]);
+        const hot = priority === 'Critical' || priority === 'High';
+        return {
+          alert_id: `AL-${50000 + i}`,
+          rule: g.pick([
+            'Velocity: 5+ txns in 10 min',
+            'Impossible travel',
+            'New device, high value',
+            'Dormant account reactivated',
+            'Beneficiary change then transfer',
+            'Card-not-present spike',
+          ]),
+          rule_priority: priority,
+          severity: g.w([
+            ['Low', 4],
+            ['Medium', 4],
+            ['High', 2],
+            ['Critical', 1],
+          ]),
+          status: g.w([
+            ['New', 2],
+            ['In review', 2],
+            ['False positive', 5],
+            ['Confirmed', 2],
+            ['Escalated', 1],
+          ]),
+          channel: g.pick(CHANNELS),
+          score: Math.round(30 + g.r() * 70),
+          amt_aed: g.dec(20, hot ? 60000 : 25000),
+          is_escalated: g.flag(hot ? 0.45 : 0.08),
+          sar_filed: g.r() < (hot ? 0.3 : 0.04) ? 1 : 0,
+          analyst: g.uniform(ANALYSTS),
+          customer_ref: `CUST-${100000 + Math.floor(g.r() * 899999)}`,
+          triggered: g.stamp(),
+        };
+      }),
+  },
+  {
+    id: 'transactions',
+    name: 'Transactions',
+    description: 'Scored payment activity with decisions and merchant context.',
+    recordLabel: 'transactions',
+    icon: CreditCard,
+    dateField: 'txn_date',
+    fields: [
+      f('txn_id', 'Transaction ID', 'text', 'Transaction'),
+      f('merchant', 'Merchant', 'category', 'Transaction'),
+      f('channel', 'Channel', 'category', 'Transaction'),
+      f('country', 'Country', 'category', 'Transaction'),
+      f('is_international', 'International', 'boolean', 'Transaction'),
+      aed('amt_aed', 'Amount'),
+      f('risk_score', 'Risk score', 'number', 'Scoring'),
+      f('decision', 'Decision', 'category', 'Scoring', { badge: true }),
+      f('txn_date', 'Transaction date', 'date', 'Dates'),
+    ],
+    defaultFields: [
+      'txn_id',
+      'merchant',
+      'channel',
+      'amt_aed',
+      'risk_score',
+      'decision',
+      'txn_date',
+    ],
+    metrics: [
+      certMetric(
+        'mt_decline_rate',
+        'Decline rate',
+        'pct',
+        { where: [['decision', 'eq', 'Declined']] },
+        {},
+        'Declined transactions ÷ all transactions.'
+      ),
+      certMetric(
+        'mt_review_rate',
+        'Manual review rate',
+        'pct',
+        { where: [['decision', 'eq', 'Manual review']] },
+        {},
+        'Transactions sent to manual review ÷ all transactions.'
+      ),
+      certMetric(
+        'mt_declined_value_bps',
+        'Declined value (bps)',
+        'bps',
+        {
+          agg: 'sum',
+          field: 'amt_aed',
+          where: [['decision', 'eq', 'Declined']],
+        },
+        { agg: 'sum', field: 'amt_aed' },
+        'Declined value ÷ total value, in basis points.'
+      ),
+      certMetric(
+        'mt_intl_value_share',
+        'International value share',
+        'pct',
+        {
+          agg: 'sum',
+          field: 'amt_aed',
+          where: [['is_international', 'eq', 'Yes']],
+        },
+        { agg: 'sum', field: 'amt_aed' },
+        'Value of international transactions ÷ total value.'
+      ),
+    ],
+    loadRows: () =>
+      makeRows(37, 640, (g, i) => ({
+        txn_id: `TX-${900000 + i}`,
+        merchant: g.pick(MERCHANTS),
+        channel: g.pick(CHANNELS),
+        country: g.pick(['AE', 'GB', 'US', 'SG', 'DE', 'BR', 'NG', 'IN']),
+        is_international: g.flag(0.3),
+        amt_aed: g.dec(5, 12000),
+        risk_score: Math.round(g.r() ** 1.6 * 100),
+        decision: g.w([
+          ['Approved', 8],
+          ['Manual review', 2],
+          ['Declined', 2],
+        ]),
+        txn_date: g.day(),
+      })),
+  },
+  {
+    id: 'chargebacks',
+    name: 'Chargebacks',
+    description: 'Disputed card payments, reasons and representment outcomes.',
+    recordLabel: 'chargebacks',
+    icon: Landmark,
+    dateField: 'filed',
+    fields: [
+      f('cb_id', 'Chargeback ID', 'text', 'Dispute'),
+      f('merchant', 'Merchant', 'category', 'Dispute'),
+      f('reason', 'Reason', 'category', 'Dispute'),
+      f('network', 'Card network', 'category', 'Dispute'),
+      f('status', 'Status', 'category', 'Dispute', { badge: true }),
+      f('is_represented', 'Represented', 'boolean', 'Dispute'),
+      aed('amt_aed', 'Disputed amount'),
+      f('filed', 'Filed date', 'date', 'Dates'),
+    ],
+    defaultFields: [
+      'cb_id',
+      'merchant',
+      'reason',
+      'network',
+      'status',
+      'amt_aed',
+      'filed',
+    ],
+    metrics: [
+      certMetric(
+        'mt_representment_rate',
+        'Representment rate',
+        'pct',
+        { where: [['is_represented', 'eq', 'Yes']] },
+        {},
+        'Disputes represented ÷ all disputes.'
+      ),
+      certMetric(
+        'mt_win_rate',
+        'Representment win rate',
+        'pct',
+        { where: [['status', 'eq', 'Won']] },
+        {
+          where: [
+            ['status', 'neq', 'Open'],
+            ['status', 'neq', 'Pending'],
+          ],
+        },
+        'Disputes won ÷ disputes decided (excludes Open and Pending).'
+      ),
+    ],
+    loadRows: () =>
+      makeRows(53, 260, (g, i) => ({
+        cb_id: `CB-${7000 + i}`,
+        merchant: g.pick(MERCHANTS),
+        reason: g.pick([
+          'Fraud: card not present',
+          'Fraud: lost or stolen',
+          'Transaction not recognised',
+          'Duplicate processing',
+          'Service not received',
+        ]),
+        network: g.pick(['Visa', 'Mastercard', 'Amex', 'Discover']),
+        status: g.w([
+          ['Open', 3],
+          ['Pending', 2],
+          ['Won', 3],
+          ['Lost', 2],
+        ]),
+        is_represented: g.flag(0.55),
+        amt_aed: g.dec(25, 9000),
+        filed: g.day(),
+      })),
+  },
+];
+
+/* ==========================================================================
+ * Data engine: types, normalisation, filters, grouping, aggregation, formatting
+ * ======================================================================== */
+const isNumeric = (t: FieldType) =>
+  t === 'number' || t === 'decimal' || t === 'currency';
+/** Exact-decimal types (NUMERIC / DECIMAL / money). */
+const isDecimal = (t: FieldType) => t === 'decimal' || t === 'currency';
+const isDateType = (t: FieldType) => t === 'date' || t === 'datetime';
+/** Types that behave like categories when grouping. */
+const isCat = (t: FieldType) => t === 'category' || t === 'boolean';
+/** Types that can be used to group / break down a chart. */
+const isDim = (t: FieldType) => isCat(t) || isDateType(t);
+const scaleOf = (fd?: FieldDef) =>
+  fd ? (fd.scale ?? (isDecimal(fd.type) ? 2 : 0)) : 0;
+
+/* ---- booleans: true/false, 1/0, yes/no, Y/N, T/F, on/off ---- */
+const TRUE_SET = new Set(['true', 't', 'yes', 'y', '1', 'on']);
+const FALSE_SET = new Set(['false', 'f', 'no', 'n', '0', 'off']);
+function toBoolean(v: unknown): boolean | null {
+  if (v === true || v === false) return v;
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return v === 1 ? true : v === 0 ? false : null;
+  const s = String(v).trim().toLowerCase();
+  if (TRUE_SET.has(s)) return true;
+  if (FALSE_SET.has(s)) return false;
+  return null;
+}
+
+/* ---- exact decimals: values are handled as scaled integers (cents), never as floats ----
+ * 1234.56 → 123456. Sums stay exact while |value| < 2^53 / 10^scale
+ * (≈ 90 trillion units at scale 2), far beyond any realistic NUMERIC(18,2) report total.
+ */
+function toScaled(v: unknown, scale: number): number | null {
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean')
+    return null;
+  let s =
+    typeof v === 'number'
+      ? Number.isFinite(v)
+        ? v.toFixed(scale + 2)
+        : ''
+      : String(v);
+  s = s
+    .trim()
+    .replace(/[,\s]/g, '')
+    .replace(/^\((.*)\)$/, '-$1');
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(s);
+  if (!m || (m[2] === '' && !m[3])) {
+    const n = Number(s);
+    return s !== '' && Number.isFinite(n) ? Math.round(n * 10 ** scale) : null;
+  }
+  const sign = m[1] === '-' ? -1 : 1;
+  const frac = m[3] ?? '';
+  let n = Number((m[2] || '0') + (frac + '0'.repeat(scale)).slice(0, scale));
+  if (frac.length > scale && frac.charAt(scale) >= '5') n += 1; // round half up
+  return sign * n;
+}
+const canonDecimal = (v: unknown, scale: number): string | null => {
+  const n = toScaled(v, scale);
+  return n === null ? null : (n / 10 ** scale).toFixed(scale);
+};
+
+/** Coerce a raw driver row into typed cells (once, on load). */
+function normalizeRows(rows: Row[], fields: FieldDef[]): Row[] {
+  return rows.map((r) => {
+    const out: Row = { ...r };
+    for (const fd of fields) {
+      const v = r[fd.key];
+      if (fd.type === 'boolean') out[fd.key] = toBoolean(v);
+      else if (isDecimal(fd.type)) out[fd.key] = canonDecimal(v, scaleOf(fd));
+      else if (fd.type === 'number') {
+        const n = v === null || v === undefined || v === '' ? NaN : Number(v);
+        out[fd.key] = Number.isFinite(n) ? n : null;
+      } else if (fd.type === 'date')
+        out[fd.key] = v ? String(v).slice(0, 10) : null;
+      else if (fd.type === 'datetime') out[fd.key] = v ? String(v) : null;
+      else
+        out[fd.key] =
+          v === null || v === undefined || v === '' ? null : String(v);
+    }
+    return out;
+  });
+}
+
+/** The label a cell groups / filters / cross-filters under. */
+function cellKey(fd: FieldDef | undefined, r: Row): string {
+  const v = fd ? r[fd.key] : undefined;
+  if (v === null || v === undefined || v === '') return 'Unknown';
+  if (fd?.type === 'boolean')
+    return v === true ? 'Yes' : v === false ? 'No' : 'Unknown';
+  return String(v);
+}
+
+/** Position in the field's ordinal ranking (0 = highest), or -1. */
+const rankOf = (fd: FieldDef | undefined, label: string) =>
+  fd?.order
+    ? fd.order.findIndex((o) => o.toLowerCase() === label.toLowerCase())
+    : -1;
+const rankOrLast = (fd: FieldDef, label: string) => {
+  const i = rankOf(fd, label);
+  return i < 0 ? 999 : i;
+};
+
+const SEVERITY_VOCAB = [
+  'critical',
+  'very high',
+  'high',
+  'medium',
+  'moderate',
+  'low',
+  'very low',
+  'informational',
+  'info',
+];
+
+/** Add distinct values and infer ordinal ranking for severity-style badge fields. */
+function enrichFields(fields: FieldDef[], rows: Row[]): FieldDef[] {
+  return fields.map((fd) => {
+    if (fd.type === 'boolean')
+      return { ...fd, order: ['Yes', 'No', 'Unknown'], values: ['Yes', 'No'] };
+    if (fd.type !== 'category') return fd;
+    const distinct = [...new Set(rows.map((r) => cellKey(fd, r)))].filter(
+      (d) => d !== 'Unknown'
+    );
+    let order = fd.order;
+    if (
+      !order &&
+      fd.badge &&
+      distinct.length &&
+      distinct.every((d) => SEVERITY_VOCAB.includes(d.toLowerCase()))
+    ) {
+      order = [...distinct].sort(
+        (a, b) =>
+          SEVERITY_VOCAB.indexOf(a.toLowerCase()) -
+          SEVERITY_VOCAB.indexOf(b.toLowerCase())
+      );
+    }
+    const values = order
+      ? [
+          ...order.filter((o) => distinct.includes(o)),
+          ...distinct.filter((d) => !order!.includes(d)).sort(),
+        ]
+      : distinct.sort();
+    return {
+      ...fd,
+      order,
+      values: values.slice(0, MAX_FIELD_VALUES),
+      valuesTruncated: values.length > MAX_FIELD_VALUES,
+    };
+  });
+}
+
+/* ---- filters ---- */
+const opsFor = (fd: FieldDef): FilterOp[] =>
+  fd.type === 'boolean'
+    ? ['eq', 'neq']
+    : fd.type === 'category'
+      ? fd.order
+        ? ['eq', 'in', 'neq', 'atleast', 'atmost']
+        : ['eq', 'in', 'neq']
+      : fd.type === 'text'
+        ? ['contains', 'eq']
+        : isNumeric(fd.type)
+          ? ['between', 'gt', 'lt', 'eq']
+          : ['between', 'after', 'before'];
+
+const OP_LABEL: Record<FilterOp, string> = {
+  eq: 'is',
+  in: 'is any of',
+  between: 'is between',
+  neq: 'is not',
+  contains: 'contains',
+  gt: 'greater than',
+  lt: 'less than',
+  after: 'after',
+  before: 'before',
+  atleast: 'is at least',
+  atmost: 'is at most',
+};
+
+/** Multi-select values are stored as a JSON array string; parsed once per distinct value. */
+const IN_CACHE = new Map<string, string[]>();
+const inValues = (raw: string): string[] => {
+  let v = IN_CACHE.get(raw);
+  if (!v) {
+    try {
+      const a = JSON.parse(raw);
+      v = Array.isArray(a) ? a.map(String) : [];
+    } catch {
+      v = [];
+    }
+    if (IN_CACHE.size > 500) IN_CACHE.clear();
+    IN_CACHE.set(raw, v);
+  }
+  return v;
+};
+
+function matches(row: Row, rule: FilterRule, fd?: FieldDef): boolean {
+  const raw = row[rule.field];
+  const s = fd ? cellKey(fd, row) : String(raw ?? '');
+  const want = rule.value;
+  const numeric = !!fd && isNumeric(fd.type);
+  switch (rule.op) {
+    case 'eq':
+      return numeric
+        ? raw !== null && raw !== '' && Number(raw) === Number(want)
+        : s.toLowerCase() === want.toLowerCase();
+    case 'neq':
+      return numeric
+        ? !(raw !== null && raw !== '' && Number(raw) === Number(want))
+        : s.toLowerCase() !== want.toLowerCase();
+    case 'contains':
+      return s.toLowerCase().includes(want.toLowerCase());
+    case 'in': {
+      const vs = inValues(want);
+      return numeric
+        ? raw !== null &&
+            raw !== '' &&
+            vs.some((v) => Number(v) === Number(raw))
+        : vs.some((v) => v.toLowerCase() === s.toLowerCase());
+    }
+    case 'between': {
+      const [lo = '', hi = ''] = want.split('|');
+      if (numeric)
+        return (
+          raw !== null &&
+          raw !== '' &&
+          (lo === '' || Number(raw) >= Number(lo)) &&
+          (hi === '' || Number(raw) <= Number(hi))
+        );
+      const d = dayOf(s);
+      return (
+        s !== 'Unknown' &&
+        (lo === '' || d >= lo.slice(0, 10)) &&
+        (hi === '' || d <= hi.slice(0, 10))
+      );
+    }
+    case 'gt':
+      return raw !== null && raw !== '' && Number(raw) > Number(want);
+    case 'lt':
+      return raw !== null && raw !== '' && Number(raw) < Number(want);
+    case 'after':
+      return s !== 'Unknown' && dayOf(s) > want.slice(0, 10);
+    case 'before':
+      return s !== 'Unknown' && dayOf(s) < want.slice(0, 10);
+    case 'atleast': {
+      const a = rankOf(fd, s),
+        b = rankOf(fd, want);
+      return a >= 0 && b >= 0 && a <= b;
+    }
+    case 'atmost': {
+      const a = rankOf(fd, s),
+        b = rankOf(fd, want);
+      return a >= 0 && b >= 0 && a >= b;
+    }
+  }
+  return false;
+}
+
+const activeRules = (rules: FilterRule[]) =>
+  rules.filter((r) => r.field && r.value !== '');
+
+function applyFilters(
+  rows: Row[],
+  rules: FilterRule[],
+  fm: Map<string, FieldDef>
+): Row[] {
+  const active = activeRules(rules).filter((r) => fm.has(r.field));
+  return active.length
+    ? rows.filter((row) =>
+        active.every((r) => matches(row, r, fm.get(r.field)))
+      )
+    : rows;
+}
+
+/* ---- date windows ---- */
+const RANGE_LABEL: Record<DateRangeKey, string> = {
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
+  '6m': 'Last 6 months',
+  '12m': 'Last 12 months',
+  all: 'All time',
+  custom: 'Custom range',
+};
+const RANGE_DAYS: Record<string, number> = {
+  '7d': 7,
+  '30d': 30,
+  '90d': 90,
+  '6m': 182,
+  '12m': 365,
+};
+
+interface Win {
+  from: string;
+  to: string;
+  days: number;
+}
+function windowFor(
+  range: DateRangeKey,
+  from?: string,
+  to?: string
+): Win | null {
+  if (range === 'all') return null;
+  if (range === 'custom') {
+    if (!from || !to || from > to) return null;
+    const days =
+      Math.round((parseIso(to).getTime() - parseIso(from).getTime()) / 864e5) +
+      1;
+    return { from, to, days };
+  }
+  const days = RANGE_DAYS[range];
+  const end = parseIso(dayOf(new Date().toISOString()));
+  return { from: iso(addDays(end, -(days - 1))), to: iso(end), days };
+}
+/** A custom range must be complete and ordered; otherwise the report must not run (never fall back to "all time"). */
+function customRangeError(
+  range: DateRangeKey,
+  from?: string,
+  to?: string
+): string | null {
+  if (range !== 'custom') return null;
+  if (!from || !to)
+    return 'Select both a start and an end date for the custom range.';
+  if (from > to) return 'The custom range starts after it ends.';
+  return null;
+}
+function prevWindow(w: Win): Win {
+  const end = addDays(parseIso(w.from), -1);
+  return { from: iso(addDays(end, -(w.days - 1))), to: iso(end), days: w.days };
+}
+const inWindow = (row: Row, field: string, w: Win | null) => {
+  if (!w) return true;
+  const d = dayOf(String(row[field] ?? ''));
+  return d >= w.from && d <= w.to;
+};
+
+/* ---- aggregation (exact for decimal fields) ---- */
+function aggregate(
+  rows: Row[],
+  agg: Agg,
+  field: string | undefined,
+  fm: Map<string, FieldDef>,
+  /** Previous-period rows: only needed by formula metrics that use PREV(). */
+  prevRows?: Row[] | null
+): number {
+  if (agg === 'metric') {
+    const m = field ? fm.get(field)?.metric : undefined;
+    if (!m) return 0;
+    const side = (x: MetricSide, rs: Row[] = rows) =>
+      aggregate(applyFilters(rs, x.where, fm), x.agg, x.field, fm);
+    if (m.formula) {
+      const parsed = parseFormula(m.formula.expression);
+      if (!parsed.ok) return 0;
+      const cur: Record<string, number> = {};
+      const prev: Record<string, number> = {};
+      for (const [k, s] of Object.entries(m.formula.terms)) {
+        cur[k] = side(s);
+        if (prevRows) prev[k] = side(s, prevRows);
+      }
+      return (
+        evalFormula(parsed.ast, { cur, prev: prevRows ? prev : null }) ?? 0
+      );
+    }
+    const den = side(m.denominator);
+    if (!den) return 0;
+    const v = side(m.numerator) / den;
+    return m.unit === 'pct' ? v * 100 : m.unit === 'bps' ? v * 10000 : v;
+  }
+  if (agg === 'count' || !field) return rows.length;
+  const fd = fm.get(field);
+  const present = (r: Row) =>
+    r[field] !== null && r[field] !== undefined && r[field] !== '';
+  if (agg === 'distinct')
+    return new Set(rows.filter(present).map((r) => cellKey(fd, r))).size;
+  if (agg === 'yes' || agg === 'rate') {
+    let yes = 0,
+      known = 0;
+    for (const r of rows) {
+      const b = toBoolean(r[field]);
+      if (b === null) continue;
+      known++;
+      if (b) yes++;
+    }
+    return agg === 'yes' ? yes : known ? (yes / known) * 100 : 0;
+  }
+  if (fd && isDecimal(fd.type)) {
+    const sc = scaleOf(fd);
+    let sum = 0,
+      n = 0,
+      min = Infinity,
+      max = -Infinity;
+    for (const r of rows) {
+      const v = toScaled(r[field], sc);
+      if (v === null) continue;
+      sum += v;
+      n++;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    if (n === 0) return 0;
+    const div = 10 ** sc;
+    if (agg === 'sum') return sum / div;
+    if (agg === 'avg') return Math.round(sum / n) / div;
+    return (agg === 'max' ? max : min) / div;
+  }
+  const nums = rows
+    .filter(present)
+    .map((r) => Number(r[field]))
+    .filter(Number.isFinite);
+  if (nums.length === 0) return 0;
+  if (agg === 'sum') return nums.reduce((a, b) => a + b, 0);
+  if (agg === 'avg') return nums.reduce((a, b) => a + b, 0) / nums.length;
+  return agg === 'max' ? Math.max(...nums) : Math.min(...nums);
+}
+
+function bucketKey(s: string, bucket: Bucket): string {
+  if (!s) return '';
+  if (bucket === 'day') return s;
+  if (bucket === 'month') return s.slice(0, 7);
+  const d = parseIso(s);
+  return iso(addDays(d, -((d.getUTCDay() + 6) % 7)));
+}
+
+/** All groups of a field, in natural order: chronological, ordinal rank, natural A→Z, else by frequency. */
+function groupRows(rows: Row[], field: FieldDef, bucket: Bucket) {
+  const map = new Map<string, Row[]>();
+  const date = isDateType(field.type);
+  for (const r of rows) {
+    const k = date
+      ? bucketKey(dayOf(String(r[field.key] ?? '')), bucket)
+      : cellKey(field, r);
+    const list = map.get(k);
+    if (list) list.push(r);
+    else map.set(k, [r]);
+  }
+  let groups = [...map].map(([key, list]) => ({ key, rows: list }));
+  if (date)
+    groups = groups
+      .filter((g) => g.key)
+      .sort((a, b) => a.key.localeCompare(b.key));
+  else if (field.order)
+    groups.sort((a, b) => rankOrLast(field, a.key) - rankOrLast(field, b.key));
+  else if (field.naturalSort)
+    groups.sort((a, b) =>
+      a.key.localeCompare(b.key, undefined, { numeric: true })
+    );
+  else groups.sort((a, b) => b.rows.length - a.rows.length);
+  const multiYear = new Set(groups.map((g) => g.key.slice(0, 4))).size > 1;
+  const label = (key: string) => {
+    if (!date) return key;
+    const [y, m, d] = key.split('-');
+    const mon = MONTHS[Number(m) - 1];
+    if (bucket === 'month') return multiYear ? `${mon} ${y.slice(2)}` : mon;
+    return `${mon} ${Number(d)}`;
+  };
+  return groups.map((g) => ({ ...g, label: label(g.key) }));
+}
+
+/* ---- formatting ---- */
+const compact = (v: number, digits = 1) =>
+  new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: digits,
+  }).format(v);
+
+function fmtMeasure(
+  v: number,
+  agg: Agg,
+  fd: FieldDef | undefined,
+  currency: string,
+  mode: 'compact' | 'full' = 'compact'
+): string {
+  if (agg === 'metric') {
+    const u = fd?.metric?.unit;
+    return u === 'pct'
+      ? `${v.toFixed(1)}%`
+      : u === 'bps'
+        ? `${v.toFixed(0)} bps`
+        : v.toFixed(2);
+  }
+  if (agg === 'rate') return `${v.toFixed(1)}%`;
+  const plainCount = agg === 'count' || agg === 'distinct' || agg === 'yes';
+  const sc = scaleOf(fd);
+  if (!plainCount && fd?.type === 'currency') {
+    const cur = fd.currency ?? currency;
+    if (mode === 'compact' && Math.abs(v) >= 1000) {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: cur,
+        notation: 'compact',
+        maximumFractionDigits: 1,
+      }).format(v);
+    }
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: cur,
+      minimumFractionDigits: sc,
+      maximumFractionDigits: sc,
+    }).format(v);
+  }
+  if (!plainCount && fd && isNumeric(fd.type)) {
+    const dp = agg === 'avg' ? Math.max(sc, 1) : sc;
+    const s =
+      mode === 'compact' && Math.abs(v) >= 100000
+        ? compact(v)
+        : new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: dp,
+            maximumFractionDigits: dp,
+          }).format(v);
+    return fd.unit ? `${s}${fd.unit}` : s;
+  }
+  return mode === 'compact' && Math.abs(v) >= 100000
+    ? compact(v)
+    : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(v);
+}
+
+function aggLabel(agg: Agg) {
+  return {
+    count: 'Count',
+    sum: 'Sum',
+    avg: 'Average',
+    min: 'Minimum',
+    max: 'Maximum',
+    distinct: 'Distinct count',
+    yes: 'Count of Yes',
+    rate: 'Rate of Yes (%)',
+    metric: 'Calculated metric',
+  }[agg];
+}
+
+/** Aggregations that add up across groups (shares of total make sense). */
+const ADDITIVE: Agg[] = ['count', 'sum', 'yes'];
+
+/* ---- sorting + export helpers ---- */
+function compareCells(fd: FieldDef, a: Cell, b: Cell): number {
+  const na = a === null || a === undefined || a === '';
+  const nb = b === null || b === undefined || b === '';
+  if (na || nb) return na === nb ? 0 : na ? -1 : 1;
+  if (fd.type === 'boolean') return (a === true ? 1 : 0) - (b === true ? 1 : 0);
+  if (fd.order) return rankOrLast(fd, String(b)) - rankOrLast(fd, String(a)); // higher priority = greater
+  if (isNumeric(fd.type)) return Number(a) - Number(b);
+  return String(a).localeCompare(String(b));
+}
+
+const MASK = '******';
+function exportCell(
+  fd: FieldDef,
+  v: Cell | undefined,
+  canViewSensitive: boolean
+): string | number {
+  if (fd.sensitive && !canViewSensitive) return MASK;
+  if (v === null || v === undefined) return '';
+  if (fd.type === 'boolean')
+    return v === true ? 'Yes' : v === false ? 'No' : '';
+  return v as string | number;
+}
+
+/** Replace sensitive values with a mask. UI-side defence in depth only: the server must never send them. */
+function maskSensitive(rows: Row[], fields: FieldDef[]): Row[] {
+  const keys = fields.filter((x) => x.sensitive).map((x) => x.key);
+  if (keys.length === 0) return rows;
+  return rows.map((r) => {
+    const c: Row = { ...r };
+    for (const k of keys)
+      c[k] = r[k] === null || r[k] === undefined ? null : MASK;
+    return c;
+  });
+}
+
+/* ---- field profile (data-quality summary) ---- */
+interface FieldProfile {
+  total: number;
+  nulls: number;
+  distinct: number;
+  min?: string;
+  max?: string;
+  avg?: string;
+  top: { label: string; n: number }[];
+}
+function profileField(fd: FieldDef, rows: Row[]): FieldProfile {
+  const total = rows.length;
+  const present = rows.filter(
+    (r) => r[fd.key] !== null && r[fd.key] !== undefined && r[fd.key] !== ''
+  );
+  const p: FieldProfile = {
+    total,
+    nulls: total - present.length,
+    distinct: new Set(present.map((r) => cellKey(fd, r))).size,
+    top: [],
+  };
+  if (isNumeric(fd.type) && present.length) {
+    const sc = scaleOf(fd);
+    const nums = present.map((r) => Number(r[fd.key])).filter(Number.isFinite);
+    const show = (n: number) =>
+      n.toLocaleString('en-US', {
+        minimumFractionDigits: sc,
+        maximumFractionDigits: sc,
+      });
+    p.min = show(Math.min(...nums));
+    p.max = show(Math.max(...nums));
+    p.avg = show(aggregate(rows, 'avg', fd.key, new Map([[fd.key, fd]])));
+  } else if (isDateType(fd.type) && present.length) {
+    const ds = present.map((r) => String(r[fd.key]).slice(0, 10)).sort();
+    p.min = fmtDate(ds[0]);
+    p.max = fmtDate(ds[ds.length - 1]);
+  } else if (isCat(fd.type)) {
+    p.top = groupRows(rows, fd, 'month')
+      .slice(0, 5)
+      .map((g) => ({ label: g.key, n: g.rows.length }));
+    if (fd.order)
+      p.top = groupRows(rows, fd, 'month')
+        .slice(0, 6)
+        .map((g) => ({ label: g.key, n: g.rows.length }));
+  }
+  return p;
+}
+
+/* ==========================================================================
+ * Custom fields (categorisation): bands, groups, date parts, calculations, rule segments
+ * ======================================================================== */
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const PART_ORDER: Partial<Record<DatePart, string[]>> = {
+  quarter: ['Q1', 'Q2', 'Q3', 'Q4'],
+  month: MONTHS,
+  weekday: WEEKDAYS,
+  hour: Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')),
+};
+const PART_LABEL: Record<DatePart, string> = {
+  year: 'Year (2025)',
+  quarter: 'Quarter (Q1-Q4)',
+  yearQuarter: 'Year and quarter (2025-Q1)',
+  month: 'Month name (Jan-Dec)',
+  weekday: 'Day of week (Mon-Sun)',
+  hour: 'Hour of day (00-23)',
+};
+const CALC_LABEL: Record<CalcOp, string> = {
+  add: 'A + B',
+  sub: 'A − B',
+  mul: 'A × B',
+  div: 'A ÷ B (ratio)',
+  pct: 'A as % of B',
+};
+const DERIVED_LABEL: Record<DerivedKind, string> = {
+  bands: 'Value bands',
+  groups: 'Custom groups',
+  dateparts: 'Date part',
+  calc: 'Calculation',
+  rules: 'Rule segments',
+};
+
+const fmtEdge = (n: number) =>
+  Math.abs(n) >= 10000 ? compact(n, 1) : n.toLocaleString('en-US');
+function bandLabelsOf(d: BandsDerived): string[] {
+  const e = [...d.edges].sort((a, b) => a - b);
+  const auto =
+    e.length === 0
+      ? ['All']
+      : [
+          `< ${fmtEdge(e[0])}`,
+          ...e.slice(1).map((v, i) => `${fmtEdge(e[i])} – ${fmtEdge(v)}`),
+          `≥ ${fmtEdge(e[e.length - 1])}`,
+        ];
+  return auto.map((l, i) => d.labels?.[i]?.trim() || l);
+}
+
+function derivedFieldDef(d: DerivedField, fm: Map<string, FieldDef>): FieldDef {
+  const base = {
+    key: d.key,
+    label: d.label,
+    group: 'Custom fields',
+    derived: true,
+  } as const;
+  switch (d.kind) {
+    case 'bands': {
+      const order = bandLabelsOf(d);
+      return { ...base, type: 'category', order, values: order };
+    }
+    case 'groups': {
+      const order = [...d.groups.map((g) => g.name), d.other];
+      return { ...base, type: 'category', order, values: order };
+    }
+    case 'dateparts': {
+      const order = PART_ORDER[d.part];
+      return {
+        ...base,
+        type: 'category',
+        order,
+        values: order,
+        naturalSort: !order,
+      };
+    }
+    case 'rules': {
+      if (d.asBoolean)
+        return {
+          ...base,
+          type: 'boolean',
+          order: ['Yes', 'No', 'Unknown'],
+          values: ['Yes', 'No'],
+        };
+      const order = [...d.cases.map((c) => c.label), d.otherwise];
+      return { ...base, type: 'category', order, values: order };
+    }
+    case 'calc': {
+      const a = fm.get(d.a),
+        b = fm.get(d.b);
+      if (d.op === 'div') return { ...base, type: 'number', scale: 2 };
+      if (d.op === 'pct')
+        return { ...base, type: 'number', scale: 1, unit: '%' };
+      const sc = Math.max(scaleOf(a), scaleOf(b), 2);
+      const money = a?.type === 'currency' || b?.type === 'currency';
+      return {
+        ...base,
+        type: money ? 'currency' : 'decimal',
+        scale: sc,
+        precision: 18,
+        currency: a?.currency ?? b?.currency,
+      };
+    }
+  }
+}
+
+function derivedValue(
+  d: DerivedField,
+  r: Row,
+  fm: Map<string, FieldDef>
+): Cell {
+  switch (d.kind) {
+    case 'bands': {
+      const v = r[d.source];
+      if (v === null || v === undefined || v === '') return null;
+      const n = Number(v);
+      if (!Number.isFinite(n)) return null;
+      const e = [...d.edges].sort((a, b) => a - b);
+      let i = 0;
+      while (i < e.length && n >= e[i]) i++;
+      return bandLabelsOf(d)[i];
+    }
+    case 'groups': {
+      const k = cellKey(fm.get(d.source), r);
+      return d.groups.find((g) => g.values.includes(k))?.name ?? d.other;
+    }
+    case 'dateparts': {
+      const s = String(r[d.source] ?? '');
+      if (!s) return null;
+      let t = s.length > 10 ? s.replace(' ', 'T') : `${s}T00:00:00Z`;
+      if (!/[zZ]|[+-]\d\d:?\d\d$/.test(t)) t += 'Z';
+      const dt = new Date(t);
+      if (Number.isNaN(dt.getTime())) return null;
+      const zp = s.length > 10 ? zonedParts(dt) : null; // datetimes follow the report time zone
+      const y = zp ? zp.y : dt.getUTCFullYear(),
+        m = zp ? zp.m : dt.getUTCMonth(),
+        q = Math.floor(m / 3) + 1;
+      switch (d.part) {
+        case 'year':
+          return String(y);
+        case 'quarter':
+          return `Q${q}`;
+        case 'yearQuarter':
+          return `${y}-Q${q}`;
+        case 'month':
+          return MONTHS[m];
+        case 'weekday':
+          return zp ? WEEKDAYS[zp.wd] : WEEKDAYS[(dt.getUTCDay() + 6) % 7];
+        case 'hour':
+          return String(zp ? zp.h : dt.getUTCHours()).padStart(2, '0');
+      }
+      return null;
+    }
+    case 'calc': {
+      const a = r[d.a],
+        b = r[d.b];
+      if (
+        a === null ||
+        b === null ||
+        a === undefined ||
+        b === undefined ||
+        a === '' ||
+        b === ''
+      )
+        return null;
+      const fa = fm.get(d.a),
+        fb = fm.get(d.b);
+      const sc = Math.max(scaleOf(fa), scaleOf(fb), 2);
+      if (d.op === 'add' || d.op === 'sub') {
+        const x = toScaled(a, sc),
+          y = toScaled(b, sc);
+        if (x === null || y === null) return null;
+        return ((d.op === 'add' ? x + y : x - y) / 10 ** sc).toFixed(sc);
+      }
+      const x = Number(a),
+        y = Number(b);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      if (d.op === 'mul') return (x * y).toFixed(sc);
+      if (y === 0) return null;
+      return Math.round((d.op === 'pct' ? (x / y) * 100 : x / y) * 100) / 100;
+    }
+    case 'rules': {
+      for (const c of d.cases) {
+        const active = activeRules(c.rules);
+        if (
+          active.length &&
+          active.every((rule) => matches(r, rule, fm.get(rule.field)))
+        )
+          return d.asBoolean ? true : c.label;
+      }
+      return d.asBoolean ? false : d.otherwise;
+    }
+  }
+}
+
+/** Append custom-field columns to the rows and return the full field catalogue. */
+function applyDerived(
+  rows: Row[],
+  derived: DerivedField[],
+  base: FieldDef[]
+): { rows: Row[]; fields: FieldDef[] } {
+  if (derived.length === 0) return { rows, fields: base };
+  const fm = new Map(base.map((x) => [x.key, x]));
+  const defs: FieldDef[] = [];
+  for (const d of derived) {
+    const fd = derivedFieldDef(d, fm);
+    fm.set(fd.key, fd);
+    defs.push(fd);
+  }
+  const out = rows.map((r) => {
+    const n: Row = { ...r };
+    for (const d of derived) n[d.key] = derivedValue(d, n, fm);
+    return n;
+  });
+  return { rows: out, fields: [...base, ...defs] };
+}
+
+const uniqueKey = (label: string, taken: Set<string>) => {
+  const b = `cf_${slug(label).replace(/-/g, '_') || 'field'}`;
+  let k = b,
+    i = 2;
+  while (taken.has(k)) k = `${b}_${i++}`;
+  return k;
+};
+
+/** Semantic colours for well-known priority / status labels (charts and pills agree). */
+const SEMANTIC: Record<string, string> = {
+  critical: '#b91c1c',
+  high: '#ea580c',
+  medium: '#f59e0b',
+  low: '#10b981',
+  'very high': '#b91c1c',
+  moderate: '#f59e0b',
+  'very low': '#34d399',
+  approved: '#10b981',
+  won: '#10b981',
+  closed: '#10b981',
+  'false positive': '#10b981',
+  yes: '#2563eb',
+  no: '#94a3b8',
+  declined: '#dc2626',
+  lost: '#dc2626',
+  escalated: '#dc2626',
+  'confirmed fraud': '#dc2626',
+  confirmed: '#dc2626',
+  pending: '#f59e0b',
+  'in review': '#f59e0b',
+  'under investigation': '#f59e0b',
+  'manual review': '#f59e0b',
+  open: '#3b82f6',
+  new: '#3b82f6',
+  unknown: '#cbd5e1',
+};
+function colorFor(
+  fd: FieldDef | undefined,
+  label: string,
+  idx: number,
+  palette: string[]
+): string {
+  if (fd && (fd.badge || fd.type === 'boolean')) {
+    const c = SEMANTIC[label.toLowerCase()];
+    if (c) return c;
+  }
+  return palette[idx % palette.length];
+}
+
+/* ==========================================================================
+ * Engine additions: series, insights, exports
+ * ======================================================================== */
+interface DataCtx {
+  rows: Row[];
+  prevRows: Row[] | null;
+  source: ReportSource;
+  /** Full catalogue including custom fields. */
+  fieldMap: Map<string, FieldDef>;
+  /** The report's selected fields (columns of record views and exports). */
+  fields: FieldDef[];
+  currency: string;
+  colors: string[];
+  autoBucket: Bucket;
+  compare: boolean;
+  canViewSensitive: boolean;
+  /** Enables click-to-drill (Preview / Generate). */
+  onPick?: (field: string, value: string) => void;
+  onExpand?: (id: string) => void;
+  /** Rows before the drill-down cross-filter (lets the source widget keep its full data). */
+  fullRows: Row[];
+  xf?: { field: string; value: string } | null;
+  vars: Record<string, string>;
+  /** 'preview' = design-time sample rows; 'final' = actual report rendered from server aggregates. */
+  mode: 'preview' | 'final';
+  /** FINAL only: server results keyed by query id (widget id, or `${id}#suffix`). */
+  results?: Record<string, QueryResult>;
+  /** FINAL only: widget id -> failure message for queries that could not be calculated. */
+  failed?: Record<string, string>;
+  /** Host services for registry widgets (formatting, interaction, period). */
+  env: WidgetEnv;
+  /** PREVIEW only: executes a registry widget's query spec over the sample rows. */
+  previewExec?: (spec: QuerySpec, w: Widget) => QueryResult | undefined;
+  /** Bumped when other-source preview rows arrive, so registry widgets re-execute. */
+  previewTick?: number;
+  /** Walks a widget's drill path; returns true when the click was handled (else the caller cross-filters). */
+  drillClick?: (w: Widget, value: string) => boolean;
+  drillCrumbs?: (w: Widget) => React.ReactNode;
+  /** Paginated record fetch (server-side in the actual report, over the sample in preview). */
+  fetchRecords?: (o: {
+    filters: QueryFilter[];
+    sourceId?: string;
+    offset: number;
+    limit: number;
+  }) => Promise<{ result: RecordsResult; fields: FieldDef[] }>;
+}
+
+const autoBucketFor = (win: Win | null): Bucket =>
+  !win ? 'month' : win.days <= 35 ? 'day' : win.days <= 100 ? 'week' : 'month';
+
+interface SeriesData {
+  labels: string[];
+  keys: string[];
+  names: string[];
+  values: number[][];
+  /** Aggregates over the whole row / column (correct for averages and distinct counts too). */
+  rowTotals: number[];
+  colTotals: number[];
+  grand: number;
+  isDate: boolean;
+  groupField: FieldDef;
+  breakField?: FieldDef;
+  /** Groups dropped by Top N / the 24-period cap (0 when "Others" rolls them up). */
+  hidden: number;
+  shownGroups: number;
+  /** Break-down series dropped (only the 6 largest are shown). */
+  hiddenSeries: number;
+}
+interface SeriesSpec {
+  groupBy: string;
+  breakBy?: string;
+  bucket: BucketPref;
+  topN: number;
+  agg: Agg;
+  field?: string;
+  sort?: ChartWidget['sort'];
+  others?: boolean;
+}
+
+function buildSeries(
+  rows: Row[],
+  spec: SeriesSpec,
+  fm: Map<string, FieldDef>,
+  auto: Bucket
+): SeriesData | null {
+  const gf = fm.get(spec.groupBy);
+  if (!gf) return null;
+  const bucket = spec.bucket === 'auto' ? auto : spec.bucket;
+  const val = (rs: Row[]) => aggregate(rs, spec.agg, spec.field, fm);
+  const natural = groupRows(rows, gf, bucket);
+  const isDate = isDateType(gf.type);
+
+  let hidden = 0;
+  let groups: { key: string; label: string; rows: Row[] }[];
+  if (isDate) {
+    groups = natural.slice(-24);
+    hidden = natural.length - groups.length;
+  } else {
+    const sort = spec.sort ?? 'auto';
+    const keepRank = sort === 'auto' && (!!gf.order || !!gf.naturalSort);
+    let list = natural;
+    if (sort === 'label')
+      list = [...natural].sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { numeric: true })
+      );
+    else if (!keepRank) {
+      const dir = sort === 'valueAsc' ? 1 : -1;
+      list = natural
+        .map((g) => ({ g, v: val(g.rows) }))
+        .sort((a, b) => (a.v - b.v) * dir)
+        .map((x) => x.g);
+    }
+    const n = Math.max(1, spec.topN);
+    groups = list.slice(0, n);
+    const rest = list.slice(n);
+    hidden = spec.others ? 0 : rest.length;
+    if (spec.others && rest.length)
+      groups = [
+        ...groups,
+        { key: '__others', label: 'Others', rows: rest.flatMap((g) => g.rows) },
+      ];
+  }
+
+  const base = {
+    labels: groups.map((g) => g.label),
+    keys: groups.map((g) => g.key),
+    isDate,
+    groupField: gf,
+    hidden,
+    shownGroups: groups.length,
+  };
+  const kept = groups.flatMap((g) => g.rows);
+  const bf =
+    spec.breakBy && spec.breakBy !== gf.key ? fm.get(spec.breakBy) : undefined;
+
+  if (!bf) {
+    const mf = spec.field ? fm.get(spec.field) : undefined;
+    const name =
+      spec.agg === 'count' || !mf
+        ? 'Count'
+        : spec.agg === 'metric'
+          ? mf.label
+          : `${aggLabel(spec.agg)} of ${mf.label.toLowerCase()}`;
+    const values = groups.map((g) => val(g.rows));
+    return {
+      ...base,
+      hiddenSeries: 0,
+      names: [name],
+      values: [values],
+      rowTotals: values,
+      colTotals: [val(kept)],
+      grand: val(kept),
+    };
+  }
+  const allCats = groupRows(kept, bf, 'month').map((g) => g.key);
+  const cats = allCats.slice(0, 6);
+  const inCat = (rs: Row[], c: string) =>
+    rs.filter((r) => cellKey(bf, r) === c);
+  return {
+    ...base,
+    hiddenSeries: allCats.length - cats.length,
+    breakField: bf,
+    names: cats,
+    values: cats.map((c) => groups.map((g) => val(inCat(g.rows, c)))),
+    rowTotals: groups.map((g) => val(g.rows)),
+    colTotals: cats.map((c) => val(inCat(kept, c))),
+    grand: val(kept),
+  };
+}
+
+/** Aggregates the insight text is written from; supplied by the server in the final report. */
+interface InsightAgg {
+  total: number;
+  prevTotal: number | null;
+  hasRows: boolean;
+  groups: { label: string; v: number; n: number }[];
+}
+function buildInsights(
+  rows: Row[],
+  prevRows: Row[] | null,
+  w: InsightWidget,
+  fm: Map<string, FieldDef>,
+  auto: Bucket,
+  currency: string,
+  pre?: InsightAgg
+): string[] {
+  const gf = fm.get(w.groupBy);
+  const mf = w.field ? fm.get(w.field) : undefined;
+  const f = (v: number) => fmtMeasure(v, w.agg, mf, currency);
+  if (!gf || (pre ? !pre.hasRows : rows.length === 0))
+    return ['No data for the current filters.'];
+  const out: string[] = [];
+  const total = pre ? pre.total : aggregate(rows, w.agg, w.field, fm);
+  const prevTotal = pre
+    ? pre.prevTotal
+    : prevRows
+      ? aggregate(prevRows, w.agg, w.field, fm)
+      : null;
+  const additive = ADDITIVE.includes(w.agg);
+  let line = additive
+    ? `Total ${w.subject}: ${f(total)}`
+    : `Overall ${aggLabel(w.agg).toLowerCase()}${mf ? ` of ${mf.label.toLowerCase()}` : ''}: ${f(total)}`;
+  if (prevTotal !== null) {
+    const pv = prevTotal;
+    if (pv) {
+      if (
+        w.agg === 'rate' ||
+        (w.agg === 'metric' && mf?.metric?.unit !== 'ratio')
+      ) {
+        const d = total - pv;
+        line += `, ${d >= 0 ? 'up' : 'down'} ${Math.abs(d).toFixed(1)} points on the previous period`;
+      } else {
+        const d = ((total - pv) / Math.abs(pv)) * 100;
+        line += `, ${d >= 0 ? 'up' : 'down'} ${Math.abs(d).toFixed(0)}% on the previous period`;
+      }
+    }
+  }
+  out.push(`${line}.`);
+
+  const bucket = w.bucket === 'auto' ? auto : w.bucket;
+  const isDate = isDateType(gf.type);
+  let groups = pre
+    ? pre.groups
+    : groupRows(rows, gf, bucket).map((g) => ({
+        label: g.label,
+        v: aggregate(g.rows, w.agg, w.field, fm),
+        n: g.rows.length,
+      }));
+  if (isDate) groups = groups.slice(-24);
+  if (groups.length === 0) return out;
+  const sum = groups.reduce((s, g) => s + g.v, 0) || 1;
+
+  if (isDate) {
+    const peak = groups.reduce((a, b) => (b.v > a.v ? b : a), groups[0]);
+    out.push(`Peak period was ${peak.label} at ${f(peak.v)}.`);
+    if (groups.length >= 4) {
+      const k = Math.max(1, Math.floor(groups.length / 3));
+      const first = groups.slice(0, k).reduce((s, g) => s + g.v, 0) / k;
+      const last = groups.slice(-k).reduce((s, g) => s + g.v, 0) / k;
+      if (first) {
+        const d = ((last - first) / Math.abs(first)) * 100;
+        out.push(
+          `The latest ${k} periods average ${Math.abs(d).toFixed(0)}% ${d >= 0 ? 'higher' : 'lower'} than the first ${k}.`
+        );
+      }
+    }
+    return out;
+  }
+  const sorted = [...groups].sort((a, b) => b.v - a.v);
+  if (additive) {
+    out.push(
+      `${sorted[0].label} leads with ${Math.round((sorted[0].v / sum) * 100)}% of the total (${f(sorted[0].v)}).`
+    );
+    if (sorted.length >= 4) {
+      const top3 = sorted.slice(0, 3).reduce((s, g) => s + g.v, 0);
+      out.push(
+        `The top 3 ${gf.label.toLowerCase()} values account for ${Math.round((top3 / sum) * 100)}%.`
+      );
+    }
+    if (gf.order && sorted.length >= 2) {
+      const urgent = groups
+        .filter((g) => rankOrLast(gf, g.label) <= 1)
+        .reduce((s, g) => s + g.v, 0);
+      if (urgent > 0 && urgent < sum)
+        out.push(
+          `The two highest-ranked ${gf.label.toLowerCase()} levels make up ${Math.round((urgent / sum) * 100)}% of the total.`
+        );
+    } else if (sorted.length >= 2) {
+      const l = sorted[sorted.length - 1];
+      out.push(
+        `${l.label} is the smallest contributor at ${Math.round((l.v / sum) * 100)}%.`
+      );
+    }
+  } else {
+    out.push(
+      `${sorted[0].label} has the highest ${aggLabel(w.agg).toLowerCase()} (${f(sorted[0].v)}).`
+    );
+    if (sorted.length >= 2)
+      out.push(
+        `${sorted[sorted.length - 1].label} has the lowest (${f(sorted[sorted.length - 1].v)}).`
+      );
+  }
+  return out;
+}
+
+function downloadCsv(
+  name: string,
+  headers: string[],
+  rows: (string | number | undefined)[][]
+) {
+  downloadCsvGrid(name, [headers, ...rows]);
+}
+
+function downloadCsvGrid(
+  name: string,
+  grid: (string | number | undefined)[][]
+) {
+  // Neutralise spreadsheet formula injection (=, +, -, @, tab, CR) unless the cell is a plain number.
+  const safe = (v: string | number | undefined) => {
+    const s = String(v ?? '');
+    return typeof v === 'string' &&
+      /^[=+\-@\t\r]/.test(s) &&
+      !/^[+-]?\d+(\.\d+)?$/.test(s)
+      ? `'${s}`
+      : s;
+  };
+  const esc = (v: string | number | undefined) =>
+    `"${safe(v).replace(/"/g, '""')}"`;
+  const csv = grid.map((r) => r.map(esc).join(',')).join('\r\n');
+  const url = URL.createObjectURL(
+    new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
+  );
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadJson(name: string, data: unknown) {
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  );
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** The tabular data behind a widget (used by the expand view and CSV export). */
+function widgetTable(
+  w: Widget,
+  d: DataCtx
+): { headers: string[]; rows: (string | number)[][] } {
+  if (d.mode === 'final')
+    return (
+      (d.results && resultTable(w, d.results, d)) || { headers: [], rows: [] }
+    );
+  if (!LEGACY_KINDS.has(w.kind)) {
+    const desc = getWidget(w.kind);
+    const rs: Record<string, QueryResult | undefined> = {};
+    for (const s of desc?.requirements(w as unknown as RegistryWidget, {
+      source: d.env.source,
+      fieldMap: d.fieldMap as unknown as Map<string, FieldInfo>,
+      period: d.env.period,
+      autoBucket: d.autoBucket,
+    }) ?? [])
+      rs[s.suffix ?? ''] = d.previewExec?.(s, w);
+    return (
+      desc?.toTable?.(w as unknown as RegistryWidget, rs, d.env) ?? {
+        headers: [],
+        rows: [],
+      }
+    );
+  }
+  const rows = applyFilters(d.rows, w.filters, d.fieldMap);
+  if (w.kind === 'chart' && w.chartType !== 'scatter') {
+    const sd = buildSeries(
+      rows,
+      {
+        groupBy: w.groupBy,
+        breakBy: w.breakBy,
+        bucket: w.bucket,
+        topN: w.topN,
+        agg: w.agg,
+        field: w.field,
+        sort: w.sort,
+        others: w.others,
+      },
+      d.fieldMap,
+      d.autoBucket
+    );
+    if (!sd) return { headers: [], rows: [] };
+    return {
+      headers: [sd.groupField.label, ...sd.names],
+      rows: sd.labels.map((l, i) => [
+        l,
+        ...sd.values.map((v) => Math.round(v[i] * 100) / 100),
+      ]),
+    };
+  }
+  if (w.kind === 'table') {
+    const cols = w.columns
+      .map((k) => d.fieldMap.get(k))
+      .filter((x): x is FieldDef => !!x);
+    return {
+      headers: cols.map((c) => c.label),
+      rows: rows
+        .slice(0, 200)
+        .map((r) =>
+          cols.map((c) => exportCell(c, r[c.key], d.canViewSensitive))
+        ),
+    };
+  }
+  if (w.kind === 'kpi')
+    return {
+      headers: ['Metric', 'Value'],
+      rows: [[w.title, aggregate(rows, w.agg, w.field, d.fieldMap)]],
+    };
+  if (w.kind === 'insight')
+    return {
+      headers: ['Insight'],
+      rows: buildInsights(
+        rows,
+        d.prevRows,
+        w,
+        d.fieldMap,
+        d.autoBucket,
+        d.currency
+      ).map((s) => [s]),
+    };
+  if (w.kind === 'chart' && w.xField && w.field) {
+    const xf = d.fieldMap.get(w.xField),
+      yf = d.fieldMap.get(w.field);
+    return {
+      headers: [xf?.label ?? 'X', yf?.label ?? 'Y'],
+      rows: rows
+        .slice(0, 200)
+        .map((r) => [Number(r[w.xField!]), Number(r[w.field!])]),
+    };
+  }
+  return { headers: [], rows: [] };
+}
+
+/* ==========================================================================
+ * Local query executor + demo provider
+ *
+ * Implements the query contract (./report-builder/contracts) on top of the engine above. It is
+ *   1. the PREVIEW executor (design-time, <= previewLimit rows in the browser), and
+ *   2. the reference semantics for a real backend, and the engine of the demo `ReportDataProvider`
+ *      used when no `provider` prop is supplied (it "simulates" the server over the full mock dataset).
+ * Production: pass your own `provider`; the browser then never sees the raw dataset.
+ * ======================================================================== */
+const toRules = (fs: QueryFilter[] | undefined): FilterRule[] =>
+  (fs ?? []).map((x) => ({
+    id: '',
+    field: x.field,
+    op: x.op as FilterOp,
+    value: x.value,
+  }));
+
+const quantile = (sorted: number[], p: number) => {
+  if (!sorted.length) return 0;
+  const i = (sorted.length - 1) * p;
+  const lo = Math.floor(i);
+  const hi = Math.ceil(i);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+};
+
+/** Executes ONE query over rows of its source. `rows` must already have derived fields applied. */
+function runLocalQuery(
+  q: ReportQuery,
+  rows: Row[],
+  fm: Map<string, FieldDef>,
+  dateField: string
+): QueryResult {
+  const inP = (rs: Row[], p: ResolvedPeriod | null | undefined) =>
+    p
+      ? rs.filter((r) =>
+          inWindow(r, dateField, { from: p.from, to: p.to, days: p.days })
+        )
+      : rs;
+  let base = applyFilters(rows, toRules(q.filters), fm);
+  const cur0 = inP(base, q.period);
+  const prev = q.comparePeriod ? inP(base, q.comparePeriod) : null;
+  const meas = (
+    rs: Row[],
+    m: ReportQuery['measures'][number],
+    pr?: Row[] | null
+  ) =>
+    aggregate(
+      m.where?.length ? applyFilters(rs, toRules(m.where), fm) : rs,
+      m.agg as Agg,
+      m.field,
+      fm,
+      pr
+    );
+  const stats = { scanned: rows.length };
+  const mk = (s: Partial<QueryResult>) =>
+    ({ queryId: q.id, stats, ...s }) as QueryResult;
+
+  if (q.shape === 'scalar') {
+    const values = q.measures.map((m) => meas(cur0, m, prev));
+    let spark: number[] | undefined;
+    const df = fm.get(dateField);
+    if (q.spark && df && q.measures[0])
+      spark = groupRows(
+        cur0,
+        df,
+        (q.spark === 'auto' ? 'month' : q.spark) as Bucket
+      )
+        .slice(-24)
+        .map((g) => meas(g.rows, q.measures[0]));
+    return mk({
+      shape: 'scalar',
+      values,
+      prev: prev ? q.measures.map((m) => meas(prev, m)) : null,
+      spark,
+    });
+  }
+
+  if (q.shape === 'records') {
+    const cols = q.columns?.length ? q.columns : [...fm.keys()].slice(0, 8);
+    let rs = cur0;
+    const of = q.orderBy ? fm.get(q.orderBy.field) : undefined;
+    if (of && q.orderBy) {
+      const dir = q.orderBy.dir === 'asc' ? 1 : -1;
+      rs = [...rs].sort((a, b) => compareCells(of, a[of.key], b[of.key]) * dir);
+    }
+    const off = q.offset ?? 0;
+    const page = rs.slice(off, off + (q.limit ?? 50)).map((r) => {
+      const o: Row = {};
+      cols.forEach((c) => (o[c] = r[c] ?? null));
+      return o;
+    });
+    const totals: Record<string, number> = {};
+    (q.totalsFor ?? []).forEach(
+      (c) => (totals[c] = aggregate(rs, 'sum', c, fm))
+    );
+    return mk({
+      shape: 'records',
+      columns: cols,
+      rows: page,
+      totalRows: rs.length,
+      offset: off,
+      totals,
+    });
+  }
+
+  if (q.shape === 'points' && q.points) {
+    const { x, y, size, colour, max } = q.points;
+    const stride = Math.max(1, Math.ceil(cur0.length / max));
+    const bf = colour ? fm.get(colour) : undefined;
+    const cats = bf
+      ? groupRows(cur0, bf, 'month')
+          .slice(0, 6)
+          .map((g) => g.key)
+      : [];
+    const pts = cur0
+      .filter((_, i) => i % stride === 0)
+      .map((r) => ({
+        x: Number(r[x]),
+        y: Number(r[y]),
+        size: size ? Number(r[size]) : undefined,
+        c: bf ? cellKey(bf, r) : undefined,
+      }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    return mk({
+      shape: 'points',
+      points: pts,
+      categories: cats,
+      sampled: stride > 1 ? stride : 0,
+      total: cur0.length,
+    });
+  }
+
+  if (q.shape === 'histogram' && q.bins) {
+    const vs = cur0
+      .map((r) => Number(r[q.bins!.field]))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    const n = Math.max(1, q.bins.count);
+    const min = vs[0] ?? 0;
+    const max = vs[vs.length - 1] ?? 0;
+    const w = (max - min) / n || 1;
+    const bins = Array.from({ length: n }, (_, i) => ({
+      from: min + i * w,
+      to: min + (i + 1) * w,
+      count: 0,
+    }));
+    vs.forEach((v) => bins[Math.min(n - 1, Math.floor((v - min) / w))].count++);
+    return mk({
+      shape: 'histogram',
+      bins,
+      total: vs.length,
+      summary: {
+        min,
+        max,
+        mean: vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : 0,
+        p50: quantile(vs, 0.5),
+        p90: quantile(vs, 0.9),
+        p99: quantile(vs, 0.99),
+      },
+    });
+  }
+
+  // dimension(s): optional numeric bands become a synthetic ordered category
+  let work = cur0;
+  let workPrev = prev;
+  let wfm = fm;
+  const dims = q.dimensions.map((d) => {
+    if (!d.bands?.length) return d;
+    const bd: BandsDerived = {
+      id: `b_${d.field}`,
+      key: `__band_${d.field}`,
+      label: fm.get(d.field)?.label ?? d.field,
+      kind: 'bands',
+      source: d.field,
+      edges: d.bands,
+    };
+    const out = applyDerived(work, [bd], [...wfm.values()]);
+    work = out.rows;
+    if (workPrev)
+      workPrev = applyDerived(workPrev, [bd], [...wfm.values()]).rows;
+    wfm = new Map(out.fields.map((f) => [f.key, f]));
+    return { ...d, field: bd.key };
+  });
+
+  if (q.shape === 'quantiles' && q.quantileField && dims[0]) {
+    const gf = wfm.get(dims[0].field);
+    if (!gf) return mk({ shape: 'quantiles', groups: [] });
+    const groups = groupRows(work, gf, (dims[0].bucket as Bucket) ?? 'month')
+      .slice(0, q.limit ?? 8)
+      .map((g) => {
+        const vs = g.rows
+          .map((r) => Number(r[q.quantileField!]))
+          .filter(Number.isFinite)
+          .sort((a, b) => a - b);
+        const q1 = quantile(vs, 0.25),
+          q3 = quantile(vs, 0.75),
+          iqr = q3 - q1;
+        return {
+          key: g.key,
+          label: g.label,
+          n: vs.length,
+          min: vs[0] ?? 0,
+          q1,
+          median: quantile(vs, 0.5),
+          q3,
+          max: vs[vs.length - 1] ?? 0,
+          outliers: vs.filter((v) => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr)
+            .length,
+        };
+      });
+    return mk({ shape: 'quantiles', groups });
+  }
+
+  // grouped
+  const gd = dims[0];
+  const gf = gd ? wfm.get(gd.field) : undefined;
+  if (!gd || !gf)
+    return mk({
+      shape: 'grouped',
+      groups: [],
+      grand: q.measures.map(() => 0),
+      totalGroups: 0,
+    });
+  const bucket = (
+    (gd.bucket as Bucket | 'auto') === 'auto' ? 'month' : (gd.bucket ?? 'month')
+  ) as Bucket;
+  const val = (rs: Row[], j: number) => meas(rs, q.measures[j]);
+  const natural = groupRows(work, gf, bucket);
+  const isDate = isDateType(gf.type);
+  let groups: { key: string; label: string; rows: Row[] }[];
+  if (isDate) groups = natural.slice(-24);
+  else {
+    const sort = q.sort ?? {
+      by: gf.order || gf.naturalSort ? 'rank' : 'measure',
+      dir: 'desc' as const,
+    };
+    let list = natural;
+    if (sort.by === 'label')
+      list = [...natural].sort(
+        (a, b) =>
+          a.label.localeCompare(b.label, undefined, { numeric: true }) *
+          (sort.dir === 'asc' ? 1 : -1)
+      );
+    else if (sort.by === 'measure') {
+      const j = sort.index ?? 0;
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      list = natural
+        .map((g) => ({ g, v: val(g.rows, j) }))
+        .sort((a, b) => (a.v - b.v) * dir)
+        .map((x) => x.g);
+    }
+    const n = Math.max(1, q.limit ?? 6);
+    groups = list.slice(0, n);
+    const rest = list.slice(n);
+    if (q.others && rest.length)
+      groups = [
+        ...groups,
+        { key: '__others', label: 'Others', rows: rest.flatMap((g) => g.rows) },
+      ];
+  }
+  const kept = groups.flatMap((g) => g.rows);
+  const prevByKey =
+    workPrev && !isDate
+      ? new Map(groupRows(workPrev, gf, bucket).map((g) => [g.key, g.rows]))
+      : null;
+  const keptKeys = new Set(groups.map((g) => g.key));
+  const prevRowsFor = (g: { key: string }) =>
+    !prevByKey
+      ? undefined
+      : g.key === '__others'
+        ? [...prevByKey].filter(([k]) => !keptKeys.has(k)).flatMap(([, r]) => r)
+        : (prevByKey.get(g.key) ?? []);
+  const out: GroupedResult = {
+    queryId: q.id,
+    stats,
+    shape: 'grouped',
+    groups: groups.map((g) => {
+      const pr = prevRowsFor(g);
+      return {
+        key: g.key,
+        label: g.label,
+        n: g.rows.length,
+        values: q.measures.map((_, j) => val(g.rows, j)),
+        prev: pr ? q.measures.map((_, j) => val(pr, j)) : undefined,
+      };
+    }),
+    grand: q.measures.map((_, j) => val(kept, j)),
+    prevGrand: workPrev
+      ? q.measures.map((_, j) => val(workPrev!, j))
+      : undefined,
+    totalGroups: natural.length,
+  };
+  const bd2 = dims[1];
+  const bf = bd2 && bd2.field !== gf.key ? wfm.get(bd2.field) : undefined;
+  if (bf) {
+    const all = groupRows(kept, bf, 'month').map((g) => g.key);
+    const cats = all.slice(0, q.seriesLimit ?? 6);
+    out.series = cats.map((c) => ({ key: c, label: c }));
+    out.hiddenSeries = all.length - cats.length;
+    out.cells = {};
+    for (const g of groups)
+      for (const c of cats)
+        out.cells[cellKeyOf(g.key, c)] = q.measures.map((_, j) =>
+          val(
+            g.rows.filter((r) => cellKey(bf, r) === c),
+            j
+          )
+        );
+  }
+  return out;
+}
+
+/**
+ * Default provider. It talks to each source's `loadRows` (e.g. your /reports/data API):
+ *  - PREVIEW: `loadRows({purpose:'preview', limit})`, once per design session, only the latest N rows.
+ *  - GENERATE: `loadRows({purpose:'report', fromDate, toDate, filters})`, called AGAIN for every Generate with the
+ *    reporting period the user chose (comparison period included), then aggregated here with the reference engine.
+ * For large datasets pass your own `provider` that aggregates on the server (see ReportDataProvider).
+ */
+const MAX_EXPORT_ROWS = 100000;
+function createLocalProvider(opts: {
+  sources: ReportSource[];
+  canViewSensitive: boolean;
+  latencyMs?: number;
+}): ReportDataProvider {
+  type Loaded = {
+    rows: Row[];
+    fields: FieldDef[];
+    src: ReportSource;
+    total?: number;
+    truncated: boolean;
+  };
+  const prep = (src: ReportSource, res: RowLoadResult | Row[]): Loaded => {
+    const r = Array.isArray(res) ? { rows: res, truncated: false } : res;
+    const raw = normalizeRows(r.rows, src.fields);
+    const rows = opts.canViewSensitive ? raw : maskSensitive(raw, src.fields);
+    return {
+      rows,
+      fields: enrichFields(src.fields, rows),
+      src,
+      total: (r as RowLoadResult).total,
+      truncated: !!r.truncated,
+    };
+  };
+  const srcOf = (id: string) => {
+    const s = opts.sources.find((x) => x.id === id);
+    if (!s) throw new Error(`Unknown source ${id}`);
+    return s;
+  };
+  /** One data fetch per (run, source): the first query of a run triggers the API call, the rest share it. */
+  const runLoads = new Map<string, Map<string, Promise<Loaded>>>();
+  const loadForRun = (
+    run: ReportRunRequest,
+    sourceId: string,
+    signal?: AbortSignal
+  ) => {
+    let perRun = runLoads.get(run.runId);
+    if (!perRun) {
+      perRun = new Map();
+      runLoads.set(run.runId, perRun);
+      while (runLoads.size > 3)
+        runLoads.delete(runLoads.keys().next().value as string);
+    }
+    let p = perRun.get(sourceId);
+    if (!p) {
+      const src = srcOf(sourceId);
+      // Rows for the period AND its comparison window, so period-over-period figures are exact.
+      const from = [run.period?.from, run.comparePeriod?.from]
+        .filter(Boolean)
+        .sort()[0] as string | undefined;
+      const to = [run.period?.to, run.comparePeriod?.to]
+        .filter(Boolean)
+        .sort()
+        .slice(-1)[0] as string | undefined;
+      const allTime = !run.period;
+      p = Promise.resolve(
+        src.loadRows({
+          signal: signal ?? new AbortController().signal,
+          maxRows: Number.MAX_SAFE_INTEGER,
+          purpose: 'report',
+          fromDate: allTime ? undefined : from,
+          toDate: allTime ? undefined : to,
+          filters: run.filters,
+        })
+      )
+        .then((r) => prep(src, r))
+        .catch((e) => (perRun!.delete(sourceId), Promise.reject(e)));
+      perRun.set(sourceId, p);
+    }
+    return p;
+  };
+  const wait = (ms: number, signal: AbortSignal) =>
+    new Promise<void>((res, rej) => {
+      if (signal.aborted) return rej(new DOMException('Aborted', 'AbortError'));
+      const t = setTimeout(res, ms);
+      signal.addEventListener(
+        'abort',
+        () => (clearTimeout(t), rej(new DOMException('Aborted', 'AbortError'))),
+        { once: true }
+      );
+    });
+  const fieldsFor = (
+    l: Loaded,
+    metrics: CalculatedMetric[],
+    derived: DerivedField[]
+  ) =>
+    applyDerived(l.rows, derived, [
+      ...l.fields,
+      ...metrics.map(metricField),
+      ...(l.src.metrics ?? []).map(metricField),
+    ]);
+  return {
+    capabilities: { export: ['pdf', 'csv', 'xlsx'] },
+    async loadPreview({ sourceId, limit, signal }) {
+      const src = srcOf(sourceId);
+      const l = prep(
+        src,
+        await src.loadRows({
+          signal: signal ?? new AbortController().signal,
+          maxRows: limit,
+          purpose: 'preview',
+          limit,
+        })
+      );
+      const df = src.dateField;
+      const latest = [...l.rows]
+        .sort((a, b) => String(b[df] ?? '').localeCompare(String(a[df] ?? '')))
+        .slice(0, limit);
+      return {
+        rows: latest,
+        totalInSource: l.total ?? (l.truncated ? undefined : l.rows.length),
+        asOf: new Date().toISOString(),
+      };
+    },
+    async execute(run, queries, { signal }) {
+      await wait(opts.latencyMs ?? 0, signal);
+      const results: Record<string, QueryResult> = {};
+      for (const q of queries) {
+        const l = await loadForRun(run, q.sourceId, signal);
+        const d = fieldsFor(
+          l,
+          Object.values(q.metrics ?? {}) as CalculatedMetric[],
+          (q.derived ?? []) as DerivedField[]
+        );
+        results[q.id] = runLocalQuery(
+          q,
+          d.rows,
+          new Map(d.fields.map((f) => [f.key, f])),
+          l.src.dateField
+        );
+      }
+      return {
+        results,
+        failures: [],
+        meta: {
+          recordsMatched: null,
+          dataAsOf: new Date().toISOString(),
+          datasetVersion: `api-${run.definition.sourceId}`,
+        },
+      };
+    },
+    async fetchExportRows(run, { signal, maxRows }) {
+      const l = await loadForRun(run, run.definition.sourceId, signal);
+      const allQ = run.queries.filter(
+        (q) => q.sourceId === run.definition.sourceId
+      );
+      const derived = [
+        ...new Map(
+          allQ
+            .flatMap((q) => (q.derived ?? []) as DerivedField[])
+            .map((x) => [x.key, x])
+        ).values(),
+      ];
+      const metrics = [
+        ...new Map(
+          allQ
+            .flatMap(
+              (q) => Object.values(q.metrics ?? {}) as CalculatedMetric[]
+            )
+            .map((x) => [x.key, x])
+        ).values(),
+      ];
+      const d = fieldsFor(l, metrics, derived);
+      const fm = new Map(d.fields.map((f) => [f.key, f]));
+      const df = l.src.dateField;
+      let rs = applyFilters(d.rows, toRules(run.filters), fm);
+      if (run.period)
+        rs = rs.filter((r) =>
+          inWindow(r, df, {
+            from: run.period!.from,
+            to: run.period!.to,
+            days: run.period!.days,
+          })
+        );
+      rs = [...rs].sort((a, b) =>
+        String(b[df] ?? '').localeCompare(String(a[df] ?? ''))
+      );
+      return { rows: rs.slice(0, maxRows), truncated: rs.length > maxRows };
+    },
+  };
+}
+
+/* ==========================================================================
+ * Widget factories + defaults
+ * ======================================================================== */
+const baseW = (title: string, span: Span) => ({
+  id: uid(),
+  title,
+  span,
+  height: 'md' as Height,
+  filters: [] as FilterRule[],
+});
+
+const mkKpi = (title: string, o: Partial<KpiWidget> = {}): KpiWidget => ({
+  ...baseW(title, 3),
+  kind: 'kpi',
+  agg: 'count',
+  tone: 'blue',
+  showTrend: true,
+  showSparkline: true,
+  lowerIsBetter: false,
+  format: 'compact',
+  ...o,
+});
+const mkChart = (
+  title: string,
+  chartType: ChartType,
+  groupBy: string,
+  o: Partial<ChartWidget> = {}
+): ChartWidget => ({
+  ...baseW(title, 6),
+  kind: 'chart',
+  chartType,
+  groupBy,
+  bucket: 'auto',
+  agg: 'count',
+  topN: 6,
+  showLegend: true,
+  showLabels: true,
+  showPercentage: true,
+  ...o,
+});
+const mkTable = (
+  title: string,
+  columns: string[],
+  o: Partial<TableWidget> = {}
+): TableWidget => ({
+  ...baseW(title, 12),
+  kind: 'table',
+  columns,
+  sortDir: 'desc',
+  limit: 5,
+  showTotals: false,
+  dataBars: false,
+  ...o,
+});
+const mkText = (
+  text: string,
+  variant: TextWidget['variant'],
+  o: Partial<TextWidget> = {}
+): TextWidget => ({
+  ...baseW('Text', 12),
+  kind: 'text',
+  text,
+  variant,
+  ...o,
+});
+const mkInsight = (
+  title: string,
+  groupBy: string,
+  o: Partial<InsightWidget> = {}
+): InsightWidget => ({
+  ...baseW(title, 4),
+  kind: 'insight',
+  groupBy,
+  agg: 'count',
+  bucket: 'auto',
+  subject: 'records',
+  ...o,
+});
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function autoWidgets(
+  src: ReportSource,
+  selected: string[],
+  fields: FieldDef[] = src.fields
+): Widget[] {
+  const sel = fields.filter((x) => selected.includes(x.key));
+  const money = sel.find((x) => x.type === 'currency');
+  const num =
+    sel.find((x) => x.type === 'number' || x.type === 'decimal') ?? money;
+  // Ordinal / badge categories (priority, severity) make the most useful breakdowns, so list them first.
+  const cats = sel
+    .filter((x) => x.type === 'category')
+    .sort((a, b) => Number(!!b.order) - Number(!!a.order));
+  const bool = sel.find((x) => x.type === 'boolean');
+  const date = sel.find((x) => isDateType(x.type));
+  const out: Widget[] = [
+    mkKpi(`Total ${src.recordLabel}`, { lowerIsBetter: true }),
+  ];
+  if (money)
+    out.push(
+      mkKpi(money.label, {
+        agg: 'sum',
+        field: money.key,
+        tone: 'red',
+        lowerIsBetter: true,
+      })
+    );
+  if (num)
+    out.push(
+      mkKpi(`Avg ${num.label.toLowerCase()}`, {
+        agg: 'avg',
+        field: num.key,
+        tone: 'green',
+      })
+    );
+  if (bool)
+    out.push(
+      mkKpi(`${bool.label} rate`, {
+        agg: 'rate',
+        field: bool.key,
+        tone: 'violet',
+        lowerIsBetter: true,
+      })
+    );
+  else if (cats[0])
+    out.push(
+      mkKpi(`Distinct ${cats[0].label.toLowerCase()}`, {
+        agg: 'distinct',
+        field: cats[0].key,
+        tone: 'violet',
+        showTrend: false,
+        showSparkline: false,
+      })
+    );
+  const insightBy = cats[0] ?? date;
+  if (insightBy)
+    out.push(
+      mkInsight('Key insights', insightBy.key, { subject: src.recordLabel })
+    );
+  if (date)
+    out.push(
+      mkChart(`${cap(src.recordLabel)} trend`, 'area', date.key, {
+        span: insightBy ? 8 : 12,
+      })
+    );
+  if (cats[0])
+    out.push(
+      mkChart(
+        `${cap(src.recordLabel)} by ${cats[0].label.toLowerCase()}`,
+        'doughnut',
+        cats[0].key,
+        { span: 4 }
+      )
+    );
+  if (cats[1])
+    out.push(
+      mkChart(`By ${cats[1].label.toLowerCase()}`, 'hbar', cats[1].key, {
+        span: 4,
+        ...(money ? { agg: 'sum' as Agg, field: money.key } : {}),
+      })
+    );
+  if (cats[0] && cats[1])
+    out.push(
+      mkChart(
+        `${cats[0].label} × ${cats[1].label.toLowerCase()}`,
+        'heatmap',
+        cats[0].key,
+        { span: 4, breakBy: cats[1].key }
+      )
+    );
+  const cols = sel.slice(0, 6).map((x) => x.key);
+  if (cols.length)
+    out.push(
+      mkTable(`Top ${src.recordLabel}`, cols, {
+        sortBy: money?.key ?? num?.key,
+        dataBars: !!(money ?? num),
+      })
+    );
+  return out;
+}
+
+const DEFAULT_SCHEDULE: Schedule = { frequency: 'none', recipients: '' };
+
+const DEFAULT_PRESENTATION: Presentation = {
+  showPageNumbers: true,
+  coverPage: false,
+};
+
+function blankDefinition(
+  src: ReportSource,
+  name = 'Untitled report'
+): ReportDefinition {
+  return {
+    name,
+    description: '',
+    sourceId: src.id,
+    fields: [...src.defaultFields],
+    widgets: autoWidgets(src, src.defaultFields, src.fields),
+    filters: [],
+    period: { preset: 'last_30_days', compare: 'previous_period' },
+    previewLimit: undefined,
+    drillPaths: [],
+    filterPresets: [],
+    presentation: { ...DEFAULT_PRESENTATION },
+    palette: 'corporate',
+    classification: 'internal',
+    compare: true,
+    schedule: { ...DEFAULT_SCHEDULE },
+    derived: [],
+    createdAt: new Date().toISOString(),
+    schemaVersion: SCHEMA_VERSION,
+    timezone: DEFAULT_TZ,
+    metrics: [],
+    audience: 'management',
+    tags: '',
+  };
+}
+
+/** Fill any properties missing from older / imported definitions. */
+function normalizeDefinition(d: ReportDefinition): ReportDefinition {
+  const defaults: Partial<ReportDefinition> = {
+    period: legacyRangeToPeriod(d.dateRange, d.customFrom, d.customTo),
+    drillPaths: [],
+    filterPresets: [],
+    presentation: { ...DEFAULT_PRESENTATION },
+    palette: 'corporate',
+    classification: 'internal',
+    compare: true,
+    schedule: { ...DEFAULT_SCHEDULE },
+    derived: [],
+    timezone: DEFAULT_TZ,
+    metrics: [],
+  };
+  const wDefaults = { height: 'md', filters: [] } as Partial<Widget>;
+  // v2 -> v3: adds timezone, metrics, audience/tags.
+  // v3 -> v4: `dateRange`/`customFrom`/`customTo` become `period` (preset + comparison); adds drillPaths,
+  //           filterPresets, presentation, previewLimit. Add further steps here (never edit published versions in place).
+  const { dateRange: _dr, customFrom: _cf, customTo: _ct, ...rest } = d;
+  return {
+    ...defaults,
+    ...rest,
+    schemaVersion: SCHEMA_VERSION,
+    widgets: (d.widgets ?? []).map((w) => {
+      const b = { ...wDefaults, ...w } as Widget;
+      if (b.kind === 'kpi')
+        return {
+          ...({ showSparkline: true, format: 'compact' } as Partial<KpiWidget>),
+          ...b,
+        } as Widget;
+      if (b.kind === 'chart')
+        return { ...b, bucket: b.bucket ?? 'auto' } as Widget;
+      if (b.kind === 'table')
+        return {
+          ...({ showTotals: false, dataBars: false } as Partial<TableWidget>),
+          ...b,
+        } as Widget;
+      return b;
+    }),
+  } as ReportDefinition;
+}
+
+function cloneDefinition(d: ReportDefinition): ReportDefinition {
+  const c: ReportDefinition = normalizeDefinition(
+    JSON.parse(JSON.stringify(d))
+  );
+  c.widgets = c.widgets.map((w) => ({
+    ...w,
+    id: uid(),
+    filters: w.filters.map((r) => ({ ...r, id: uid() })),
+  }));
+  c.filters = c.filters.map((r) => ({ ...r, id: uid() }));
+  return c;
+}
+
+/** Drop references to fields that are no longer in the report's field list. */
+function reconcile(
+  def: ReportDefinition,
+  fields: FieldDef[]
+): ReportDefinition {
+  // Calculated metrics (mt_*) are not selectable columns, so they are always valid references.
+  const keys = new (class extends Set<string> {
+    has(k: string) {
+      return super.has(k) || k.startsWith(METRIC_PREFIX);
+    }
+  })(def.fields);
+  const dim = fields.find((x) => keys.has(x.key) && isDim(x.type));
+  const widgets = def.widgets.flatMap((w): Widget[] => {
+    if (w.kind === 'kpi') {
+      const missing = !!w.field && !keys.has(w.field);
+      return [
+        {
+          ...w,
+          field: missing ? undefined : w.field,
+          agg: missing ? 'count' : w.agg,
+        },
+      ];
+    }
+    if (w.kind === 'chart') {
+      let c: ChartWidget = w;
+      if (c.chartType === 'scatter') {
+        if (!c.xField || !c.field || !keys.has(c.xField) || !keys.has(c.field))
+          return [];
+        return [
+          {
+            ...c,
+            breakBy: c.breakBy && keys.has(c.breakBy) ? c.breakBy : undefined,
+          },
+        ];
+      }
+      if (!keys.has(c.groupBy)) {
+        if (!dim) return [];
+        c = { ...c, groupBy: dim.key };
+      }
+      if (c.field && !keys.has(c.field))
+        c = { ...c, field: undefined, agg: 'count' };
+      if (c.breakBy && !keys.has(c.breakBy)) c = { ...c, breakBy: undefined };
+      return [c];
+    }
+    if (w.kind === 'insight') {
+      let i: InsightWidget = w;
+      if (!keys.has(i.groupBy)) {
+        if (!dim) return [];
+        i = { ...i, groupBy: dim.key };
+      }
+      if (i.field && !keys.has(i.field))
+        i = { ...i, field: undefined, agg: 'count' };
+      return [i];
+    }
+    if (w.kind === 'table') {
+      const columns = w.columns.filter((c) => keys.has(c));
+      return columns.length
+        ? [
+            {
+              ...w,
+              columns,
+              sortBy: w.sortBy && keys.has(w.sortBy) ? w.sortBy : undefined,
+            },
+          ]
+        : [];
+    }
+    return [w];
+  });
+  return { ...def, widgets };
+}
+
+/* ==========================================================================
+ * Template storage (default: localStorage) + built-in templates
+ * ======================================================================== */
+/**
+ * Strict validation for imported templates: known source, known widget kinds, bounded sizes,
+ * field references restricted to the source catalogue + the template's own custom fields.
+ */
+function validateImportedDefinition(
+  raw: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+  sources: ReportSource[]
+): ReportDefinition {
+  if (!raw || typeof raw !== 'object') throw new Error('invalid');
+  const src = sources.find((x) => x.id === raw.sourceId);
+  if (!src) throw new Error('unknown source');
+  if (!Array.isArray(raw.widgets) || raw.widgets.length > 200)
+    throw new Error('widgets');
+  const kinds = ['kpi', 'chart', 'table', 'text', 'insight'];
+  if (
+    raw.widgets.some(
+      (w: any) => !w || !(kinds.includes(w.kind) || hasWidget(w.kind))
+    )
+  )
+    // eslint-disable-line @typescript-eslint/no-explicit-any
+    throw new Error('widget kind');
+  const d = cloneDefinition({
+    ...raw,
+    fields: Array.isArray(raw.fields)
+      ? raw.fields.filter((k: unknown) => typeof k === 'string')
+      : [],
+    filters: Array.isArray(raw.filters) ? raw.filters : [],
+    derived: Array.isArray(raw.derived) ? raw.derived.slice(0, 50) : [],
+    metrics: Array.isArray(raw.metrics) ? raw.metrics.slice(0, 50) : [],
+  } as ReportDefinition);
+  const cat = applyDerived([], d.derived ?? [], src.fields).fields;
+  const keys = new Set(cat.map((x) => x.key));
+  d.fields = d.fields.filter((k) => keys.has(k));
+  d.filters = d.filters.filter((r) => keys.has(r.field));
+  d.widgets = d.widgets.map(
+    (w) =>
+      ({
+        ...w,
+        title: String(w.title ?? '').slice(0, 200),
+        note: w.note ? String(w.note).slice(0, 500) : undefined,
+        filters: (w.filters ?? []).filter((r) => keys.has(r.field)),
+        ...(w.kind === 'text'
+          ? { text: String(w.text ?? '').slice(0, 5000) }
+          : {}),
+      }) as Widget
+  );
+  return reconcile(d, cat);
+}
+
+const LS_KEY = 'fraud-report-builder:templates:v1';
+const LS_AUTOSAVE = 'fraud-report-builder:autosave:v1';
+/** Preview samples are mirrored to sessionStorage so a page refresh keeps the sample payload. */
+const PREVIEW_SS_PREFIX = 'fraud-report-builder:preview:';
+
+const readPreviewCache = (
+  key: string
+):
+  | { rows: Row[]; truncated: boolean; at?: string; total?: number }
+  | undefined => {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return undefined;
+    const v = JSON.parse(raw);
+    return Array.isArray(v?.rows) ? v : undefined;
+  } catch {
+    return undefined;
+  }
+};
+const readLocal = (): ReportTemplate[] => {
+  try {
+    return JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+  } catch {
+    return [];
+  }
+};
+export const localTemplateStore: ReportTemplateStore = {
+  list: async () => readLocal(),
+  save: async (t) => {
+    const all = readLocal();
+    const i = all.findIndex((x) => x.id === t.id);
+    if (i >= 0) all[i] = t;
+    else all.unshift(t);
+    localStorage.setItem(LS_KEY, JSON.stringify(all));
+    return t;
+  },
+  remove: async (id) => {
+    localStorage.setItem(
+      LS_KEY,
+      JSON.stringify(readLocal().filter((x) => x.id !== id))
+    );
+  },
+};
+
+const builtIn = (
+  name: string,
+  description: string,
+  src: string,
+  def: Partial<ReportDefinition> & { widgets: Widget[]; fields: string[] }
+): ReportTemplate => {
+  const now = new Date().toISOString();
+  return {
+    id: `builtin-${slug(name)}`,
+    name,
+    description,
+    isDraft: false,
+    visibility: 'org',
+    createdBy: 'System',
+    createdAt: now,
+    updatedAt: now,
+    builtIn: true,
+    definition: normalizeDefinition({
+      name,
+      description,
+      sourceId: src,
+      filters: [],
+      period: { preset: 'last_90_days', compare: 'previous_period' },
+      createdAt: now,
+      ...def,
+    } as ReportDefinition),
+  };
+};
+
+const mkE = (
+  kind: string,
+  title: string,
+  over: Record<string, unknown> = {}
+): Widget => ({ ...baseW(title, 6), kind, ...over }) as unknown as Widget;
+const CASE_F = [
+  'case_id',
+  'title',
+  'fraud_type',
+  'channel',
+  'severity',
+  'status',
+  'is_repeat',
+  'amt_aed',
+  'recovered_aed',
+  'investigator',
+  'region',
+  'customer_ref',
+  'opened',
+  'days_open',
+];
+const ALERT_F = [
+  'alert_id',
+  'rule',
+  'rule_priority',
+  'severity',
+  'status',
+  'channel',
+  'score',
+  'amt_aed',
+  'is_escalated',
+  'sar_filed',
+  'analyst',
+  'triggered',
+];
+
+const BUILTIN_TEMPLATES: ReportTemplate[] = [];
+// const BUILTIN_TEMPLATES: ReportTemplate[] = [
+//   /* ---- Board & executive pack (source: alerts) ---- */
+//   builtIn(
+//     'Board fraud risk overview',
+//     'Quarterly board pack: headline exposure, confirmed-fraud rate, trend by rule priority, channel and branch concentration.',
+//     'alerts',
+//     {
+//       classification: 'confidential',
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'customer_type',
+//         'amt_aed',
+//         'cashier',
+//         'branch_name',
+//         'rule_id',
+//         'rule_description',
+//         'rule_priority',
+//         'txn_count',
+//         'is_alert_closed',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'sla_days',
+//         'age_days',
+//         'payment_to_country',
+//       ],
+//       presentation: {
+//         subtitle: 'Fraud Risk Overview for the Board',
+//         footerText: 'Board of Directors · Strictly Confidential',
+//         showPageNumbers: true,
+//         coverPage: false,
+//       },
+//       widgets: [
+//         mkE('section', 'Executive summary', { span: 12, height: 'sm' }),
+//         mkE('execSummary', 'Quarter at a glance', {
+//           span: 12,
+//           commentary:
+//             'Alert volumes, flagged value and the confirmed-fraud share for {{range}}, from {{source}}.',
+//           items: [
+//             { label: 'Alerts raised', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Value flagged (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Confirmed fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Avg SLA days',
+//               agg: 'avg',
+//               field: 'sla_days',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('kpiGroup', 'Headline metrics', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Exposure (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Closure rate',
+//               agg: 'rate',
+//               field: 'is_alert_closed',
+//               lowerIsBetter: false,
+//             },
+//           ],
+//         }),
+//         mkChart('Alerts by rule priority over time', 'stacked', 'triggered', {
+//           span: 8,
+//           breakBy: 'rule_priority',
+//         }),
+//         mkChart('Priority mix', 'doughnut', 'rule_priority', { span: 4 }),
+//         mkChart('Exposure by channel (AED)', 'hbar', 'channel', {
+//           span: 6,
+//           agg: 'sum',
+//           field: 'amt_aed',
+//         }),
+//         mkE('riskMatrix', 'Risk matrix: priority × service type', {
+//           span: 6,
+//           rowField: 'rule_priority',
+//           colField: 'service_type',
+//           agg: 'count',
+//         }),
+//         mkE('pareto', 'Branch concentration of alerts', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'count',
+//           topN: 8,
+//         }),
+//         mkE('pareto', 'Branch concentration of exposure (AED)', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('waterfall', 'Change in alerts by rule priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           agg: 'count',
+//           topN: 4,
+//           lowerIsBetter: true,
+//         }),
+//         mkChart(
+//           'Exposure by destination country (AED)',
+//           'bar',
+//           'payment_to_country',
+//           {
+//             span: 6,
+//             agg: 'sum',
+//             field: 'amt_aed',
+//             topN: 8,
+//           }
+//         ),
+//         mkE('section', 'Findings and next steps', { span: 12, height: 'sm' }),
+//         mkText(
+//           'Commentary for the Board: {{records}} alerts over {{range}} from {{source}}. Summarise confirmed-fraud value, the highest-risk branches and rules, and the actions agreed.',
+//           'callout'
+//         ),
+//         mkInsight('Key insights', 'rule_priority', {
+//           span: 12,
+//           subject: 'alerts',
+//         }),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Monthly executive fraud report',
+//     'Previous month versus the month before: drivers, channel movement, branch scorecard and the critical queue.',
+//     'alerts',
+//     {
+//       classification: 'confidential',
+//       period: { preset: 'previous_month', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'amt_aed',
+//         'cashier',
+//         'branch_name',
+//         'rule_id',
+//         'rule_priority',
+//         'is_alert_closed',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'sla_days',
+//       ],
+//       presentation: {
+//         subtitle: 'Monthly Fraud Management Report',
+//         footerText: 'Executive Management · Confidential',
+//         showPageNumbers: true,
+//         coverPage: false,
+//       },
+//       widgets: [
+//         mkE('execSummary', 'Month at a glance', {
+//           span: 12,
+//           commentary:
+//             'Monthly movement in alerts and flagged value for {{range}}, from {{source}}.',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Exposure (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('waterfall', 'Change in alerts by rule priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           agg: 'count',
+//           topN: 4,
+//           lowerIsBetter: true,
+//         }),
+//         mkE('periodCompare', 'Channel: this month vs prior', {
+//           span: 6,
+//           groupBy: 'channel',
+//           agg: 'count',
+//           topN: 6,
+//         }),
+//         mkChart('Exposure by rule (AED)', 'hbar', 'rule_id', {
+//           span: 6,
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('periodCompare', 'Branches vs prior period (exposure)', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 6,
+//         }),
+//         mkE('summaryTable', 'Branch scorecard', {
+//           span: 12,
+//           groupBy: 'branch_name',
+//           topN: 10,
+//           sortIndex: 1,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Exposure (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Fraud rate', agg: 'rate', field: 'is_fraud' },
+//             { label: 'Avg SLA days', agg: 'avg', field: 'sla_days' },
+//           ],
+//         }),
+//         mkTable(
+//           'Critical and high-priority alerts',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'rule_id',
+//             'rule_priority',
+//             'branch_name',
+//             'amt_aed',
+//             'analyst',
+//           ],
+//           {
+//             filters: [
+//               { id: uid(), field: 'rule_priority', op: 'atleast', value: 'High' },
+//             ],
+//             sortBy: 'amt_aed',
+//             limit: 10,
+//           }
+//         ),
+//       ],
+//     }
+//   ),
+
+//   /* ---- Analytical pack (source: alerts) ---- */
+//   builtIn(
+//     'Confirmed fraud & loss analysis',
+//     'Where confirmed fraud concentrates: value bands, priority spread, loss-size distribution and the largest confirmed cases.',
+//     'alerts',
+//     {
+//       classification: 'confidential',
+//       period: { preset: 'last_12_months', compare: 'previous_year' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'txn_date',
+//         'service_type',
+//         'amt_aed',
+//         'curcode',
+//         'branch_name',
+//         'rule_id',
+//         'rule_description',
+//         'rule_priority',
+//         'txn_count',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'disposition',
+//         'cf_value_band',
+//       ],
+//       derived: [
+//         {
+//           id: 'band1',
+//           key: 'cf_value_band',
+//           label: 'Value band (AED)',
+//           kind: 'bands',
+//           source: 'amt_aed',
+//           edges: [1000, 5000, 20000, 100000],
+//         },
+//       ],
+//       widgets: [
+//         mkE('kpiGroup', 'Confirmed fraud', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Confirmed cases', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Fraud loss (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Avg loss per case (AED)',
+//               agg: 'avg',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('riskGauge', 'Fraud rate (share of alerts)', {
+//           span: 4,
+//           agg: 'rate',
+//           field: 'is_fraud',
+//           min: 0,
+//           max: 100,
+//           warn: 20,
+//           breach: 40,
+//           lowerIsBetter: true,
+//         }),
+//         mkChart('Confirmed by rule priority', 'doughnut', 'rule_priority', {
+//           span: 4,
+//         }),
+//         mkChart('Confirmed by channel', 'bar', 'channel', { span: 4 }),
+//         mkE('histogram', 'Loss size distribution (AED)', {
+//           span: 6,
+//           field: 'amt_aed',
+//           bins: 20,
+//         }),
+//         mkE('boxplot', 'Loss size by rule priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           field: 'amt_aed',
+//           topN: 4,
+//         }),
+//         mkChart('Priority × value band (AED)', 'pivot', 'rule_priority', {
+//           span: 6,
+//           breakBy: 'cf_value_band',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           showTotals: true,
+//         }),
+//         mkE('pareto', 'Loss concentration by rule (AED)', {
+//           span: 6,
+//           groupBy: 'rule_id',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('summaryTable', 'Branch loss scorecard', {
+//           span: 12,
+//           groupBy: 'branch_name',
+//           topN: 10,
+//           sortIndex: 1,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Confirmed fraud', agg: 'count' },
+//             { label: 'Loss (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Avg loss (AED)', agg: 'avg', field: 'amt_aed' },
+//           ],
+//         }),
+//         mkTable(
+//           'Largest confirmed fraud cases',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'branch_name',
+//             'rule_id',
+//             'rule_priority',
+//             'amt_aed',
+//             'analyst',
+//             'disposition',
+//           ],
+//           {
+//             filters: [{ id: uid(), field: 'is_fraud', op: 'eq', value: 'Yes' }],
+//             sortBy: 'amt_aed',
+//             limit: 10,
+//             pageBreak: true,
+//           }
+//         ),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Alert triage & SLA performance',
+//     'Backlog health: closure rates, SLA compliance, aging buckets, branch workload and the overdue queue.',
+//     'alerts',
+//     {
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'created_at',
+//         'amt_aed',
+//         'branch_name',
+//         'rule_id',
+//         'rule_priority',
+//         'txn_count',
+//         'is_alert_closed',
+//         'is_fraud',
+//         'channel',
+//         'analyst',
+//         'sla_days',
+//         'age_days',
+//       ],
+//       widgets: [
+//         mkE('kpiGroup', 'Backlog health', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Avg SLA days',
+//               agg: 'avg',
+//               field: 'sla_days',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Avg age (days)',
+//               agg: 'avg',
+//               field: 'age_days',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Closure rate',
+//               agg: 'rate',
+//               field: 'is_alert_closed',
+//               lowerIsBetter: false,
+//             },
+//           ],
+//         }),
+//         mkE('riskGauge', 'Avg SLA days (30-day target)', {
+//           span: 4,
+//           agg: 'avg',
+//           field: 'sla_days',
+//           min: 0,
+//           max: 120,
+//           warn: 30,
+//           breach: 60,
+//           lowerIsBetter: true,
+//         }),
+//         mkE('riskGauge', 'Closure rate', {
+//           span: 4,
+//           agg: 'rate',
+//           field: 'is_alert_closed',
+//           min: 0,
+//           max: 100,
+//           warn: 40,
+//           breach: 20,
+//           lowerIsBetter: false,
+//         }),
+//         mkChart('Open vs closed', 'doughnut', 'is_alert_closed', { span: 4 }),
+//         mkE('aging', 'Alert aging vs 30-day SLA', {
+//           span: 6,
+//           ageField: 'age_days',
+//           edges: '7, 14, 30, 60, 90',
+//           slaDays: 30,
+//           agg: 'count',
+//         }),
+//         mkE('combo', 'Volume and avg SLA days by month', {
+//           span: 6,
+//           groupBy: 'triggered',
+//           agg: 'count',
+//           label1: 'Alerts',
+//           agg2: 'avg',
+//           field2: 'sla_days',
+//           label2: 'Avg SLA days',
+//           topN: 12,
+//         }),
+//         mkE('summaryTable', 'Branch workload', {
+//           span: 12,
+//           groupBy: 'branch_name',
+//           topN: 10,
+//           sortIndex: 3,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Avg SLA days', agg: 'avg', field: 'sla_days' },
+//             { label: 'Avg age (days)', agg: 'avg', field: 'age_days' },
+//             { label: 'Closure rate', agg: 'rate', field: 'is_alert_closed' },
+//           ],
+//         }),
+//         mkTable(
+//           'Overdue open alerts (over 30 days)',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'rule_priority',
+//             'branch_name',
+//             'age_days',
+//             'sla_days',
+//             'analyst',
+//           ],
+//           {
+//             filters: [
+//               { id: uid(), field: 'is_alert_closed', op: 'eq', value: 'No' },
+//               { id: uid(), field: 'age_days', op: 'gt', value: '30' },
+//             ],
+//             sortBy: 'age_days',
+//             limit: 10,
+//           }
+//         ),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Detection rule effectiveness',
+//     'Rule-by-rule yield: fraud-hit rate, exposure triggered, transaction behaviour and priority coverage.',
+//     'alerts',
+//     {
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'amt_aed',
+//         'branch_name',
+//         'rule_id',
+//         'rule_description',
+//         'rule_priority',
+//         'txn_count',
+//         'is_fraud',
+//         'channel',
+//         'disposition',
+//       ],
+//       widgets: [
+//         mkE('summaryTable', 'Rule scorecard', {
+//           span: 12,
+//           groupBy: 'rule_id',
+//           topN: 12,
+//           sortIndex: 2,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Fraud rate', agg: 'rate', field: 'is_fraud' },
+//             { label: 'Exposure (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Avg txns per alert', agg: 'avg', field: 'txn_count' },
+//           ],
+//         }),
+//         mkE('pareto', 'Alert volume concentration by rule', {
+//           span: 6,
+//           groupBy: 'rule_id',
+//           agg: 'count',
+//           topN: 8,
+//         }),
+//         mkE('pareto', 'Exposure concentration by rule (AED)', {
+//           span: 6,
+//           groupBy: 'rule_id',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 8,
+//         }),
+//         mkE('bubble', 'Txns vs amount by rule (size = amount)', {
+//           span: 12,
+//           xField: 'txn_count',
+//           yField: 'amt_aed',
+//           sizeField: 'amt_aed',
+//           colour: 'rule_priority',
+//         }),
+//         mkE('boxplot', 'Transaction count by priority', {
+//           span: 6,
+//           groupBy: 'rule_priority',
+//           field: 'txn_count',
+//           topN: 4,
+//         }),
+//         mkChart('Rule × priority (alerts)', 'pivot', 'rule_id', {
+//           span: 6,
+//           breakBy: 'rule_priority',
+//           agg: 'count',
+//           showTotals: true,
+//           topN: 8,
+//         }),
+//       ],
+//     }
+//   ),
+//   builtIn(
+//     'Branch & channel risk watch',
+//     'Branch and over-the-counter risk: exposure movement, priority hotspots, teller watchlist and the employee-transaction flag.',
+//     'alerts',
+//     {
+//       period: { preset: 'last_90_days', compare: 'previous_period' },
+//       fields: [
+//         'alert_id',
+//         'triggered',
+//         'service_type',
+//         'amt_aed',
+//         'cashier',
+//         'branch_name',
+//         'rule_id',
+//         'rule_priority',
+//         'txn_count',
+//         'is_employee_txn',
+//         'is_fraud',
+//         'channel',
+//         'curcode',
+//       ],
+//       widgets: [
+//         mkE('kpiGroup', 'Branch & channel', {
+//           span: 12,
+//           height: 'sm',
+//           items: [
+//             { label: 'Alerts', agg: 'count', lowerIsBetter: true },
+//             {
+//               label: 'Exposure (AED)',
+//               agg: 'sum',
+//               field: 'amt_aed',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Employee transactions',
+//               agg: 'yes',
+//               field: 'is_employee_txn',
+//               lowerIsBetter: true,
+//             },
+//             {
+//               label: 'Fraud rate',
+//               agg: 'rate',
+//               field: 'is_fraud',
+//               lowerIsBetter: true,
+//             },
+//           ],
+//         }),
+//         mkE('periodCompare', 'Branches vs prior period (alerts)', {
+//           span: 6,
+//           groupBy: 'branch_name',
+//           agg: 'count',
+//           topN: 8,
+//         }),
+//         mkE('periodCompare', 'Channels vs prior period (exposure)', {
+//           span: 6,
+//           groupBy: 'channel',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//           topN: 6,
+//         }),
+//         mkE('riskMatrix', 'Priority × channel (exposure)', {
+//           span: 12,
+//           rowField: 'rule_priority',
+//           colField: 'channel',
+//           agg: 'sum',
+//           field: 'amt_aed',
+//         }),
+//         mkE('summaryTable', 'Teller (cashier) watchlist', {
+//           span: 12,
+//           groupBy: 'cashier',
+//           topN: 10,
+//           sortIndex: 0,
+//           sortDir: 'desc',
+//           showTotal: true,
+//           dataBars: true,
+//           measures: [
+//             { label: 'Alerts', agg: 'count' },
+//             { label: 'Exposure (AED)', agg: 'sum', field: 'amt_aed' },
+//             { label: 'Fraud rate', agg: 'rate', field: 'is_fraud' },
+//           ],
+//         }),
+//         mkTable(
+//           'Highest exposure alerts',
+//           [
+//             'alert_id',
+//             'triggered',
+//             'branch_name',
+//             'cashier',
+//             'rule_id',
+//             'rule_priority',
+//             'amt_aed',
+//             'curcode',
+//           ],
+//           { sortBy: 'amt_aed', limit: 10 }
+//         ),
+//       ],
+//     }
+//   ),
+// ];
+
+/* ==========================================================================
+ * Design tokens (compact system: 32px controls, 13px body)
+ * ======================================================================== */
+const PALETTES: Record<PaletteKey, { label: string; colors: string[] }> = {
+  corporate: {
+    label: 'Corporate',
+    colors: [
+      '#2563eb',
+      '#0ea5e9',
+      '#6366f1',
+      '#14b8a6',
+      '#f59e0b',
+      '#ef4444',
+      '#8b5cf6',
+      '#64748b',
+    ],
+  },
+  vivid: {
+    label: 'Vivid',
+    colors: [
+      '#2563eb',
+      '#10b981',
+      '#f59e0b',
+      '#f97316',
+      '#8b5cf6',
+      '#ec4899',
+      '#06b6d4',
+      '#64748b',
+    ],
+  },
+  ocean: {
+    label: 'Ocean',
+    colors: [
+      '#0369a1',
+      '#0891b2',
+      '#14b8a6',
+      '#38bdf8',
+      '#6366f1',
+      '#22d3ee',
+      '#2dd4bf',
+      '#94a3b8',
+    ],
+  },
+  sunset: {
+    label: 'Sunset',
+    colors: [
+      '#dc2626',
+      '#f97316',
+      '#f59e0b',
+      '#ec4899',
+      '#a855f7',
+      '#fb7185',
+      '#fbbf24',
+      '#78716c',
+    ],
+  },
+  mono: {
+    label: 'Mono',
+    colors: [
+      '#1e3a8a',
+      '#2563eb',
+      '#60a5fa',
+      '#94a3b8',
+      '#475569',
+      '#93c5fd',
+      '#334155',
+      '#cbd5e1',
+    ],
+  },
+
+  // ─── New palettes ───────────────────────────────────────────
+
+  forest: {
+    label: 'Forest',
+    colors: [
+      '#166534',
+      '#16a34a',
+      '#4ade80',
+      '#065f46',
+      '#2dd4bf',
+      '#84cc16',
+      '#a3e635',
+      '#78716c',
+    ],
+  },
+  berry: {
+    label: 'Berry',
+    colors: [
+      '#831843',
+      '#be185d',
+      '#ec4899',
+      '#a21caf',
+      '#c026d3',
+      '#f472b6',
+      '#e879f9',
+      '#71717a',
+    ],
+  },
+  earth: {
+    label: 'Earth',
+    colors: [
+      '#78350f',
+      '#b45309',
+      '#d97706',
+      '#a16207',
+      '#ca8a04',
+      '#65a30d',
+      '#84cc16',
+      '#57534e',
+    ],
+  },
+  slate: {
+    label: 'Slate',
+    colors: [
+      '#0f172a',
+      '#1e293b',
+      '#334155',
+      '#475569',
+      '#64748b',
+      '#94a3b8',
+      '#cbd5e1',
+      '#e2e8f0',
+    ],
+  },
+  royal: {
+    label: 'Royal',
+    colors: [
+      '#4c1d95',
+      '#6d28d9',
+      '#7c3aed',
+      '#8b5cf6',
+      '#a78bfa',
+      '#c4b5fd',
+      '#ddd6fe',
+      '#64748b',
+    ],
+  },
+  pastel: {
+    label: 'Pastel',
+    colors: [
+      '#93c5fd',
+      '#a5b4fc',
+      '#c4b5fd',
+      '#f0abfc',
+      '#f9a8d4',
+      '#fda4af',
+      '#fcd34d',
+      '#a7f3d0',
+    ],
+  },
+  citrus: {
+    label: 'Citrus',
+    colors: [
+      '#ca8a04',
+      '#eab308',
+      '#facc15',
+      '#84cc16',
+      '#a3e635',
+      '#f97316',
+      '#fb923c',
+      '#78716c',
+    ],
+  },
+  nordic: {
+    label: 'Nordic',
+    colors: [
+      '#0f766e',
+      '#14b8a6',
+      '#5eead4',
+      '#0e7490',
+      '#06b6d4',
+      '#67e8f9',
+      '#1e40af',
+      '#94a3b8',
+    ],
+  },
+  ember: {
+    label: 'Ember',
+    colors: [
+      '#7f1d1d',
+      '#b91c1c',
+      '#dc2626',
+      '#ea580c',
+      '#f97316',
+      '#fb923c',
+      '#facc15',
+      '#78716c',
+    ],
+  },
+  aurora: {
+    label: 'Aurora',
+    colors: [
+      '#0d9488',
+      '#14b8a6',
+      '#06b6d4',
+      '#3b82f6',
+      '#6366f1',
+      '#8b5cf6',
+      '#d946ef',
+      '#64748b',
+    ],
+  },
+  desert: {
+    label: 'Desert',
+    colors: [
+      '#92400e',
+      '#c2410c',
+      '#ea580c',
+      '#d97706',
+      '#f59e0b',
+      '#eab308',
+      '#fcd34d',
+      '#a8a29e',
+    ],
+  },
+  teal: {
+    label: 'Teal',
+    colors: [
+      '#134e4a',
+      '#0f766e',
+      '#0d9488',
+      '#14b8a6',
+      '#2dd4bf',
+      '#5eead4',
+      '#99f6e4',
+      '#64748b',
+    ],
+  },
+  plum: {
+    label: 'Plum',
+    colors: [
+      '#581c87',
+      '#6b21a8',
+      '#7e22ce',
+      '#9333ea',
+      '#a855f7',
+      '#c084fc',
+      '#d8b4fe',
+      '#71717a',
+    ],
+  },
+  arctic: {
+    label: 'Arctic',
+    colors: [
+      '#1e3a8a',
+      '#1d4ed8',
+      '#2563eb',
+      '#3b82f6',
+      '#60a5fa',
+      '#93c5fd',
+      '#bae6fd',
+      '#64748b',
+    ],
+  },
+  candy: {
+    label: 'Candy',
+    colors: [
+      '#db2777',
+      '#ec4899',
+      '#f472b6',
+      '#a855f7',
+      '#c084fc',
+      '#818cf8',
+      '#38bdf8',
+      '#fbbf24',
+    ],
+  },
+  contrast: {
+    label: 'Contrast',
+    colors: [
+      '#111827',
+      '#dc2626',
+      '#2563eb',
+      '#16a34a',
+      '#f59e0b',
+      '#7c3aed',
+      '#0891b2',
+      '#e5e7eb',
+    ],
+  },
+};
+const TONES: Record<
+  Tone,
+  {
+    card: [string, string];
+    chip: [string, string];
+    icon: React.ComponentType<{ className?: string }>;
+    hex: string;
+  }
+> = {
+  blue: {
+    card: ['bg-blue-50 border-blue-100', 'bg-blue-500/10 border-blue-500/20'],
+    chip: ['bg-white text-blue-600', 'bg-blue-500/20 text-blue-300'],
+    icon: ShieldAlert,
+    hex: '#2563eb',
+  },
+  red: {
+    card: ['bg-red-50 border-red-100', 'bg-red-500/10 border-red-500/20'],
+    chip: ['bg-white text-red-600', 'bg-red-500/20 text-red-300'],
+    icon: AlertTriangle,
+    hex: '#dc2626',
+  },
+  green: {
+    card: [
+      'bg-emerald-50 border-emerald-100',
+      'bg-emerald-500/10 border-emerald-500/20',
+    ],
+    chip: ['bg-white text-emerald-600', 'bg-emerald-500/20 text-emerald-300'],
+    icon: CheckCircle2,
+    hex: '#059669',
+  },
+  violet: {
+    card: [
+      'bg-violet-50 border-violet-100',
+      'bg-violet-500/10 border-violet-500/20',
+    ],
+    chip: ['bg-white text-violet-600', 'bg-violet-500/20 text-violet-300'],
+    icon: Activity,
+    hex: '#7c3aed',
+  },
+  amber: {
+    card: [
+      'bg-amber-50 border-amber-100',
+      'bg-amber-500/10 border-amber-500/20',
+    ],
+    chip: ['bg-white text-amber-600', 'bg-amber-500/20 text-amber-300'],
+    icon: Banknote,
+    hex: '#d97706',
+  },
+  slate: {
+    card: ['bg-slate-50 border-slate-200', 'bg-white/5 border-white/15'],
+    chip: ['bg-white text-slate-600', 'bg-white/10 text-white/70'],
+    icon: Hash,
+    hex: '#475569',
+  },
+};
+
+const BADGE: Record<string, [string, string]> = {
+  red: [
+    'bg-red-50 text-red-700 ring-red-200',
+    'bg-red-500/15 text-red-300 ring-red-500/30',
+  ],
+  amber: [
+    'bg-amber-50 text-amber-700 ring-amber-200',
+    'bg-amber-500/15 text-amber-300 ring-amber-500/30',
+  ],
+  green: [
+    'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30',
+  ],
+  blue: [
+    'bg-blue-50 text-blue-700 ring-blue-200',
+    'bg-blue-500/15 text-blue-300 ring-blue-500/30',
+  ],
+  orange: [
+    'bg-orange-50 text-orange-700 ring-orange-200',
+    'bg-orange-500/15 text-orange-300 ring-orange-500/30',
+  ],
+  slate: [
+    'bg-slate-100 text-slate-600 ring-slate-200',
+    'bg-white/10 text-white/70 ring-white/15',
+  ],
+};
+const BADGE_TONE: Record<string, string> = {
+  critical: 'red',
+  'very high': 'red',
+  high: 'orange',
+  declined: 'red',
+  lost: 'red',
+  escalated: 'red',
+  'confirmed fraud': 'red',
+  confirmed: 'red',
+  medium: 'amber',
+  moderate: 'amber',
+  'manual review': 'amber',
+  pending: 'amber',
+  'under investigation': 'amber',
+  'in review': 'amber',
+  low: 'green',
+  'very low': 'green',
+  approved: 'green',
+  won: 'green',
+  closed: 'green',
+  'false positive': 'green',
+  open: 'blue',
+  new: 'blue',
+};
+
+const CLASSIFICATION: Record<Classification, { label: string; tone: string }> =
+  {
+    none: { label: 'No classification', tone: 'slate' },
+    internal: { label: 'Internal use', tone: 'blue' },
+    confidential: { label: 'Confidential', tone: 'amber' },
+    restricted: { label: 'Restricted', tone: 'red' },
+  };
+
+const Badge: React.FC<{ value: string; tone?: string }> = ({ value, tone }) => {
+  const t = useT();
+  const k = tone ?? BADGE_TONE[value.toLowerCase()] ?? 'slate';
+  return (
+    <span
+      className={`inline-flex whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${BADGE[k][t.dark ? 1 : 0]}`}
+    >
+      {value}
+    </span>
+  );
+};
+
+const hexA = (hex: string, a: number) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+};
+
+/* ==========================================================================
+ * Atoms
+ * ======================================================================== */
+const Field: React.FC<{
+  label: string;
+  children: React.ReactNode;
+  hint?: string;
+}> = ({ label, children, hint }) => {
+  const t = useT();
+  return (
+    <label className="block">
+      <span className={`mb-1 block text-[11px] font-semibold ${t.muted}`}>
+        {label}
+      </span>
+      {children}
+      {hint && (
+        <span className={`mt-1 block text-[11px] ${t.muted}`}>{hint}</span>
+      )}
+    </label>
+  );
+};
+
+const Select: React.FC<{
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  label?: string;
+}> = ({ value, onChange, options, label }) => {
+  const t = useT();
+  return (
+    <div className="relative">
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`h-8 w-full cursor-pointer appearance-none rounded-lg border pl-2.5 pr-7 text-[13px] ${t.input} ${FOCUS}`}
+      >
+        {options.map((o) => (
+          <option
+            key={o.value}
+            value={o.value}
+            className="bg-white text-slate-900"
+          >
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        className={`pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${t.muted}`}
+      />
+    </div>
+  );
+};
+
+const TextInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({
+  className = '',
+  ...rest
+}) => {
+  const t = useT();
+  return (
+    <input
+      {...rest}
+      className={`h-8 w-full rounded-lg border px-2.5 text-[13px] ${t.input} ${FOCUS} ${className}`}
+    />
+  );
+};
+
+const Toggle: React.FC<{
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}> = ({ checked, onChange, label }) => {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors ${checked ? 'bg-blue-600' : t.toggleOff} ${FOCUS}`}
+    >
+      <span
+        className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4' : ''}`}
+      />
+    </button>
+  );
+};
+
+const SwitchRow: React.FC<{
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}> = ({ label, checked, onChange }) => {
+  const t = useT();
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className={`text-[13px] ${t.body}`}>{label}</span>
+      <Toggle checked={checked} onChange={onChange} label={label} />
+    </div>
+  );
+};
+
+const IconButton: React.FC<{
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  children: React.ReactNode;
+}> = ({ label, onClick, disabled, active, children }) => {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${active ? t.selected : t.btn} ${FOCUS}`}
+    >
+      {children}
+    </button>
+  );
+};
+
+const GhostButton: React.FC<{
+  onClick: () => void;
+  children: React.ReactNode;
+  icon?: React.ReactNode;
+  disabled?: boolean;
+  title?: string;
+}> = ({ onClick, children, icon, disabled, title }) => {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${t.btn} ${FOCUS}`}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+};
+
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: { value: T; label: React.ReactNode; title?: string }[];
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  const t = useT();
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className={`flex h-8 rounded-lg border p-0.5 ${t.lineStrong} ${t.dark ? 'bg-white/5' : 'bg-slate-50'}`}
+    >
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          title={o.title}
+          onClick={() => onChange(o.value)}
+          className={`flex flex-1 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium transition-colors ${value === o.value ? 'bg-blue-600 text-white shadow-sm' : t.muted} ${FOCUS}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const Section: React.FC<{
+  title: string;
+  badge?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}> = ({ title, badge, defaultOpen = false, children }) => {
+  const t = useT();
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`border-b last:border-b-0 ${t.line}`}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className={`flex w-full items-center justify-between px-3 py-2.5 text-xs font-semibold ${t.text} ${t.hover} ${FOCUS}`}
+      >
+        {title}
+        <span className="flex items-center gap-2">
+          {badge && (
+            <span className={`text-[11px] font-normal ${t.muted}`}>
+              {badge}
+            </span>
+          )}
+          {open ? (
+            <ChevronUp className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5" />
+          )}
+        </span>
+      </button>
+      {open && <div className="space-y-3 px-3 pb-3">{children}</div>}
+    </div>
+  );
+};
+
+const Panel: React.FC<{ children: React.ReactNode; className?: string }> = ({
+  children,
+  className = '',
+}) => {
+  const t = useT();
+  return (
+    <section
+      className={`flex max-h-[80vh] min-h-0 flex-col overflow-hidden rounded-xl border xl:h-full xl:max-h-none ${t.card} ${className}`}
+    >
+      {children}
+    </section>
+  );
+};
+
+const PanelHead: React.FC<{
+  title: React.ReactNode;
+  hint?: string;
+  action?: React.ReactNode;
+}> = ({ title, hint, action }) => {
+  const t = useT();
+  return (
+    <div
+      className={`flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2 ${t.lineStrong}`}
+    >
+      <div className="min-w-0">
+        <h2
+          className={`flex items-center gap-1.5 truncate text-[13px] font-semibold ${t.text}`}
+        >
+          {title}
+        </h2>
+        {hint && <p className={`truncate text-[11px] ${t.muted}`}>{hint}</p>}
+      </div>
+      {action}
+    </div>
+  );
+};
+
+/** Portal-based popover so it is never clipped by scroll containers. */
+const Popover: React.FC<{
+  trigger: (p: {
+    open: boolean;
+    toggle: () => void;
+    ref: React.Ref<HTMLButtonElement>;
+  }) => React.ReactNode;
+  width?: number;
+  children: (close: () => void) => React.ReactNode;
+}> = ({ trigger, width = 260, children }) => {
+  const t = useT();
+  const [pos, setPos] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setPos(null), []);
+
+  useEffect(() => {
+    if (!pos) return;
+    const inside = (e: Event) =>
+      !!menuRef.current?.contains(e.target as Node) ||
+      !!btnRef.current?.contains(e.target as Node);
+    const onDown = (e: MouseEvent) => {
+      if (!inside(e)) close();
+    };
+    const onScroll = (e: Event) => {
+      if (!inside(e)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        close();
+        btnRef.current?.focus();
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [pos, close]);
+
+  const toggle = () => {
+    if (pos) return close();
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const left = Math.max(
+      8,
+      Math.min(rect.left, window.innerWidth - width - 8)
+    );
+    const below = window.innerHeight - rect.bottom;
+    setPos(
+      below < 340 && rect.top > below
+        ? { left, bottom: window.innerHeight - rect.top + 4 }
+        : { left, top: rect.bottom + 4 }
+    );
+  };
+
+  return (
+    <>
+      {trigger({ open: !!pos, toggle, ref: btnRef })}
+      {pos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="dialog"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              left: pos.left,
+              top: pos.top,
+              bottom: pos.bottom,
+              width,
+              maxHeight: '70vh',
+            }}
+            className={`z-50 overflow-y-auto rounded-xl border p-2 ${t.pop}`}
+          >
+            {children(close)}
+          </div>,
+          document.body
+        )}
+    </>
+  );
+};
+
+const MenuItem: React.FC<{
+  onClick: () => void;
+  icon?: React.ReactNode;
+  hint?: string;
+  children: React.ReactNode;
+}> = ({ onClick, icon, hint, children }) => {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] ${t.hover} ${FOCUS}`}
+    >
+      {icon && (
+        <span
+          className={`grid h-7 w-7 shrink-0 place-items-center rounded-md ${t.chipIcon}`}
+        >
+          {icon}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{children}</span>
+        {hint && (
+          <span className={`block truncate text-[11px] ${t.muted}`}>
+            {hint}
+          </span>
+        )}
+      </span>
+    </button>
+  );
+};
+
+/* ==========================================================================
+ * Charts (SVG / HTML, no dependencies)
+ * ======================================================================== */
+const niceMax = (max: number) => {
+  const m = Math.max(max, 1);
+  const mag = 10 ** Math.floor(Math.log10(m));
+  return [1, 2, 2.5, 5, 10].map((x) => x * mag).find((x) => x >= m) ?? m;
+};
+const H_PX: Record<Height, number> = { sm: 160, md: 210, lg: 290 };
+
+const Legend: React.FC<{ names: string[]; colors: string[] }> = ({
+  names,
+  colors,
+}) => {
+  const t = useT();
+  return (
+    <ul className="mb-2 flex flex-wrap gap-x-3 gap-y-1">
+      {names.map((n, i) => (
+        <li
+          key={n}
+          className={`flex items-center gap-1.5 text-[11px] ${t.body}`}
+        >
+          <span
+            className="h-2 w-2 rounded-full"
+            style={{ background: colors[i % colors.length] }}
+          />
+          {n}
+        </li>
+      ))}
+    </ul>
+  );
+};
+
+const DonutChart: React.FC<{
+  labels: string[];
+  values: number[];
+  colors: string[];
+  pie: boolean;
+  showLegend: boolean;
+  showLabels: boolean;
+  showPercentage: boolean;
+  centerText: string;
+  centerLabel?: string;
+  fmt: (v: number) => string;
+  onPick?: (i: number) => void;
+}> = ({
+  labels,
+  values,
+  colors,
+  pie,
+  showLegend,
+  showLabels,
+  showPercentage,
+  centerText,
+  centerLabel = 'Total',
+  fmt,
+  onPick,
+}) => {
+  const t = useT();
+  const total = values.reduce((s, d) => s + d, 0) || 1;
+  const r = pie ? 30 : 44;
+  const sw = pie ? 60 : 18;
+  const C = 2 * Math.PI * r;
+  let acc = 0;
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <svg
+        viewBox="0 0 120 120"
+        className="h-32 w-32 shrink-0"
+        role="img"
+        aria-label="Distribution chart"
+      >
+        <g transform="rotate(-90 60 60)">
+          {values.map((v, i) => {
+            const len = (v / total) * C;
+            const el = (
+              <circle
+                key={labels[i]}
+                cx="60"
+                cy="60"
+                r={r}
+                fill="none"
+                stroke={colors[i % colors.length]}
+                strokeWidth={sw}
+                strokeDasharray={`${Math.max(0, len - (values.length > 1 && !pie ? 1.2 : 0))} ${C}`}
+                strokeDashoffset={-acc}
+                className={
+                  onPick
+                    ? 'cursor-pointer transition-opacity hover:opacity-80'
+                    : ''
+                }
+                onClick={onPick ? () => onPick(i) : undefined}
+              >
+                <title>{`${labels[i]}: ${fmt(v)} (${Math.round((v / total) * 100)}%)`}</title>
+              </circle>
+            );
+            acc += len;
+            return el;
+          })}
+        </g>
+        {!pie && (
+          <g
+            textAnchor="middle"
+            className={t.dark ? 'fill-white' : 'fill-slate-900'}
+          >
+            <text x="60" y="60" fontSize="15" fontWeight="700">
+              {centerText}
+            </text>
+            <text
+              x="60"
+              y="73"
+              fontSize="7"
+              className={t.dark ? 'fill-white/60' : 'fill-slate-500'}
+            >
+              {centerLabel}
+            </text>
+          </g>
+        )}
+      </svg>
+      {showLegend && (
+        <ul className="min-w-[140px] flex-1 space-y-1">
+          {labels.map((l, i) => (
+            <li key={l}>
+              <button
+                type="button"
+                disabled={!onPick}
+                onClick={() => onPick?.(i)}
+                className={`flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-xs ${onPick ? t.hover : 'cursor-default'} ${FOCUS}`}
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: colors[i % colors.length] }}
+                />
+                <span className={`flex-1 truncate ${t.body}`}>{l}</span>
+                {showLabels && (
+                  <span className={t.muted}>{fmt(values[i])}</span>
+                )}
+                {showPercentage && (
+                  <span className={`w-9 text-right font-medium ${t.text}`}>
+                    {Math.round((values[i] / total) * 100)}%
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+const PlotChart: React.FC<{
+  sd: SeriesData;
+  kind: 'bar' | 'stacked' | 'line' | 'area';
+  colors: string[];
+  showLabels: boolean;
+  fmt: (v: number) => string;
+  H: number;
+  onPick?: (i: number) => void;
+  normalize?: boolean;
+  refLine?: number;
+}> = ({ sd, kind, colors, showLabels, fmt, H, onPick, normalize, refLine }) => {
+  const t = useT();
+  const W = 480,
+    L = 40,
+    R = 8,
+    T = 12,
+    B = 24;
+  const pw = W - L - R,
+    ph = H - T - B;
+  const ns = sd.names.length,
+    n = sd.labels.length;
+  const totals = sd.labels.map((_, i) =>
+    sd.values.reduce((s, v) => s + (v[i] || 0), 0)
+  );
+  const pct = kind === 'stacked' && !!normalize;
+  const dataMax =
+    kind === 'stacked'
+      ? Math.max(...totals, 0)
+      : Math.max(...sd.values.flat(), 0);
+  const max = pct ? 100 : niceMax(Math.max(dataMax, refLine ?? 0));
+  const y = (v: number) => T + ph - (v / max) * ph;
+  const step = pw / Math.max(n, 1);
+  const x = (i: number) => L + step * i + step / 2;
+  const every = n > 14 ? Math.ceil(n / 10) : 1;
+  const axis = t.dark ? 'fill-white/60' : 'fill-slate-500';
+  const grid = t.dark ? 'stroke-white/10' : 'stroke-slate-100';
+  const lbl = t.dark ? 'fill-white/80' : 'fill-slate-700';
+  const cur = onPick ? 'cursor-pointer' : '';
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="w-full"
+      role="img"
+      aria-label={`${kind} chart`}
+    >
+      {[0, 0.25, 0.5, 0.75, 1].map((g) => (
+        <g key={g}>
+          <line
+            x1={L}
+            x2={W - R}
+            y1={y(max * g)}
+            y2={y(max * g)}
+            className={grid}
+          />
+          <text
+            x={L - 5}
+            y={y(max * g) + 3}
+            textAnchor="end"
+            fontSize="9"
+            className={axis}
+          >
+            {compact(max * g, 1)}
+            {pct ? '%' : ''}
+          </text>
+        </g>
+      ))}
+
+      {refLine !== undefined && !pct && refLine <= max && (
+        <g>
+          <line
+            x1={L}
+            x2={W - R}
+            y1={y(refLine)}
+            y2={y(refLine)}
+            stroke="#dc2626"
+            strokeWidth="1.3"
+            strokeDasharray="5 4"
+          />
+          <text
+            x={W - R}
+            y={y(refLine) - 3}
+            textAnchor="end"
+            fontSize="9"
+            fill="#dc2626"
+          >
+            Target {compact(refLine, 1)}
+          </text>
+        </g>
+      )}
+
+      {kind === 'bar' &&
+        sd.labels.map((l, i) => {
+          const bw = Math.min(30, (step * 0.72) / ns);
+          return (
+            <g
+              key={l}
+              onClick={onPick ? () => onPick(i) : undefined}
+              role={onPick ? 'button' : undefined}
+              tabIndex={onPick ? 0 : undefined}
+              aria-label={onPick ? `Filter by ${l}` : undefined}
+              onKeyDown={
+                onPick
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onPick(i);
+                      }
+                    }
+                  : undefined
+              }
+              className={cur}
+            >
+              {sd.values.map((v, s) => (
+                <rect
+                  key={s}
+                  x={x(i) - (ns * bw) / 2 + s * bw}
+                  y={y(v[i])}
+                  width={Math.max(1, bw - 1)}
+                  height={Math.max(0, T + ph - y(v[i]))}
+                  rx="2.5"
+                  fill={colors[s % colors.length]}
+                >
+                  <title>{`${l}${ns > 1 ? ` · ${sd.names[s]}` : ''}: ${fmt(v[i])}`}</title>
+                </rect>
+              ))}
+              {showLabels && ns === 1 && n <= 12 && (
+                <text
+                  x={x(i)}
+                  y={y(sd.values[0][i]) - 4}
+                  textAnchor="middle"
+                  fontSize="9"
+                  className={lbl}
+                >
+                  {compact(sd.values[0][i], 1)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+      {kind === 'stacked' &&
+        sd.labels.map((l, i) => {
+          const bw = Math.min(34, step * 0.7);
+          let base = 0;
+          return (
+            <g
+              key={l}
+              onClick={onPick ? () => onPick(i) : undefined}
+              role={onPick ? 'button' : undefined}
+              tabIndex={onPick ? 0 : undefined}
+              aria-label={onPick ? `Filter by ${l}` : undefined}
+              onKeyDown={
+                onPick
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onPick(i);
+                      }
+                    }
+                  : undefined
+              }
+              className={cur}
+            >
+              {sd.values.map((v, s) => {
+                const sv = pct && totals[i] ? (v[i] / totals[i]) * 100 : v[i];
+                const top = y(base + sv);
+                const h = Math.max(0, y(base) - top);
+                base += sv;
+                return (
+                  <rect
+                    key={s}
+                    x={x(i) - bw / 2}
+                    y={top}
+                    width={bw}
+                    height={h}
+                    fill={colors[s % colors.length]}
+                    rx={s === ns - 1 ? 2.5 : 0}
+                  >
+                    <title>{`${l} · ${sd.names[s]}: ${fmt(v[i])}`}</title>
+                  </rect>
+                );
+              })}
+              {showLabels && !pct && n <= 12 && (
+                <text
+                  x={x(i)}
+                  y={y(totals[i]) - 4}
+                  textAnchor="middle"
+                  fontSize="9"
+                  className={lbl}
+                >
+                  {compact(totals[i], 1)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+      {(kind === 'line' || kind === 'area') &&
+        n > 0 &&
+        sd.values.map((v, s) => {
+          const pts = v.map((val, i) => `${x(i)},${y(val)}`).join(' ');
+          const c = colors[s % colors.length];
+          return (
+            <g key={s}>
+              {kind === 'area' && (
+                <polygon
+                  points={`${x(0)},${T + ph} ${pts} ${x(n - 1)},${T + ph}`}
+                  fill={c}
+                  opacity={ns > 1 ? 0.14 : 0.18}
+                />
+              )}
+              <polyline
+                points={pts}
+                fill="none"
+                stroke={c}
+                strokeWidth="2.2"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+              {n <= 24 &&
+                v.map((val, i) => (
+                  <circle
+                    key={i}
+                    cx={x(i)}
+                    cy={y(val)}
+                    r="2.8"
+                    fill={c}
+                    stroke={t.dark ? '#0f172a' : '#fff'}
+                    strokeWidth="1.2"
+                  >
+                    <title>{`${sd.labels[i]}${ns > 1 ? ` · ${sd.names[s]}` : ''}: ${fmt(val)}`}</title>
+                  </circle>
+                ))}
+              {showLabels &&
+                ns === 1 &&
+                n <= 12 &&
+                v.map((val, i) => (
+                  <text
+                    key={`l${i}`}
+                    x={x(i)}
+                    y={y(val) - 7}
+                    textAnchor="middle"
+                    fontSize="9"
+                    className={lbl}
+                  >
+                    {compact(val, 1)}
+                  </text>
+                ))}
+            </g>
+          );
+        })}
+
+      {sd.labels.map((l, i) =>
+        i % every === 0 ? (
+          <text
+            key={l}
+            x={x(i)}
+            y={H - 8}
+            textAnchor="middle"
+            fontSize="9"
+            className={axis}
+          >
+            {l.length > 9 ? `${l.slice(0, 8)}…` : l}
+          </text>
+        ) : null
+      )}
+    </svg>
+  );
+};
+
+const HBarChart: React.FC<{
+  labels: string[];
+  values: number[];
+  colors: string[];
+  showLabels: boolean;
+  fmt: (v: number) => string;
+  onPick?: (i: number) => void;
+}> = ({ labels, values, colors, showLabels, fmt, onPick }) => {
+  const t = useT();
+  const max = Math.max(...values, 1);
+  return (
+    <ul className="space-y-1.5">
+      {labels.map((l, i) => (
+        <li key={l}>
+          <button
+            type="button"
+            disabled={!onPick}
+            onClick={() => onPick?.(i)}
+            className={`grid w-full grid-cols-[minmax(70px,30%)_minmax(0,1fr)_auto] items-center gap-2 rounded px-1 py-0.5 text-left text-xs ${onPick ? t.hover : 'cursor-default'} ${FOCUS}`}
+          >
+            <span className={`truncate ${t.body}`} title={l}>
+              {l}
+            </span>
+            <span
+              className={`h-2 overflow-hidden rounded-full ${t.dark ? 'bg-white/10' : 'bg-slate-100'}`}
+            >
+              <span
+                className="block h-full rounded-full"
+                style={{
+                  width: `${(values[i] / max) * 100}%`,
+                  background: colors[i % colors.length],
+                }}
+              />
+            </span>
+            {showLabels ? (
+              <span className={`w-14 text-right font-medium ${t.text}`}>
+                {fmt(values[i])}
+              </span>
+            ) : (
+              <span />
+            )}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+};
+
+const ScatterPlot: React.FC<{
+  pts: { x: number; y: number; c: number }[];
+  cats: string[];
+  colors: string[];
+  xLabel: string;
+  yLabel: string;
+  H: number;
+}> = ({ pts, cats, colors, xLabel, yLabel, H }) => {
+  const t = useT();
+  const W = 480,
+    L = 44,
+    R = 10,
+    T = 10,
+    B = 30;
+  const pw = W - L - R,
+    ph = H - T - B;
+  const mx = niceMax(Math.max(...pts.map((p) => p.x), 0));
+  const my = niceMax(Math.max(...pts.map((p) => p.y), 0));
+  const axis = t.dark ? 'fill-white/60' : 'fill-slate-500';
+  const grid = t.dark ? 'stroke-white/10' : 'stroke-slate-100';
+  return (
+    <div>
+      {cats.length > 1 && <Legend names={cats} colors={colors} />}
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        role="img"
+        aria-label="Scatter plot"
+      >
+        {[0, 0.25, 0.5, 0.75, 1].map((g) => (
+          <g key={g}>
+            <line
+              x1={L}
+              x2={W - R}
+              y1={T + ph - g * ph}
+              y2={T + ph - g * ph}
+              className={grid}
+            />
+            <text
+              x={L - 5}
+              y={T + ph - g * ph + 3}
+              textAnchor="end"
+              fontSize="9"
+              className={axis}
+            >
+              {compact(my * g, 1)}
+            </text>
+            <text
+              x={L + g * pw}
+              y={H - 16}
+              textAnchor="middle"
+              fontSize="9"
+              className={axis}
+            >
+              {compact(mx * g, 1)}
+            </text>
+          </g>
+        ))}
+        {pts.map((p, i) => (
+          <circle
+            key={i}
+            cx={L + (p.x / mx) * pw}
+            cy={T + ph - (p.y / my) * ph}
+            r="3.2"
+            fill={colors[p.c % colors.length]}
+            opacity="0.65"
+          />
+        ))}
+        <text
+          x={L + pw / 2}
+          y={H - 3}
+          textAnchor="middle"
+          fontSize="9"
+          className={axis}
+        >
+          {xLabel}
+        </text>
+        <text
+          x="8"
+          y={T + ph / 2}
+          fontSize="9"
+          className={axis}
+          transform={`rotate(-90 8 ${T + ph / 2})`}
+          textAnchor="middle"
+        >
+          {yLabel}
+        </text>
+      </svg>
+    </div>
+  );
+};
+
+const Heatmap: React.FC<{
+  sd: SeriesData;
+  color: string;
+  showLabels: boolean;
+  fmt: (v: number) => string;
+}> = ({ sd, color, showLabels, fmt }) => {
+  const t = useT();
+  const max = Math.max(...sd.values.flat(), 1);
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-separate border-spacing-0.5 text-[11px]">
+        <thead>
+          <tr>
+            <th />
+            {sd.names.map((n) => (
+              <th
+                key={n}
+                className={`px-1 pb-1 text-center font-medium ${t.muted}`}
+              >
+                {n}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sd.labels.map((l, i) => (
+            <tr key={l}>
+              <th
+                className={`whitespace-nowrap pr-2 text-left font-medium ${t.body}`}
+              >
+                {l}
+              </th>
+              {sd.names.map((n, s) => {
+                const v = sd.values[s][i];
+                const a = v / max;
+                return (
+                  <td
+                    key={n}
+                    title={`${l} · ${n}: ${fmt(v)}`}
+                    className="rounded-md py-1.5 text-center"
+                    style={{
+                      background: hexA(color, 0.08 + a * 0.85),
+                      color: a > 0.5 ? '#fff' : undefined,
+                    }}
+                  >
+                    {showLabels ? compact(v, 1) : ''}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const Sparkline: React.FC<{ values: number[]; color: string }> = ({
+  values,
+  color,
+}) => {
+  if (values.length < 2) return null;
+  const W = 84,
+    H = 28;
+  const max = Math.max(...values),
+    min = Math.min(...values);
+  const span = max - min || 1;
+  const pts = values
+    .map(
+      (v, i) =>
+        `${(i / (values.length - 1)) * W},${H - 3 - ((v - min) / span) * (H - 6)}`
+    )
+    .join(' ');
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="h-7 w-[84px] shrink-0"
+      aria-hidden="true"
+    >
+      <polygon points={`0,${H} ${pts} ${W},${H}`} fill={color} opacity="0.15" />
+      <polyline
+        points={pts}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+};
+
+/* ==========================================================================
+ * Widget rendering
+ * ======================================================================== */
+const WidgetCard: React.FC<{
+  w: Widget;
+  data: DataCtx;
+  children: React.ReactNode;
+  hideHeader?: boolean;
+}> = ({ w, data, children, hideHeader }) => {
+  const t = useT();
+  return (
+    <div className={`rb-avoid h-full rounded-xl border p-3 ${t.card}`}>
+      {!hideHeader && (
+        <div className="mb-2 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className={`truncate text-[13px] font-semibold ${t.text}`}>
+              {w.title}
+            </h3>
+            {w.note && (
+              <p className={`mt-0.5 line-clamp-2 text-[11px] ${t.muted}`}>
+                {w.note}
+              </p>
+            )}
+            {data.drillCrumbs?.(w)}
+          </div>
+          {data.onExpand && (
+            <button
+              type="button"
+              aria-label={`Expand ${w.title}`}
+              title="Expand"
+              onClick={(e) => {
+                e.stopPropagation();
+                data.onExpand?.(w.id);
+              }}
+              className={`rb-noprint -mr-1 -mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 ${t.muted} ${t.hover} ${FOCUS}`}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+};
+
+const Empty: React.FC<{ text?: string }> = ({
+  text = 'No records match the current filters.',
+}) => {
+  const t = useT();
+  return <p className={`py-6 text-center text-xs ${t.muted}`}>{text}</p>;
+};
+
+const MaskCtx = createContext(false);
+
+const CellValue: React.FC<{
+  field: FieldDef;
+  value: Cell | undefined;
+  currency: string;
+}> = ({ field, value, currency }) => {
+  const t = useT();
+  const canView = useContext(MaskCtx);
+  if (field.sensitive && !canView) {
+    return (
+      <span
+        className={`select-none tracking-widest ${t.muted}`}
+        title="Hidden: sensitive field"
+      >
+        {MASK}
+      </span>
+    );
+  }
+  if (value === undefined || value === null || value === '')
+    return <span className={t.muted}>—</span>;
+  if (field.type === 'boolean')
+    return value === true ? (
+      <Badge value="Yes" tone="green" />
+    ) : value === false ? (
+      <Badge value="No" tone="slate" />
+    ) : (
+      <span className={t.muted}>—</span>
+    );
+  if (field.badge) return <Badge value={String(value)} />;
+  const sc = scaleOf(field);
+  if (field.type === 'currency') {
+    return (
+      <>
+        {new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: field.currency ?? currency,
+          minimumFractionDigits: sc,
+          maximumFractionDigits: sc,
+        }).format(Number(value))}
+      </>
+    );
+  }
+  if (isNumeric(field.type)) {
+    const s = Number(value).toLocaleString('en-US', {
+      minimumFractionDigits: sc,
+      maximumFractionDigits: sc,
+    });
+    return <>{field.unit ? `${s}${field.unit}` : s}</>;
+  }
+  if (field.type === 'date') return <>{fmtDate(String(value))}</>;
+  if (field.type === 'datetime') return <>{fmtDateTime(String(value))}</>;
+  return <>{String(value)}</>;
+};
+
+const PivotTable: React.FC<{
+  sd: SeriesData;
+  fmt: (v: number) => string;
+  color: string;
+  totals: boolean;
+  onPick?: (i: number) => void;
+}> = ({ sd, fmt, color, totals, onPick }) => {
+  const t = useT();
+  const max = Math.max(...sd.values.flat(), 1);
+  const th = `whitespace-nowrap px-2 py-1.5 font-medium ${t.muted}`;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className={t.inset}>
+            <th className={`${th} rounded-l-md text-left`}>
+              {sd.groupField.label}
+            </th>
+            {sd.names.map((n) => (
+              <th key={n} className={`${th} text-right`}>
+                {n}
+              </th>
+            ))}
+            {totals && (
+              <th className={`${th} rounded-r-md text-right ${t.text}`}>
+                Total
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {sd.labels.map((l, i) => (
+            <tr key={l} className={`border-b ${t.line} ${t.body}`}>
+              <th className="px-2 py-1.5 text-left font-medium">
+                <button
+                  type="button"
+                  disabled={!onPick}
+                  onClick={() => onPick?.(i)}
+                  className={`text-left ${onPick ? 'hover:underline' : 'cursor-default'} ${FOCUS}`}
+                >
+                  {l}
+                </button>
+              </th>
+              {sd.names.map((n, s) => (
+                <td
+                  key={n}
+                  className="px-2 py-1.5 text-right tabular-nums"
+                  style={{
+                    background: hexA(color, (sd.values[s][i] / max) * 0.28),
+                  }}
+                >
+                  {fmt(sd.values[s][i])}
+                </td>
+              ))}
+              {totals && (
+                <td
+                  className={`px-2 py-1.5 text-right font-semibold tabular-nums ${t.text}`}
+                >
+                  {fmt(sd.rowTotals[i])}
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+        {totals && (
+          <tfoot>
+            <tr className={`border-t font-semibold ${t.lineStrong} ${t.text}`}>
+              <th className="px-2 py-1.5 text-left">Total</th>
+              {sd.colTotals.map((v, s) => (
+                <td key={s} className="px-2 py-1.5 text-right tabular-nums">
+                  {fmt(v)}
+                </td>
+              ))}
+              {sd.names.length > 1 && (
+                <td className="px-2 py-1.5 text-right tabular-nums">
+                  {fmt(sd.grand)}
+                </td>
+              )}
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Result adapters: server QueryResult -> the shapes the views already render.
+ * In the FINAL report the views never see raw rows; they read aggregates.
+ * ======================================================================== */
+const labelOfKey = (fd: FieldDef | undefined, key: string, label?: string) =>
+  label ?? (key === '__others' ? 'Others' : key);
+
+function seriesFromGrouped(
+  res: GroupedResult,
+  gf: FieldDef,
+  bf?: FieldDef,
+  name = 'Count'
+): SeriesData {
+  const labels = res.groups.map((g) => labelOfKey(gf, g.key, g.label));
+  const keys = res.groups.map((g) => g.key);
+  const base = {
+    labels,
+    keys,
+    isDate: isDateType(gf.type),
+    groupField: gf,
+    hidden: res.groups.some((g) => g.key === '__others')
+      ? 0
+      : Math.max(0, res.totalGroups - res.groups.length),
+    shownGroups: res.groups.length,
+  };
+  if (!bf || !res.series?.length) {
+    const values = res.groups.map((g) => g.values[0] ?? 0);
+    return {
+      ...base,
+      hiddenSeries: 0,
+      names: [name],
+      values: [values],
+      rowTotals: values,
+      colTotals: [res.grand[0] ?? 0],
+      grand: res.grand[0] ?? 0,
+    };
+  }
+  const cell = (g: string, s: string) => res.cells?.[cellKeyOf(g, s)]?.[0] ?? 0;
+  return {
+    ...base,
+    hiddenSeries: res.hiddenSeries ?? 0,
+    breakField: bf,
+    names: res.series.map((s) => s.label ?? s.key),
+    values: res.series.map((s) => keys.map((k) => cell(k, s.key))),
+    rowTotals: res.groups.map((g) => g.values[0] ?? 0),
+    colTotals: res.series.map((s) =>
+      keys.reduce((a, k) => a + cell(k, s.key), 0)
+    ),
+    grand: res.grand[0] ?? 0,
+  };
+}
+
+/** Server aggregates -> inputs of the insight sentence generator. */
+const insightAggFrom = (
+  g: GroupedResult | undefined,
+  total: ScalarResult | undefined
+): InsightAgg => ({
+  total: total?.values[0] ?? 0,
+  prevTotal: total?.prev ? (total.prev[0] ?? 0) : null,
+  hasRows: (g?.groups.length ?? 0) > 0,
+  groups: (g?.groups ?? []).map((x) => ({
+    label: labelOfKey(undefined, x.key, x.label),
+    v: x.values[0] ?? 0,
+    n: x.n ?? 0,
+  })),
+});
+
+/** Tabular form of one widget's ACTUAL result (CSV export, expanded view). */
+function resultTable(
+  w: Widget,
+  results: Record<string, QueryResult>,
+  data: Pick<DataCtx, 'fieldMap' | 'currency' | 'autoBucket' | 'env'>
+): { headers: string[]; rows: (string | number)[][] } | null {
+  const fm = data.fieldMap;
+  const r = results[w.id];
+  if (w.kind === 'kpi') {
+    const s = r as ScalarResult | undefined;
+    if (!s) return null;
+    return {
+      headers: ['Metric', 'Value', 'Previous period'],
+      rows: [[w.title, s.values[0] ?? 0, s.prev?.[0] ?? '']],
+    };
+  }
+  if (w.kind === 'chart') {
+    if (r?.shape !== 'grouped') return null;
+    const sd = seriesFromGrouped(
+      r,
+      fm.get(w.groupBy) ??
+        ({
+          key: w.groupBy,
+          label: w.groupBy,
+          type: 'category',
+          group: '',
+        } as FieldDef),
+      w.breakBy ? fm.get(w.breakBy) : undefined,
+      w.title
+    );
+    return {
+      headers: [fm.get(w.groupBy)?.label ?? w.groupBy, ...sd.names],
+      rows: sd.labels.map((l, i) => [l, ...sd.values.map((v) => v[i] ?? 0)]),
+    };
+  }
+  if (w.kind === 'table') {
+    if (r?.shape !== 'records') return null;
+    const cols = r.columns
+      .map((c) => fm.get(c))
+      .filter((x): x is FieldDef => !!x);
+    return {
+      headers: cols.map((c) => c.label),
+      rows: r.rows.map((row) =>
+        cols.map((c) => (row[c.key] ?? '') as string | number)
+      ),
+    };
+  }
+  if (w.kind === 'insight') {
+    const lines = buildInsights(
+      [],
+      null,
+      w,
+      fm,
+      data.autoBucket,
+      data.currency,
+      insightAggFrom(
+        r as GroupedResult | undefined,
+        results[`${w.id}#total`] as ScalarResult | undefined
+      )
+    );
+    return { headers: ['Insight'], rows: lines.map((l) => [l]) };
+  }
+  if (w.kind === 'text') return null;
+  const d = getWidget(w.kind);
+  if (!d?.toTable) return null;
+  const rs: Record<string, QueryResult | undefined> = {};
+  for (const s of d.requirements(w as unknown as RegistryWidget, {
+    source: data.env.source,
+    fieldMap: data.fieldMap as unknown as Map<string, FieldInfo>,
+    period: data.env.period,
+    autoBucket: data.autoBucket,
+  }))
+    rs[s.suffix ?? ''] = results[resultKey(w.id, s.suffix)];
+  return d.toTable(w as unknown as RegistryWidget, rs, data.env);
+}
+
+/** What a widget shows while its result is missing in the final report (never falls back to preview rows). */
+const ResultGap: React.FC<{ w: Widget; data: DataCtx }> = ({ w, data }) => {
+  const t = useT();
+  const err = data.failed?.[w.id];
+  return (
+    <WidgetCard w={w} data={data}>
+      <div
+        role={err ? 'alert' : 'status'}
+        className={`flex h-full min-h-[96px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed p-3 text-center text-xs ${t.lineStrong} ${err ? 'text-red-600' : t.muted}`}
+      >
+        {err ? (
+          <>
+            <AlertTriangle className="h-4 w-4" />
+            <span className="font-semibold">Could not be calculated</span>
+            <span>{err}</span>
+          </>
+        ) : (
+          <span>Waiting for report data…</span>
+        )}
+      </div>
+    </WidgetCard>
+  );
+};
+
+const KpiView: React.FC<{ w: KpiWidget; data: DataCtx }> = ({ w, data }) => {
+  const t = useT();
+  const rows = useMemo(
+    () => applyFilters(data.rows, w.filters, data.fieldMap),
+    [data.rows, w.filters, data.fieldMap]
+  );
+  const field = w.field ? data.fieldMap.get(w.field) : undefined;
+  const mode = w.format ?? 'compact';
+  const res =
+    data.mode === 'final'
+      ? (data.results?.[w.id] as ScalarResult | undefined)
+      : undefined;
+  const value = res
+    ? (res.values[0] ?? 0)
+    : aggregate(rows, w.agg, w.field, data.fieldMap);
+  const pointDiff =
+    w.agg === 'rate' || (w.agg === 'metric' && field?.metric?.unit !== 'ratio');
+  const spark = useMemo(() => {
+    const df = data.fieldMap.get(data.source.dateField);
+    if (res) return res.spark ?? [];
+    if (!w.showSparkline || !df) return [];
+    return groupRows(rows, df, data.autoBucket)
+      .slice(-24)
+      .map((g) => aggregate(g.rows, w.agg, w.field, data.fieldMap));
+  }, [
+    rows,
+    res,
+    w.showSparkline,
+    w.agg,
+    w.field,
+    data.fieldMap,
+    data.source.dateField,
+    data.autoBucket,
+  ]);
+
+  let delta: number | null = null;
+  if (res && w.showTrend && data.compare && res.prev) {
+    const pv = res.prev[0] ?? 0;
+    delta = pointDiff
+      ? value - pv
+      : pv === 0
+        ? null
+        : ((value - pv) / Math.abs(pv)) * 100;
+  } else if (!res && w.showTrend && data.compare && data.prevRows) {
+    const pv = aggregate(
+      applyFilters(data.prevRows, w.filters, data.fieldMap),
+      w.agg,
+      w.field,
+      data.fieldMap
+    );
+    delta = pointDiff
+      ? data.prevRows.length
+        ? value - pv
+        : null
+      : pv === 0
+        ? null
+        : ((value - pv) / Math.abs(pv)) * 100;
+  }
+  const good =
+    delta === null || delta === 0 ? null : delta < 0 === w.lowerIsBetter;
+  const tone = TONES[w.tone];
+  const Icon = tone.icon;
+  const pct = w.target ? Math.min(100, (value / w.target) * 100) : null;
+  const onTarget = w.target
+    ? w.lowerIsBetter
+      ? value <= w.target
+      : value >= w.target
+    : null;
+  const withinWarn =
+    w.warn === undefined
+      ? null
+      : w.lowerIsBetter
+        ? value <= w.warn
+        : value >= w.warn;
+  // Status is conveyed by text as well as colour.
+  const rag: [string, string] = onTarget
+    ? ['#059669', 'On target']
+    : withinWarn === null
+      ? ['#d97706', 'Off target']
+      : withinWarn
+        ? ['#d97706', 'Warning']
+        : ['#dc2626', 'Breach'];
+  return (
+    <div
+      className={`rb-avoid h-full rounded-xl border p-3 ${tone.card[t.dark ? 1 : 0]}`}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg shadow-sm ${tone.chip[t.dark ? 1 : 0]}`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+        <span
+          className={`min-w-0 flex-1 truncate text-xs font-medium ${t.body}`}
+        >
+          {w.title}
+        </span>
+        {data.onExpand && (
+          <button
+            type="button"
+            aria-label={`Expand ${w.title}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              data.onExpand?.(w.id);
+            }}
+            className={`rb-noprint grid h-6 w-6 place-items-center rounded-md opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 ${t.muted} ${FOCUS}`}
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      <div className="mt-2 flex items-end justify-between gap-2">
+        <div className="min-w-0">
+          <div
+            className={`truncate text-2xl font-bold leading-none tracking-tight tabular-nums ${t.text}`}
+            title={fmtMeasure(value, w.agg, field, data.currency, 'full')}
+          >
+            {fmtMeasure(value, w.agg, field, data.currency, mode)}
+          </div>
+          {w.showTrend && data.compare && (
+            <div className={`mt-1.5 text-[11px] ${t.muted}`}>
+              {delta === null ? (
+                'No comparison'
+              ) : (
+                <>
+                  <span
+                    className={`font-semibold ${good === null ? '' : good ? 'text-emerald-600' : 'text-red-600'}`}
+                  >
+                    {delta > 0 ? '▲' : delta < 0 ? '▼' : '→'}{' '}
+                    {Math.abs(delta).toFixed(pointDiff ? 1 : 0)}
+                    {pointDiff ? ' pts' : '%'}
+                  </span>{' '}
+                  vs. prior
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        {spark.length > 1 && <Sparkline values={spark} color={tone.hex} />}
+      </div>
+      {pct !== null && w.target && (
+        <div className="mt-2">
+          <div
+            className={`h-1.5 overflow-hidden rounded-full ${t.dark ? 'bg-white/10' : 'bg-white'}`}
+          >
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${pct}%`,
+                background: rag[0],
+              }}
+            />
+          </div>
+          <div className={`mt-1 text-[11px] ${t.muted}`}>
+            {rag[1]}: {fmtMeasure(w.target, w.agg, field, data.currency, mode)}
+          </div>
+        </div>
+      )}
+      {w.note && (
+        <p className={`mt-1.5 line-clamp-2 text-[11px] ${t.muted}`}>{w.note}</p>
+      )}
+    </div>
+  );
+};
+
+const ChartView: React.FC<{ w: ChartWidget; data: DataCtx }> = ({
+  w,
+  data,
+}) => {
+  const t = useT();
+  const res = data.mode === 'final' ? data.results?.[w.id] : undefined;
+  // The widget that emitted the cross-filter keeps its full data (it filters the others, not itself).
+  const isSource =
+    !!data.xf && w.chartType !== 'scatter' && w.groupBy === data.xf.field;
+  const baseRows = isSource ? data.fullRows : data.rows;
+  const rows = useMemo(
+    () => applyFilters(baseRows, w.filters, data.fieldMap),
+    [baseRows, w.filters, data.fieldMap]
+  );
+  const measure = w.field ? data.fieldMap.get(w.field) : undefined;
+  const fmt = (v: number) => fmtMeasure(v, w.agg, measure, data.currency);
+  const single =
+    w.chartType === 'doughnut' ||
+    w.chartType === 'pie' ||
+    w.chartType === 'hbar';
+  const sd = useMemo(
+    () =>
+      w.chartType === 'scatter'
+        ? null
+        : res && res.shape === 'grouped'
+          ? seriesFromGrouped(
+              res,
+              data.fieldMap.get(w.groupBy) ??
+                ({
+                  key: w.groupBy,
+                  label: w.groupBy,
+                  type: 'category',
+                  group: '',
+                } as FieldDef),
+              single || !w.breakBy ? undefined : data.fieldMap.get(w.breakBy),
+              w.agg === 'count' || !w.field
+                ? 'Count'
+                : `${aggLabel(w.agg)} of ${(data.fieldMap.get(w.field)?.label ?? w.field).toLowerCase()}`
+            )
+          : buildSeries(
+              rows,
+              {
+                groupBy: w.groupBy,
+                breakBy: single ? undefined : w.breakBy,
+                bucket: w.bucket,
+                topN: w.topN,
+                agg: w.agg,
+                field: w.field,
+                sort: w.sort,
+                others: w.others,
+              },
+              data.fieldMap,
+              data.autoBucket
+            ),
+    [
+      rows,
+      res,
+      w.chartType,
+      w.groupBy,
+      w.breakBy,
+      w.bucket,
+      w.topN,
+      w.agg,
+      w.field,
+      w.sort,
+      w.others,
+      single,
+      data.fieldMap,
+      data.autoBucket,
+    ]
+  );
+  const scatter = useMemo(() => {
+    if (w.chartType !== 'scatter' || !w.xField || !w.field) return null;
+    const bf = w.breakBy ? data.fieldMap.get(w.breakBy) : undefined;
+    if (res && res.shape === 'points') {
+      const cats = res.categories.length ? res.categories : ['All'];
+      return {
+        pts: res.points.map((q) => ({
+          x: q.x,
+          y: q.y,
+          c: Math.max(0, q.c ? cats.indexOf(q.c) : 0),
+        })),
+        cats,
+        bf,
+        sampled: res.sampled,
+      };
+    }
+    const cats = bf
+      ? groupRows(rows, bf, 'month')
+          .slice(0, 6)
+          .map((g) => g.key)
+      : ['All'];
+    const stride = Math.max(1, Math.ceil(rows.length / 400));
+    const pts = rows
+      .filter((_, i) => i % stride === 0)
+      .map((r) => ({
+        x: Number(r[w.xField!]),
+        y: Number(r[w.field!]),
+        c: bf ? Math.max(0, cats.indexOf(cellKey(bf, r))) : 0,
+      }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    return { pts, cats, bf, sampled: stride > 1 ? stride : 0 };
+  }, [rows, res, w.chartType, w.xField, w.field, w.breakBy, data.fieldMap]);
+
+  const H = H_PX[w.height];
+  const pick =
+    data.onPick && sd && !sd.isDate
+      ? (i: number) => {
+          const k = sd.keys[i];
+          if (k === '__others') return;
+          if (data.drillClick?.(w, k)) return;
+          data.onPick!(sd.groupField.key, k);
+        }
+      : undefined;
+  const total = sd?.grand ?? 0;
+  const multi = !!sd && sd.names.length > 1;
+  // Priority / status labels keep their semantic colours (Critical red … Low green) everywhere.
+  const labelColors = sd
+    ? sd.labels.map((l, i) => colorFor(sd.groupField, l, i, data.colors))
+    : data.colors;
+  const nameColors = sd
+    ? sd.names.map((n, i) => colorFor(sd.breakField, n, i, data.colors))
+    : data.colors;
+
+  const notes: string[] = [];
+  if (sd && sd.hidden > 0)
+    notes.push(
+      `Showing ${sd.shownGroups} of ${sd.shownGroups + sd.hidden} groups; totals cover the groups shown.`
+    );
+  if (sd && sd.hiddenSeries > 0)
+    notes.push(`${sd.hiddenSeries} smaller series not shown.`);
+  if (scatter && scatter.sampled)
+    notes.push(`Sampled: 1 in ${scatter.sampled} records plotted.`);
+  if (isSource && data.xf)
+    notes.push(`Filtering other widgets by ${data.xf.value}.`);
+
+  let body: React.ReactNode;
+  if (w.chartType === 'scatter') {
+    body = !scatter ? (
+      <Empty text="Choose numeric X and Y fields in the inspector." />
+    ) : scatter.pts.length === 0 ? (
+      <Empty />
+    ) : (
+      <ScatterPlot
+        pts={scatter.pts}
+        cats={scatter.cats}
+        colors={scatter.cats.map((c, i) =>
+          colorFor(scatter.bf, c, i, data.colors)
+        )}
+        xLabel={data.fieldMap.get(w.xField!)?.label ?? 'X'}
+        yLabel={measure?.label ?? 'Y'}
+        H={H}
+      />
+    );
+  } else if (!sd || sd.labels.length === 0 || sd.names.length === 0) {
+    body = <Empty />;
+  } else if (w.chartType === 'doughnut' || w.chartType === 'pie') {
+    body = (
+      <DonutChart
+        labels={sd.labels}
+        values={sd.values[0]}
+        colors={labelColors}
+        pie={w.chartType === 'pie'}
+        showLegend={w.showLegend}
+        showLabels={w.showLabels}
+        showPercentage={w.showPercentage && ADDITIVE.includes(w.agg)}
+        centerText={fmt(total)}
+        centerLabel={sd.hidden > 0 ? 'Shown' : 'Total'}
+        fmt={fmt}
+        onPick={pick}
+      />
+    );
+  } else if (w.chartType === 'hbar') {
+    body = (
+      <HBarChart
+        labels={sd.labels}
+        values={sd.values[0]}
+        colors={labelColors}
+        showLabels={w.showLabels}
+        fmt={fmt}
+        onPick={pick}
+      />
+    );
+  } else if (w.chartType === 'heatmap') {
+    body = !multi ? (
+      <Empty text="Choose a 'Break down by' field to build the heatmap." />
+    ) : (
+      <Heatmap
+        sd={sd}
+        color={data.colors[0]}
+        showLabels={w.showLabels}
+        fmt={fmt}
+      />
+    );
+  } else if (w.chartType === 'pivot') {
+    body = (
+      <PivotTable
+        sd={sd}
+        fmt={(v) => fmtMeasure(v, w.agg, measure, data.currency, 'full')}
+        color={data.colors[0]}
+        totals={!!w.showTotals}
+        onPick={pick}
+      />
+    );
+  } else {
+    body = (
+      <>
+        {multi && w.showLegend && (
+          <Legend names={sd.names} colors={nameColors} />
+        )}
+        <PlotChart
+          sd={sd}
+          kind={w.chartType}
+          colors={nameColors}
+          showLabels={w.showLabels}
+          fmt={fmt}
+          H={H}
+          onPick={pick}
+          normalize={w.normalize}
+          refLine={w.refLine}
+        />
+      </>
+    );
+  }
+  return (
+    <WidgetCard w={w} data={data}>
+      {body}
+      {notes.length > 0 && (
+        <p className={`mt-2 text-[11px] ${t.muted}`}>{notes.join(' ')}</p>
+      )}
+    </WidgetCard>
+  );
+};
+
+const TableView: React.FC<{ w: TableWidget; data: DataCtx }> = ({
+  w,
+  data,
+}) => {
+  const t = useT();
+  const res =
+    data.mode === 'final'
+      ? (data.results?.[w.id] as RecordsResult | undefined)
+      : undefined;
+  const rows = useMemo(
+    () => applyFilters(data.rows, w.filters, data.fieldMap),
+    [data.rows, w.filters, data.fieldMap]
+  );
+  const cols = w.columns
+    .map((k) => data.fieldMap.get(k))
+    .filter((x): x is FieldDef => !!x);
+  const sortField = w.sortBy ? data.fieldMap.get(w.sortBy) : undefined;
+  const shown = useMemo(() => {
+    if (res) return res.rows; // already sorted + limited by the server
+    let s = rows;
+    if (sortField) {
+      const dir = w.sortDir === 'asc' ? 1 : -1;
+      s = [...rows].sort(
+        (a, b) =>
+          compareCells(sortField, a[sortField.key], b[sortField.key]) * dir
+      );
+    }
+    return s.slice(0, w.limit);
+  }, [rows, res, sortField, w.sortDir, w.limit]);
+  const maxes = useMemo(() => {
+    const m: Record<string, number> = {};
+    cols.forEach((c) => {
+      if (isNumeric(c.type))
+        m[c.key] = Math.max(
+          ...shown.map((r) => Math.abs(Number(r[c.key])) || 0),
+          1
+        );
+    });
+    return m;
+  }, [cols, shown]);
+  return (
+    <WidgetCard w={w} data={data}>
+      {shown.length === 0 ? (
+        <Empty />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className={`${t.inset} ${t.muted}`}>
+                <th className="rounded-l-md px-2 py-1.5 font-medium">#</th>
+                {cols.map((c, i) => (
+                  <th
+                    key={c.key}
+                    className={`whitespace-nowrap px-2 py-1.5 font-medium ${isNumeric(c.type) ? 'text-right' : ''} ${i === cols.length - 1 ? 'rounded-r-md' : ''}`}
+                  >
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((r, i) => (
+                <tr
+                  key={i}
+                  className={`border-b last:border-b-0 ${t.line} ${t.body}`}
+                >
+                  <td className={`px-2 py-1.5 ${t.muted}`}>{i + 1}</td>
+                  {cols.map((c) => {
+                    const pct =
+                      w.dataBars && maxes[c.key]
+                        ? ((Math.abs(Number(r[c.key])) || 0) / maxes[c.key]) *
+                          100
+                        : 0;
+                    return (
+                      <td
+                        key={c.key}
+                        className={`max-w-[200px] truncate px-2 py-1.5 ${isNumeric(c.type) ? 'text-right tabular-nums' : ''}`}
+                        style={
+                          pct
+                            ? {
+                                background: `linear-gradient(90deg, ${hexA(data.colors[0], 0.16)} ${pct}%, transparent ${pct}%)`,
+                              }
+                            : undefined
+                        }
+                      >
+                        <CellValue
+                          field={c}
+                          value={r[c.key]}
+                          currency={data.currency}
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+            {w.showTotals && (
+              <tfoot>
+                <tr
+                  className={`border-t font-semibold ${t.lineStrong} ${t.text}`}
+                >
+                  <td className="px-2 py-1.5" />
+                  {cols.map((c, i) => (
+                    <td
+                      key={c.key}
+                      className="px-2 py-1.5 text-right tabular-nums"
+                    >
+                      {i === 0 && !isNumeric(c.type)
+                        ? 'Total'
+                        : isNumeric(c.type)
+                          ? fmtMeasure(
+                              aggregate(shown, 'sum', c.key, data.fieldMap),
+                              'sum',
+                              c,
+                              data.currency,
+                              'full'
+                            )
+                          : ''}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+    </WidgetCard>
+  );
+};
+
+const fillVars = (text: string, vars: Record<string, string>) =>
+  text.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
+
+const TextView: React.FC<{ w: TextWidget; data: DataCtx }> = ({ w, data }) => {
+  const t = useT();
+  const text = fillVars(w.text, data.vars);
+  if (w.variant === 'heading')
+    return (
+      <h2
+        className={`rb-avoid px-1 pt-1 text-lg font-bold tracking-tight ${t.text}`}
+      >
+        {text}
+      </h2>
+    );
+  if (w.variant === 'callout') {
+    return (
+      <div
+        className={`rb-avoid flex gap-2.5 rounded-xl border-l-4 border-blue-500 px-3.5 py-3 text-[13px] leading-relaxed ${t.dark ? 'bg-blue-500/10 text-white/90' : 'bg-blue-50 text-slate-800'}`}
+      >
+        <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+        <p>{text}</p>
+      </div>
+    );
+  }
+  return (
+    <p className={`rb-avoid px-1 text-[13px] leading-relaxed ${t.body}`}>
+      {text}
+    </p>
+  );
+};
+
+const InsightView: React.FC<{ w: InsightWidget; data: DataCtx }> = ({
+  w,
+  data,
+}) => {
+  const t = useT();
+  const items = useMemo(() => {
+    if (data.mode === 'final')
+      return buildInsights(
+        [],
+        null,
+        w,
+        data.fieldMap,
+        data.autoBucket,
+        data.currency,
+        insightAggFrom(
+          data.results?.[w.id] as GroupedResult | undefined,
+          data.results?.[`${w.id}#total`] as ScalarResult | undefined
+        )
+      );
+    const rows = applyFilters(data.rows, w.filters, data.fieldMap);
+    const prev =
+      data.compare && data.prevRows
+        ? applyFilters(data.prevRows, w.filters, data.fieldMap)
+        : null;
+    return buildInsights(
+      rows,
+      prev,
+      w,
+      data.fieldMap,
+      data.autoBucket,
+      data.currency
+    );
+  }, [data, w]);
+  return (
+    <WidgetCard w={w} data={data}>
+      <ul className="space-y-2">
+        {items.map((s, i) => (
+          <li key={i} className={`flex gap-2 text-xs leading-snug ${t.body}`}>
+            <span
+              className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: data.colors[i % data.colors.length] }}
+            />
+            {s}
+          </li>
+        ))}
+      </ul>
+    </WidgetCard>
+  );
+};
+
+/**
+ * Renders a registry widget. It never touches raw rows: it asks its descriptor which queries it needs and renders
+ * their results. PREVIEW: queries run locally over the sample. FINAL: results come from the backend run.
+ */
+const RegistryWidgetHost: React.FC<{ w: ExtWidget; data: DataCtx }> = ({
+  w,
+  data,
+}) => {
+  const d = getWidget(w.kind);
+  const specs = useMemo(
+    () =>
+      d
+        ? d.requirements(w as unknown as RegistryWidget, {
+            source: data.source as unknown as SourceInfo,
+            fieldMap: data.fieldMap as unknown as Map<string, FieldInfo>,
+            period: data.env.period,
+            autoBucket: data.autoBucket,
+          })
+        : [],
+    [d, w, data.source, data.fieldMap, data.env.period, data.autoBucket]
+  );
+  const results = useMemo(() => {
+    const out: Record<string, QueryResult | undefined> = {};
+    for (const s of specs)
+      out[s.suffix ?? ''] =
+        data.mode === 'final'
+          ? data.results?.[resultKey(w.id, s.suffix)]
+          : data.previewExec?.(s, w);
+    return out;
+  }, [specs, data.mode, data.results, data.previewExec, data.previewTick, w]);
+  if (!d?.render)
+    return (
+      <ResultGap
+        w={w}
+        data={{
+          ...data,
+          failed: { [w.id]: `Widget type "${w.kind}" is not installed.` },
+        }}
+      />
+    );
+  const err =
+    data.failed?.[w.id] ??
+    specs.map((s) => data.failed?.[resultKey(w.id, s.suffix)]).find(Boolean);
+  const ready = specs.every((s) => results[s.suffix ?? '']);
+  const status: ResultStatus = err ? 'error' : ready ? 'ok' : 'loading';
+  const Render = d.render;
+  return (
+    <WidgetCard w={w} data={data}>
+      <Render
+        widget={w as unknown as RegistryWidget}
+        results={results}
+        status={status}
+        error={err}
+        env={data.env}
+      />
+    </WidgetCard>
+  );
+};
+
+/** Original kinds that are rendered from a single result keyed by widget id. */
+const RESULT_BACKED = new Set(['kpi', 'chart', 'table', 'insight']);
+
+const WidgetView: React.FC<{ widget: Widget; data: DataCtx }> = ({
+  widget,
+  data,
+}) => {
+  // Structural guarantee: the ACTUAL report can never be drawn from the preview sample.
+  if (
+    data.mode === 'final' &&
+    RESULT_BACKED.has(widget.kind) &&
+    !data.results?.[widget.id]
+  )
+    return <ResultGap w={widget} data={data} />;
+  switch (widget.kind) {
+    case 'kpi':
+      return <KpiView w={widget} data={data} />;
+    case 'chart':
+      return <ChartView w={widget} data={data} />;
+    case 'table':
+      return <TableView w={widget} data={data} />;
+    case 'text':
+      return <TextView w={widget} data={data} />;
+    case 'insight':
+      return <InsightView w={widget} data={data} />;
+    default:
+      return <RegistryWidgetHost w={widget} data={data} />;
+  }
+};
+
+/* ==========================================================================
+ * Widget library
+ * ======================================================================== */
+const WIDGET_LIBRARY: {
+  id: string;
+  label: string;
+  hint: string;
+  icon: React.ComponentType<{ className?: string }>;
+}[] = [
+  {
+    id: 'kpi',
+    label: 'KPI card',
+    hint: 'Metric with trend and target',
+    icon: Hash,
+  },
+  {
+    id: 'insight',
+    label: 'Key insights',
+    hint: 'Auto-written findings',
+    icon: Lightbulb,
+  },
+  {
+    id: 'doughnut',
+    label: 'Doughnut',
+    hint: 'Share of total',
+    icon: CircleDot,
+  },
+  { id: 'pie', label: 'Pie', hint: 'Share of total', icon: PieChart },
+  {
+    id: 'bar',
+    label: 'Column',
+    hint: 'Compare categories or time',
+    icon: BarChart3,
+  },
+  {
+    id: 'stacked',
+    label: 'Stacked column',
+    hint: 'Composition over time',
+    icon: Layers,
+  },
+  {
+    id: 'hbar',
+    label: 'Bar ranking',
+    hint: 'Ranked categories',
+    icon: BarChartHorizontal,
+  },
+  { id: 'line', label: 'Line', hint: 'Trends over time', icon: LineIcon },
+  { id: 'area', label: 'Area', hint: 'Volume over time', icon: AreaChart },
+  {
+    id: 'scatter',
+    label: 'Scatter',
+    hint: 'Relationship of two measures',
+    icon: ScatterChart,
+  },
+  {
+    id: 'heatmap',
+    label: 'Heatmap',
+    hint: 'Category × category matrix',
+    icon: Grid3x3,
+  },
+  {
+    id: 'pivot',
+    label: 'Pivot table',
+    hint: 'Exact figures with totals',
+    icon: LayoutGrid,
+  },
+  { id: 'table', label: 'Table', hint: 'Ranked records', icon: Table2 },
+  {
+    id: 'text',
+    label: 'Commentary',
+    hint: 'Heading, text or callout',
+    icon: Type,
+  },
+];
+
+const LEGACY_KINDS = new Set(['kpi', 'chart', 'table', 'text', 'insight']);
+/** Registry widgets grouped by category (Executive, Fraud & risk, Analytical...). */
+const RegistryPalette: React.FC<{
+  capabilities: ReportDataProvider['capabilities'];
+  onAdd: (kind: string) => void;
+  compact?: boolean;
+}> = ({ capabilities, onAdd }) => {
+  const t = useT();
+  const groups = (Object.keys(CATEGORY_LABEL) as WidgetCategory[])
+    .map((c) => ({
+      c,
+      items: listWidgets({ category: c, capabilities }).filter(
+        (d) => !LEGACY_KINDS.has(d.kind) && d.maturity !== 'planned'
+      ),
+    }))
+    .filter((g) => g.items.length);
+  return (
+    <div className="space-y-3">
+      {groups.map((g) => (
+        <section key={g.c} aria-label={CATEGORY_LABEL[g.c]}>
+          <h3
+            className={`px-1 pb-1 text-[10px] font-bold uppercase tracking-wider ${t.muted}`}
+          >
+            {CATEGORY_LABEL[g.c]}
+          </h3>
+          <div className="grid grid-cols-2 gap-1.5">
+            {g.items.map((d) => (
+              <button
+                key={d.kind}
+                type="button"
+                onClick={() => onAdd(d.kind)}
+                title={d.hint}
+                className={`flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2.5 text-center text-[11px] font-medium transition-colors ${t.btn} ${FOCUS}`}
+              >
+                <d.icon className="h-[18px] w-[18px] text-blue-600" />
+                {d.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+};
+
+const WidgetMenu: React.FC<{
+  onPick: (id: string) => void;
+  close: () => void;
+}> = ({ onPick, close }) => (
+  <div className="grid max-h-[60vh] grid-cols-1 gap-0.5 overflow-y-auto">
+    {WIDGET_LIBRARY.map((x) => (
+      <MenuItem
+        key={x.id}
+        icon={<x.icon className="h-4 w-4" />}
+        hint={x.hint}
+        onClick={() => {
+          onPick(x.id);
+          close();
+        }}
+      >
+        {x.label}
+      </MenuItem>
+    ))}
+    {listWidgets()
+      .filter((d) => !LEGACY_KINDS.has(d.kind) && d.maturity !== 'planned')
+      .map((d) => (
+        <MenuItem
+          key={d.kind}
+          icon={<d.icon className="h-4 w-4" />}
+          hint={d.hint}
+          onClick={() => {
+            onPick(`ext:${d.kind}`);
+            close();
+          }}
+        >
+          {d.label}
+        </MenuItem>
+      ))}
+  </div>
+);
+
+/* ==========================================================================
+ * Canvas
+ * ======================================================================== */
+function useElementWidth<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [w, setW] = useState(1000);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setW(el.clientWidth);
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w] as const;
+}
+const spanFor = (width: number, span: Span) =>
+  width < 420 ? 12 : width < 640 ? (span <= 4 ? 6 : 12) : span;
+
+const Canvas: React.FC<{
+  widgets: Widget[];
+  data: DataCtx;
+  selectedId: string | null;
+  readOnly: boolean;
+  onSelect: (id: string | null) => void;
+  onMove: (id: string, dir: -1 | 1) => void;
+  onReorder: (fromId: string, toId: string) => void;
+  onDuplicate: (id: string) => void;
+  onRemove: (id: string) => void;
+  onAdd?: (typeId: string) => void;
+}> = ({
+  widgets,
+  data,
+  selectedId,
+  readOnly,
+  onSelect,
+  onMove,
+  onReorder,
+  onDuplicate,
+  onRemove,
+  onAdd,
+}) => {
+  const t = useT();
+  const [ref, width] = useElementWidth<HTMLDivElement>();
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const tb = `grid h-6 w-6 place-items-center rounded-md disabled:opacity-30 ${t.hover} ${t.muted} ${FOCUS}`;
+
+  return (
+    <div
+      ref={ref}
+      className="grid grid-cols-12 gap-3"
+      onClick={() => !readOnly && onSelect(null)}
+    >
+      {widgets.length === 0 && (
+        <div
+          className={`col-span-12 rounded-xl border-2 border-dashed px-6 py-12 text-center ${t.lineStrong}`}
+        >
+          <Sparkles className="mx-auto mb-2 h-6 w-6 text-blue-500" />
+          <p className={`text-[13px] font-medium ${t.text}`}>
+            This report is empty
+          </p>
+          <p className={`mt-0.5 text-xs ${t.muted}`}>
+            Add a widget below, or use Auto-build in the toolbar.
+          </p>
+        </div>
+      )}
+      {widgets.map((w, idx) => {
+        const selected = !readOnly && selectedId === w.id;
+        const sp = spanFor(width, w.span);
+        return (
+          <div
+            key={w.id}
+            style={{ gridColumn: `span ${sp} / span ${sp}` }}
+            className={`group relative rounded-xl transition-shadow ${w.pageBreak ? 'rb-pb' : ''} ${selected ? 'ring-2 ring-blue-500 ring-offset-2' : readOnly ? '' : 'hover:ring-1 hover:ring-blue-300'} ${overId === w.id && dragId !== w.id ? 'ring-2 ring-blue-400' : ''} ${t.dark ? 'ring-offset-slate-900' : ''}`}
+            draggable={!readOnly}
+            onDragStart={() => setDragId(w.id)}
+            onDragEnd={() => {
+              setDragId(null);
+              setOverId(null);
+            }}
+            onDragOver={(e) => {
+              if (dragId && dragId !== w.id) {
+                e.preventDefault();
+                setOverId(w.id);
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragId && dragId !== w.id) onReorder(dragId, w.id);
+              setDragId(null);
+              setOverId(null);
+            }}
+            onClick={(e) => {
+              if (readOnly) return;
+              e.stopPropagation();
+              onSelect(w.id);
+            }}
+            onKeyDown={(e) => {
+              if (
+                !readOnly &&
+                (e.key === 'Enter' || e.key === ' ') &&
+                e.target === e.currentTarget
+              ) {
+                e.preventDefault();
+                onSelect(w.id);
+              }
+            }}
+            tabIndex={readOnly ? -1 : 0}
+            role={readOnly ? undefined : 'group'}
+            aria-roledescription={readOnly ? undefined : 'selectable widget'}
+            aria-label={
+              readOnly ? undefined : `${w.title}. Press Enter to select.`
+            }
+            aria-current={readOnly ? undefined : selected ? 'true' : undefined}
+          >
+            <WidgetView widget={w} data={data} />
+            {selected && (
+              <div
+                className={`rb-noprint absolute -top-3 right-2 z-10 flex items-center gap-0.5 rounded-lg border p-0.5 shadow-md ${t.card}`}
+              >
+                <span
+                  className={`grid h-6 w-6 cursor-grab place-items-center ${t.muted}`}
+                  aria-hidden="true"
+                >
+                  <GripVertical className="h-3.5 w-3.5" />
+                </span>
+                <button
+                  type="button"
+                  aria-label="Move earlier"
+                  title="Move earlier"
+                  disabled={idx === 0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMove(w.id, -1);
+                  }}
+                  className={tb}
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Move later"
+                  title="Move later"
+                  disabled={idx === widgets.length - 1}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMove(w.id, 1);
+                  }}
+                  className={tb}
+                >
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Duplicate widget"
+                  title="Duplicate (Ctrl+D)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDuplicate(w.id);
+                  }}
+                  className={tb}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Remove widget"
+                  title="Remove (Del)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemove(w.id);
+                  }}
+                  className={`${tb} !text-red-600`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {!readOnly && onAdd && (
+        <div
+          className="rb-noprint col-span-12"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Popover
+            width={300}
+            trigger={({ toggle, ref: r }) => (
+              <button
+                ref={r}
+                type="button"
+                onClick={toggle}
+                className={`flex h-10 w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed text-xs font-medium transition-colors ${t.lineStrong} ${t.muted} hover:border-blue-400 hover:text-blue-600 ${FOCUS}`}
+              >
+                <Plus className="h-4 w-4" /> Add widget
+              </button>
+            )}
+          >
+            {(close) => <WidgetMenu onPick={onAdd} close={close} />}
+          </Popover>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Report header (paper) + filter chips
+ * ======================================================================== */
+/** Human-readable value of a filter rule ('in' and 'between' are stored encoded). */
+const ruleValueLabel = (r: FilterRule): string =>
+  r.op === 'in'
+    ? inValues(r.value).join(', ')
+    : r.op === 'between'
+      ? r.value.replace('|', ' – ')
+      : r.value;
+const ruleLabel = (r: FilterRule, fm: Map<string, FieldDef>) =>
+  `${fm.get(r.field)?.label ?? r.field} ${OP_LABEL[r.op]} ${ruleValueLabel(r)}`;
+
+function describeFilters(
+  def: ReportDefinition,
+  fieldMap: Map<string, FieldDef>
+): string {
+  const parts = [
+    def.period.preset === 'custom' && def.period.from && def.period.to
+      ? `${fmtDate(def.period.from)} to ${fmtDate(def.period.to)}`
+      : PRESET_LABEL[def.period.preset],
+  ];
+  def.filters
+    .filter((r) => r.field && r.value !== '')
+    .forEach((r) => parts.push(ruleLabel(r, fieldMap)));
+  return parts.join(' · ');
+}
+
+const formatDate = (date: Date): string => {
+  // 1. Get the date parts (dd-MMM-yyyy)
+  const dateOptions: Intl.DateTimeFormatOptions = {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  };
+  // Replace spaces with dashes
+  const datePart = date
+    .toLocaleDateString('en-GB', dateOptions)
+    .replace(/ /g, '-');
+
+  // 2. Get the time parts (HH:mm:ss) in 24-hour format
+  const timePart = date.toLocaleTimeString('en-GB', { hour12: false });
+
+  return `${datePart} ${timePart}`;
+};
+
+const ReportPaper: React.FC<{
+  def: ReportDefinition;
+  source: ReportSource;
+  fieldMap: Map<string, FieldDef>;
+  recordCount: number;
+  user: string;
+  children: React.ReactNode;
+  id?: string;
+  /** 'preview' = design sample (clearly marked); 'final' = generated report with run metadata. */
+  mode?: 'preview' | 'final';
+  meta?: ReportRunMetadata;
+}> = ({
+  def,
+  source,
+  fieldMap,
+  recordCount,
+  user,
+  children,
+  id,
+  mode = 'preview',
+  meta,
+}) => {
+  const t = useT();
+  const cls = CLASSIFICATION[def.classification];
+  const pres = def.presentation ?? DEFAULT_PRESENTATION;
+  const accent = pres.accent || '#2563eb';
+  return (
+    <div id={id} className={`rounded-xl border p-4 ${t.card}`}>
+      <header
+        className={`mb-3 border-b-2 pb-3 ${t.lineStrong}`}
+        style={{ borderBottomColor: accent }}
+      >
+        {(pres.brandName || pres.headerText) && (
+          <div
+            className={`mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.14em] ${t.muted}`}
+          >
+            <span style={{ color: accent }}>{pres.brandName}</span>
+            <span>{pres.headerText}</span>
+          </div>
+        )}
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className={`text-xl font-bold tracking-tight ${t.text}`}>
+              {def.name || 'Untitled report'}
+            </h2>
+            {pres.subtitle && (
+              <p className={`mt-0.5 text-sm font-medium ${t.body}`}>
+                {pres.subtitle}
+              </p>
+            )}
+            {def.description && (
+              <p className={`mt-0.5 text-xs ${t.muted}`}>{def.description}</p>
+            )}
+          </div>
+          <span className="flex shrink-0 flex-col items-end gap-1">
+            {def.classification !== 'none' && (
+              <span className="flex items-center gap-1">
+                <Lock className="h-3 w-3 text-amber-600" />
+                <Badge value={cls.label} tone={cls.tone} />
+              </span>
+            )}
+            {mode === 'preview' ? (
+              <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+                Preview · sample data
+              </span>
+            ) : (
+              <span> </span>
+              // <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+              //   Actual data
+              // </span>
+            )}
+          </span>
+        </div>
+        {mode === 'final' && meta ? (
+          <p className={`mt-1.5 text-[11px] ${t.muted}`}>
+            Reporting period: <strong>{describePeriod(meta.period)}</strong>
+            {/* {meta.comparePeriod && (
+              <> (compared with {describePeriod(meta.comparePeriod)})</>
+            )}{' '} */}
+            {/* · {meta.sourceName}
+            {meta.filters.length > 0 && (
+              <> · {meta.filters.join(' · ')}</>
+            )} ·{' '} */}
+            {/* {meta.recordsMatched === null
+              ? '—'
+              : meta.recordsMatched.toLocaleString()}{' '}
+            records · */}{' '}
+            Generated {formatDate(new Date(meta.generatedAt))} by{' '}
+            {meta.generatedBy} ({meta.timezone})
+            {meta.dataAsOf && (
+              <> · Data as of {formatDate(new Date(meta.dataAsOf))}</>
+            )}
+          </p>
+        ) : (
+          <p className={`mt-1.5 text-[11px] ${t.muted}`}>
+            {source.name} · {describeFilters(def, fieldMap)} ·{' '}
+            {recordCount.toLocaleString()} preview records (sample, not the
+            reporting period) · {user}
+          </p>
+        )}
+      </header>
+      {children}
+      {(pres.footerText || pres.showPageNumbers || mode === 'final') && (
+        <footer
+          className={`mt-3 flex items-center justify-between border-t pt-2 text-[10px] ${t.lineStrong} ${t.muted}`}
+        >
+          <span>
+            {pres.footerText}
+            {def.classification !== 'none' ? ` · ${cls.label}` : ''}
+          </span>
+          <span>
+            {mode === 'final' && meta ? `Run ${meta.runId.slice(0, 8)} · ` : ''}
+            {/* {pres.showPageNumbers ? 'Page numbers added on print / PDF' : ''} */}
+          </span>
+        </footer>
+      )}
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Filter editor
+ * ======================================================================== */
+const BOOL_OPTIONS = ['Yes', 'No', 'Unknown'];
+
+/** Searchable multi-select with checkboxes (filter operator "is any of"). */
+const MultiPick: React.FC<{
+  options: string[];
+  value: string[];
+  onChange: (v: string[]) => void;
+}> = ({ options, value, onChange }) => {
+  const t = useT();
+  const [q, setQ] = useState('');
+  const shown = options.filter((o) =>
+    o.toLowerCase().includes(q.toLowerCase())
+  );
+  return (
+    <div className="space-y-1">
+      <TextInput
+        aria-label="Search values"
+        placeholder={`Search ${options.length} values…`}
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      <div
+        role="group"
+        aria-label="Values"
+        className={`max-h-32 overflow-y-auto rounded-lg border p-1 ${t.lineStrong}`}
+      >
+        {shown.length === 0 && (
+          <p className={`px-1.5 py-1 text-xs ${t.muted}`}>No matches.</p>
+        )}
+        {shown.map((o) => (
+          <label
+            key={o}
+            className={`flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs ${t.body} ${t.hover}`}
+          >
+            <input
+              type="checkbox"
+              checked={value.includes(o)}
+              onChange={(e) =>
+                onChange(
+                  e.target.checked
+                    ? [...value, o]
+                    : value.filter((x) => x !== o)
+                )
+              }
+            />
+            {o}
+          </label>
+        ))}
+      </div>
+      {value.length > 0 && (
+        <p className={`text-[11px] ${t.muted}`}>{value.length} selected</p>
+      )}
+    </div>
+  );
+};
+
+const FilterEditor: React.FC<{
+  fields: FieldDef[];
+  rules: FilterRule[];
+  allRows: Row[];
+  onChange: (rules: FilterRule[]) => void;
+}> = ({ fields, rules, allRows, onChange }) => {
+  const t = useT();
+  const optionsFor = useCallback(
+    (fd: FieldDef) =>
+      fd.type === 'boolean'
+        ? BOOL_OPTIONS
+        : fd.values?.length
+          ? fd.values
+          : [...new Set(allRows.map((r) => cellKey(fd, r)))]
+              .filter((v) => v !== 'Unknown')
+              .sort()
+              .slice(0, 80),
+    [allRows]
+  );
+  const patch = (id: string, p: Partial<FilterRule>) =>
+    onChange(rules.map((r) => (r.id === id ? { ...r, ...p } : r)));
+  const add = () => {
+    const first = fields[0];
+    if (first)
+      onChange([
+        ...rules,
+        { id: uid(), field: first.key, op: opsFor(first)[0], value: '' },
+      ]);
+  };
+  return (
+    <div className="space-y-2">
+      {rules.length === 0 && (
+        <p className={`text-xs ${t.muted}`}>No filters applied.</p>
+      )}
+      {rules.map((r) => {
+        const fd = fields.find((x) => x.key === r.field) ?? fields[0];
+        if (!fd) return null;
+        const ranked = (r.op === 'atleast' || r.op === 'atmost') && fd.order;
+        return (
+          <div
+            key={r.id}
+            className={`space-y-1.5 rounded-lg border p-2 ${t.inset}`}
+          >
+            <div className="flex items-center gap-1.5">
+              <div className="flex-1">
+                <Select
+                  label="Filter field"
+                  value={r.field}
+                  options={fields.map((x) => ({
+                    value: x.key,
+                    label: x.label,
+                  }))}
+                  onChange={(v) => {
+                    const nf = fields.find((x) => x.key === v)!;
+                    patch(r.id, { field: v, op: opsFor(nf)[0], value: '' });
+                  }}
+                />
+              </div>
+              <IconButton
+                label="Remove filter"
+                onClick={() => onChange(rules.filter((x) => x.id !== r.id))}
+              >
+                <X className="h-3.5 w-3.5" />
+              </IconButton>
+            </div>
+            <div className="grid grid-cols-[104px_minmax(0,1fr)] gap-1.5">
+              <Select
+                label="Operator"
+                value={r.op}
+                options={opsFor(fd).map((o) => ({
+                  value: o,
+                  label: OP_LABEL[o],
+                }))}
+                onChange={(v) => patch(r.id, { op: v as FilterOp, value: '' })}
+              />
+              {r.op === 'in' ? (
+                <MultiPick
+                  options={optionsFor(fd)}
+                  value={inValues(r.value)}
+                  onChange={(vs) =>
+                    patch(r.id, { value: vs.length ? JSON.stringify(vs) : '' })
+                  }
+                />
+              ) : r.op === 'between' ? (
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[0, 1].map((i) => (
+                    <TextInput
+                      key={i}
+                      aria-label={i === 0 ? 'From' : 'To'}
+                      placeholder={i === 0 ? 'From' : 'To'}
+                      type={isDateType(fd.type) ? 'date' : 'number'}
+                      step={isNumeric(fd.type) ? 'any' : undefined}
+                      value={r.value.split('|')[i] ?? ''}
+                      onChange={(e) => {
+                        const parts = [
+                          r.value.split('|')[0] ?? '',
+                          r.value.split('|')[1] ?? '',
+                        ];
+                        parts[i] = e.target.value;
+                        patch(r.id, {
+                          value: parts[0] || parts[1] ? parts.join('|') : '',
+                        });
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : (fd.type === 'category' && !fd.valuesTruncated) ||
+                fd.type === 'boolean' ? (
+                <Select
+                  label="Value"
+                  value={r.value}
+                  options={[
+                    { value: '', label: 'Select…' },
+                    ...optionsFor(fd).map((o) => ({ value: o, label: o })),
+                  ]}
+                  onChange={(v) => patch(r.id, { value: v })}
+                />
+              ) : (
+                <TextInput
+                  aria-label="Value"
+                  type={
+                    isDateType(fd.type)
+                      ? 'date'
+                      : isNumeric(fd.type)
+                        ? 'number'
+                        : 'text'
+                  }
+                  step={
+                    isNumeric(fd.type)
+                      ? scaleOf(fd) > 0
+                        ? String(10 ** -scaleOf(fd))
+                        : 'any'
+                      : undefined
+                  }
+                  value={r.value}
+                  onChange={(e) => patch(r.id, { value: e.target.value })}
+                  placeholder="Value"
+                />
+              )}
+            </div>
+            {ranked && (
+              <p className={`text-[11px] ${t.muted}`}>
+                Ranked: {fd.order!.filter((o) => o !== 'Unknown').join(' › ')}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      <GhostButton onClick={add} icon={<Plus className="h-3.5 w-3.5" />}>
+        Add filter
+      </GhostButton>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Fields panel (+ data profile)
+ * ======================================================================== */
+const TYPE_LABEL: Record<FieldType, string> = {
+  text: 'Text',
+  category: 'Category',
+  number: 'Number',
+  decimal: 'Decimal',
+  currency: 'Currency',
+  boolean: 'Yes/No',
+  date: 'Date',
+  datetime: 'Date & time',
+};
+
+const ProfileCard: React.FC<{ fd: FieldDef; rows: Row[] }> = ({ fd, rows }) => {
+  const t = useT();
+  const canView = useContext(MaskCtx);
+  const p = useMemo(() => profileField(fd, rows), [fd, rows]);
+  const missing = p.total ? (p.nulls / p.total) * 100 : 0;
+  const maxTop = Math.max(...p.top.map((x) => x.n), 1);
+  return (
+    <div className="space-y-2.5 text-xs">
+      <div>
+        <div className={`text-[13px] font-semibold ${t.text}`}>{fd.label}</div>
+        <div className={t.muted}>
+          {TYPE_LABEL[fd.type]}
+          {isDecimal(fd.type) &&
+            ` · NUMERIC(${fd.precision ?? 18},${scaleOf(fd)}) · exact`}
+          {fd.currency && ` · ${fd.currency}`}
+          {fd.order && ` · ranked`}
+          {fd.sensitive && ' · sensitive'}
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {[
+          ['Records', p.total.toLocaleString()],
+          ['Missing', `${missing.toFixed(1)}%`],
+          ['Distinct', p.distinct.toLocaleString()],
+        ].map(([k, v]) => (
+          <div key={k} className={`rounded-lg border px-2 py-1.5 ${t.inset}`}>
+            <div className={`text-[13px] font-semibold ${t.text}`}>{v}</div>
+            <div className={`text-[10px] ${t.muted}`}>{k}</div>
+          </div>
+        ))}
+      </div>
+      {(p.min !== undefined || p.max !== undefined) && (
+        <dl className="space-y-1">
+          {(
+            [
+              ['Min', p.min],
+              ['Max', p.max],
+              ['Average', p.avg],
+            ] as const
+          )
+            .filter(([, v]) => v !== undefined)
+            .map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-2">
+                <dt className={t.muted}>{k}</dt>
+                <dd className={`tabular-nums ${t.text}`}>
+                  {fd.sensitive && !canView ? MASK : v}
+                </dd>
+              </div>
+            ))}
+        </dl>
+      )}
+      {p.top.length > 0 && (
+        <ul className="space-y-1">
+          {p.top.map((x) => (
+            <li
+              key={x.label}
+              className="grid grid-cols-[minmax(60px,35%)_minmax(0,1fr)_auto] items-center gap-2"
+            >
+              <span className={`truncate ${t.body}`}>
+                {fd.sensitive && !canView ? MASK : x.label}
+              </span>
+              <span
+                className={`h-1.5 overflow-hidden rounded-full ${t.dark ? 'bg-white/10' : 'bg-slate-100'}`}
+              >
+                <span
+                  className="block h-full rounded-full bg-blue-500"
+                  style={{ width: `${(x.n / maxTop) * 100}%` }}
+                />
+              </span>
+              <span className={`tabular-nums ${t.muted}`}>{x.n}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+const FieldsPanel: React.FC<{
+  fields: FieldDef[];
+  resetKey: string;
+  rows: Row[];
+  selected: string[];
+  mode: 'select' | 'add';
+  onToggle: (key: string) => void;
+  onSetAll: (keys: string[]) => void;
+  onAdd: (field: FieldDef) => void;
+  onCustom: (editKey?: string) => void;
+  onMetric: () => void;
+}> = ({
+  fields,
+  resetKey,
+  rows,
+  selected,
+  mode,
+  onToggle,
+  onSetAll,
+  onAdd,
+  onCustom,
+  onMetric,
+}) => {
+  const t = useT();
+  const [q, setQ] = useState('');
+  const [tab, setTab] = useState('All');
+  const groups = useMemo(
+    () => [...new Set(fields.map((x) => x.group))],
+    [fields]
+  );
+  useEffect(() => setTab('All'), [resetKey]);
+  const visible = fields.filter(
+    (x) =>
+      (mode === 'select' || selected.includes(x.key)) &&
+      (tab === 'All' || x.group === tab) &&
+      x.label.toLowerCase().includes(q.toLowerCase())
+  );
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 space-y-2 p-3 pb-2">
+        <div className="relative">
+          <Search
+            className={`pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${t.muted}`}
+          />
+          <TextInput
+            aria-label="Search fields"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search fields…"
+            className="pl-8"
+          />
+        </div>
+        <div
+          role="tablist"
+          aria-label="Field groups"
+          className="flex gap-1 overflow-x-auto pb-0.5"
+        >
+          {['All', ...groups].map((g) => (
+            <button
+              key={g}
+              role="tab"
+              type="button"
+              aria-selected={tab === g}
+              onClick={() => setTab(g)}
+              className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ${tab === g ? 'bg-blue-600 text-white' : `${t.inset} border ${t.muted}`} ${FOCUS}`}
+            >
+              {g}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => onCustom()}
+          className={`flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed py-1.5 text-xs font-medium text-blue-600 hover:border-blue-400 ${t.lineStrong} ${FOCUS}`}
+        >
+          <Sparkles className="h-3.5 w-3.5" /> New custom field
+        </button>
+        <button
+          type="button"
+          onClick={onMetric}
+          className={`flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed py-1.5 text-xs font-medium text-blue-600 hover:border-blue-400 ${t.lineStrong} ${FOCUS}`}
+        >
+          <Hash className="h-3.5 w-3.5" /> Calculated metrics (rates, ratios)
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {mode === 'select' && (
+          <div className="flex items-center justify-between px-1 pb-1">
+            <span className={`text-[11px] ${t.muted}`}>
+              {selected.length} of {fields.length} selected
+            </span>
+            <span className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => onSetAll(fields.map((x) => x.key))}
+                className={`rounded px-1.5 py-0.5 text-[11px] font-medium text-blue-600 ${t.hover} ${FOCUS}`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetAll([])}
+                className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${t.muted} ${t.hover} ${FOCUS}`}
+              >
+                None
+              </button>
+            </span>
+          </div>
+        )}
+        {visible.length === 0 && (
+          <p className={`px-3 py-8 text-center text-xs ${t.muted}`}>
+            {mode === 'add'
+              ? 'No selected fields match.'
+              : 'No fields match your search.'}
+          </p>
+        )}
+        {visible.map((x) => {
+          const badges = (
+            <>
+              {x.derived && (
+                <span className="rounded bg-violet-100 px-1 text-[10px] font-semibold text-violet-700">
+                  fx
+                </span>
+              )}
+              {x.sensitive && (
+                <Lock
+                  className="h-3 w-3 text-amber-600"
+                  aria-label="Sensitive"
+                />
+              )}
+              <span className={`text-[10px] ${t.muted}`}>
+                {TYPE_LABEL[x.type]}
+              </span>
+            </>
+          );
+          return mode === 'select' ? (
+            <div
+              key={x.key}
+              className={`flex items-center gap-0.5 rounded-lg pr-1 ${t.hover}`}
+            >
+              <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-2 py-1.5 text-[13px]">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(x.key)}
+                  onChange={() => onToggle(x.key)}
+                  className={`h-3.5 w-3.5 rounded accent-blue-600 ${FOCUS}`}
+                />
+                <span className={`flex-1 truncate ${t.body}`}>{x.label}</span>
+                {badges}
+              </label>
+              {x.derived && (
+                <IconButton
+                  label={`Edit ${x.label}`}
+                  onClick={() => onCustom(x.key)}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </IconButton>
+              )}
+              <Popover
+                width={300}
+                trigger={({ toggle, ref }) => (
+                  <button
+                    ref={ref}
+                    type="button"
+                    aria-label={`Profile of ${x.label}`}
+                    title="Field profile"
+                    onClick={toggle}
+                    className={`grid h-6 w-6 shrink-0 place-items-center rounded-md ${t.muted} ${t.hover} ${FOCUS}`}
+                  >
+                    <Activity className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              >
+                {() => <ProfileCard fd={x} rows={rows} />}
+              </Popover>
+            </div>
+          ) : (
+            <button
+              key={x.key}
+              type="button"
+              onClick={() => onAdd(x)}
+              title={`Add a widget based on ${x.label}`}
+              className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] ${t.hover} ${FOCUS}`}
+            >
+              <span className={`flex-1 truncate ${t.body}`}>{x.label}</span>
+              {badges}
+              <Plus className="h-3.5 w-3.5 text-blue-600" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Custom fields: categorise and derive your own dimensions and measures
+ * ======================================================================== */
+const DERIVED_META: Record<
+  DerivedKind,
+  { icon: React.ComponentType<{ className?: string }>; hint: string }
+> = {
+  bands: {
+    icon: BarChart3,
+    hint: 'Split an amount or score into ranges: Low / Medium / High value',
+  },
+  groups: { icon: Layers, hint: 'Combine categories into your own groups' },
+  dateparts: {
+    icon: CalendarDays,
+    hint: 'Month, quarter, weekday or hour of a date',
+  },
+  calc: {
+    icon: Hash,
+    hint: 'Net loss = amount − recovered, recovery %, ratios',
+  },
+  rules: {
+    icon: Filter,
+    hint: 'CASE WHEN segments, or a Yes/No flag, from conditions',
+  },
+};
+
+function newDerived(kind: DerivedKind, fields: FieldDef[]): DerivedField {
+  const base = { id: uid(), key: '', label: '' };
+  const nums = fields.filter((x) => isNumeric(x.type));
+  const cats = fields.filter((x) => x.type === 'category');
+  const dates = fields.filter((x) => isDateType(x.type));
+  switch (kind) {
+    case 'bands':
+      return {
+        ...base,
+        kind,
+        label: 'Value band',
+        source:
+          nums.find((x) => x.type === 'currency')?.key ?? nums[0]?.key ?? '',
+        edges: [],
+      };
+    case 'groups':
+      return {
+        ...base,
+        kind,
+        label: 'Custom group',
+        source: cats[0]?.key ?? '',
+        groups: [{ name: 'Group 1', values: [] }],
+        other: 'Other',
+      };
+    case 'dateparts':
+      return {
+        ...base,
+        kind,
+        label: 'Month of year',
+        source: dates[0]?.key ?? '',
+        part: 'month',
+      };
+    case 'calc':
+      return {
+        ...base,
+        kind,
+        label: 'Net amount',
+        a: nums[0]?.key ?? '',
+        b: nums[1]?.key ?? nums[0]?.key ?? '',
+        op: 'sub',
+      };
+    case 'rules':
+      return {
+        ...base,
+        kind,
+        label: 'Segment',
+        cases: [{ id: uid(), label: 'Segment 1', rules: [] }],
+        otherwise: 'Other',
+      };
+  }
+}
+
+const isDraftValid = (d: DerivedField) => {
+  if (!d.label.trim()) return false;
+  switch (d.kind) {
+    case 'bands':
+      return !!d.source && d.edges.length > 0;
+    case 'groups':
+      return (
+        !!d.source && d.groups.some((g) => g.name.trim() && g.values.length > 0)
+      );
+    case 'dateparts':
+      return !!d.source;
+    case 'calc':
+      return !!d.a && !!d.b;
+    case 'rules':
+      return d.cases.some((c) => activeRules(c.rules).length > 0);
+  }
+};
+
+const CustomFieldsModal: React.FC<{
+  open: boolean;
+  editKey: string | null;
+  fields: FieldDef[];
+  derived: DerivedField[];
+  rows: Row[];
+  onClose: () => void;
+  onSave: (d: DerivedField) => void;
+  onRemove: (id: string) => void;
+}> = ({ open, editKey, fields, derived, rows, onClose, onSave, onRemove }) => {
+  const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
+  const [draft, setDraft] = useState<DerivedField | null>(null);
+  const [edgesText, setEdgesText] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    const ex = editKey ? derived.find((d) => d.key === editKey) : undefined;
+    const d = ex ? (JSON.parse(JSON.stringify(ex)) as DerivedField) : null;
+    setDraft(d);
+    setEdgesText(d?.kind === 'bands' ? d.edges.join(', ') : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [open, onClose]);
+
+  // catalogue the draft may reference: everything except the field being edited
+  const refFields = useMemo(
+    () => fields.filter((x) => !draft || x.key !== draft.key),
+    [fields, draft]
+  );
+  const refMap = useMemo(
+    () => new Map(refFields.map((x) => [x.key, x])),
+    [refFields]
+  );
+
+  const preview = useMemo(() => {
+    if (!draft || !isDraftValid(draft)) return null;
+    const sample = rows.slice(0, 3000);
+    const key = draft.key || '__preview';
+    const d = { ...draft, key } as DerivedField;
+    const out = applyDerived(sample, [d], refFields);
+    const fd = out.fields.find((x) => x.key === key);
+    if (!fd) return null;
+    return {
+      fd,
+      profile: profileField(fd, out.rows),
+      groups: isCat(fd.type)
+        ? groupRows(out.rows, fd, 'month').slice(0, 8)
+        : [],
+    };
+  }, [draft, rows, refFields]);
+
+  if (!open) return null;
+  const nums = refFields.filter((x) => isNumeric(x.type));
+  const cats = refFields.filter((x) => x.type === 'category');
+  const dates = refFields.filter((x) => isDateType(x.type));
+  const set = (p: Record<string, unknown>) =>
+    setDraft((d) => (d ? ({ ...d, ...p } as DerivedField) : d));
+  const maxG = Math.max(
+    ...(preview?.groups.map((g) => g.rows.length) ?? [1]),
+    1
+  );
+
+  const suggestEdges = () => {
+    if (!draft || draft.kind !== 'bands') return;
+    const vals = rows
+      .map((r) => Number(r[draft.source]))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    if (vals.length < 4) return;
+    const q = (p: number) => vals[Math.floor((vals.length - 1) * p)];
+    const nice = (n: number) => {
+      const m = 10 ** Math.max(0, Math.floor(Math.log10(Math.abs(n) || 1)) - 1);
+      return Math.round(n / m) * m;
+    };
+    const e = [...new Set([q(0.25), q(0.5), q(0.75)].map(nice))];
+    set({ edges: e, labels: undefined });
+    setEdgesText(e.join(', '));
+  };
+
+  const body = (() => {
+    if (!draft) return null;
+    switch (draft.kind) {
+      case 'bands': {
+        const labels = bandLabelsOf({ ...draft, labels: undefined });
+        return (
+          <>
+            <Field label="Numeric field">
+              <Select
+                value={draft.source}
+                options={nums.map((x) => ({ value: x.key, label: x.label }))}
+                onChange={(v) => set({ source: v })}
+              />
+            </Field>
+            <Field
+              label="Band boundaries (ascending, comma-separated)"
+              hint="Values below the first boundary form the first band; each boundary starts the next band."
+            >
+              <div className="flex gap-2">
+                <TextInput
+                  value={edgesText}
+                  placeholder="e.g. 1000, 5000, 20000"
+                  onChange={(e) => {
+                    setEdgesText(e.target.value);
+                    set({
+                      edges: e.target.value
+                        .split(',')
+                        .map((x) => Number(x.trim()))
+                        .filter((n) => x_ok(n)),
+                    });
+                  }}
+                />
+                <GhostButton
+                  onClick={suggestEdges}
+                  icon={<Sparkles className="h-3.5 w-3.5 text-blue-600" />}
+                  title="Quartile boundaries from your data"
+                >
+                  Suggest
+                </GhostButton>
+              </div>
+            </Field>
+            {draft.edges.length > 0 && (
+              <Field label="Band names (optional)">
+                <div className="grid gap-1.5 sm:grid-cols-2">
+                  {labels.map((l, i) => (
+                    <TextInput
+                      key={i}
+                      aria-label={`Band ${i + 1} name`}
+                      value={draft.labels?.[i] ?? ''}
+                      placeholder={l}
+                      onChange={(e) => {
+                        const next = [...(draft.labels ?? [])];
+                        while (next.length < labels.length) next.push('');
+                        next[i] = e.target.value;
+                        set({ labels: next });
+                      }}
+                    />
+                  ))}
+                </div>
+              </Field>
+            )}
+          </>
+        );
+      }
+      case 'groups': {
+        const src = refMap.get(draft.source);
+        const values = src?.values ?? [];
+        return (
+          <>
+            <Field label="Category field">
+              <Select
+                value={draft.source}
+                options={cats.map((x) => ({ value: x.key, label: x.label }))}
+                onChange={(v) =>
+                  set({
+                    source: v,
+                    groups: draft.groups.map((g) => ({ ...g, values: [] })),
+                  })
+                }
+              />
+            </Field>
+            <div className="space-y-2">
+              {draft.groups.map((g, gi) => (
+                <div
+                  key={gi}
+                  className={`space-y-2 rounded-lg border p-2.5 ${t.inset}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <TextInput
+                      aria-label="Group name"
+                      value={g.name}
+                      onChange={(e) =>
+                        set({
+                          groups: draft.groups.map((x, i) =>
+                            i === gi ? { ...x, name: e.target.value } : x
+                          ),
+                        })
+                      }
+                    />
+                    <IconButton
+                      label="Remove group"
+                      onClick={() =>
+                        set({ groups: draft.groups.filter((_, i) => i !== gi) })
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </IconButton>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {values.map((v) => {
+                      const mine = g.values.includes(v);
+                      const elsewhere =
+                        !mine && draft.groups.some((x) => x.values.includes(v));
+                      return (
+                        <button
+                          key={v}
+                          type="button"
+                          aria-pressed={mine}
+                          onClick={() =>
+                            set({
+                              groups: draft.groups.map((x, i) => ({
+                                ...x,
+                                values:
+                                  i === gi
+                                    ? mine
+                                      ? x.values.filter((y) => y !== v)
+                                      : [...x.values, v]
+                                    : x.values.filter((y) => y !== v),
+                              })),
+                            })
+                          }
+                          className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${mine ? 'border-blue-600 bg-blue-600 text-white' : elsewhere ? `${t.btn} opacity-45` : t.btn} ${FOCUS}`}
+                        >
+                          {v}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <GhostButton
+                onClick={() =>
+                  set({
+                    groups: [
+                      ...draft.groups,
+                      { name: `Group ${draft.groups.length + 1}`, values: [] },
+                    ],
+                  })
+                }
+                icon={<Plus className="h-3.5 w-3.5" />}
+              >
+                Add group
+              </GhostButton>
+            </div>
+            <Field label="Everything else is called">
+              <TextInput
+                value={draft.other}
+                onChange={(e) => set({ other: e.target.value })}
+              />
+            </Field>
+          </>
+        );
+      }
+      case 'dateparts':
+        return (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Date field">
+              <Select
+                value={draft.source}
+                options={dates.map((x) => ({ value: x.key, label: x.label }))}
+                onChange={(v) => set({ source: v })}
+              />
+            </Field>
+            <Field label="Part">
+              <Select
+                value={draft.part}
+                options={(Object.keys(PART_LABEL) as DatePart[]).map((k) => ({
+                  value: k,
+                  label: PART_LABEL[k],
+                }))}
+                onChange={(v) => set({ part: v })}
+              />
+            </Field>
+          </div>
+        );
+      case 'calc':
+        return (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="A">
+                <Select
+                  value={draft.a}
+                  options={nums.map((x) => ({ value: x.key, label: x.label }))}
+                  onChange={(v) => set({ a: v })}
+                />
+              </Field>
+              <Field label="Operation">
+                <Select
+                  value={draft.op}
+                  options={(Object.keys(CALC_LABEL) as CalcOp[]).map((k) => ({
+                    value: k,
+                    label: CALC_LABEL[k],
+                  }))}
+                  onChange={(v) => set({ op: v })}
+                />
+              </Field>
+              <Field label="B">
+                <Select
+                  value={draft.b}
+                  options={nums.map((x) => ({ value: x.key, label: x.label }))}
+                  onChange={(v) => set({ b: v })}
+                />
+              </Field>
+            </div>
+            <p className={`text-[11px] ${t.muted}`}>
+              Sums and differences of amounts stay exact to the cent. Division
+              by zero gives an empty value.
+            </p>
+          </>
+        );
+      case 'rules':
+        return (
+          <>
+            <SwitchRow
+              label="Output a Yes/No flag instead of named segments"
+              checked={!!draft.asBoolean}
+              onChange={(v) =>
+                set({
+                  asBoolean: v,
+                  cases: v ? draft.cases.slice(0, 1) : draft.cases,
+                })
+              }
+            />
+            <div className="space-y-2">
+              {draft.cases.map((c, ci) => (
+                <div
+                  key={c.id}
+                  className={`space-y-2 rounded-lg border p-2.5 ${t.inset}`}
+                >
+                  <div className="flex items-center gap-2">
+                    {!draft.asBoolean && (
+                      <TextInput
+                        aria-label="Segment name"
+                        value={c.label}
+                        onChange={(e) =>
+                          set({
+                            cases: draft.cases.map((x, i) =>
+                              i === ci ? { ...x, label: e.target.value } : x
+                            ),
+                          })
+                        }
+                      />
+                    )}
+                    {draft.asBoolean && (
+                      <span
+                        className={`flex-1 text-xs font-semibold ${t.text}`}
+                      >
+                        Yes when all conditions match
+                      </span>
+                    )}
+                    {!draft.asBoolean && (
+                      <>
+                        <IconButton
+                          label="Move up"
+                          disabled={ci === 0}
+                          onClick={() => {
+                            const n = [...draft.cases];
+                            [n[ci - 1], n[ci]] = [n[ci], n[ci - 1]];
+                            set({ cases: n });
+                          }}
+                        >
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        </IconButton>
+                        <IconButton
+                          label="Move down"
+                          disabled={ci === draft.cases.length - 1}
+                          onClick={() => {
+                            const n = [...draft.cases];
+                            [n[ci + 1], n[ci]] = [n[ci], n[ci + 1]];
+                            set({ cases: n });
+                          }}
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </IconButton>
+                        <IconButton
+                          label="Remove segment"
+                          onClick={() =>
+                            set({
+                              cases: draft.cases.filter((_, i) => i !== ci),
+                            })
+                          }
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </IconButton>
+                      </>
+                    )}
+                  </div>
+                  <FilterEditor
+                    fields={refFields}
+                    rules={c.rules}
+                    allRows={rows}
+                    onChange={(rules) =>
+                      set({
+                        cases: draft.cases.map((x, i) =>
+                          i === ci ? { ...x, rules } : x
+                        ),
+                      })
+                    }
+                  />
+                </div>
+              ))}
+              {!draft.asBoolean && (
+                <GhostButton
+                  onClick={() =>
+                    set({
+                      cases: [
+                        ...draft.cases,
+                        {
+                          id: uid(),
+                          label: `Segment ${draft.cases.length + 1}`,
+                          rules: [],
+                        },
+                      ],
+                    })
+                  }
+                  icon={<Plus className="h-3.5 w-3.5" />}
+                >
+                  Add segment
+                </GhostButton>
+              )}
+            </div>
+            {!draft.asBoolean && (
+              <Field
+                label="Anything that matches no segment"
+                hint="Segments are checked top to bottom; the first match wins."
+              >
+                <TextInput
+                  value={draft.otherwise}
+                  onChange={(e) => set({ otherwise: e.target.value })}
+                />
+              </Field>
+            )}
+          </>
+        );
+    }
+  })();
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Custom fields"
+        ref={trapRef}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className={`flex h-[min(780px,92vh)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
+      >
+        <div
+          className={`flex items-center justify-between border-b px-4 py-3 ${t.lineStrong}`}
+        >
+          <div>
+            <h2
+              className={`flex items-center gap-2 text-sm font-semibold ${t.text}`}
+            >
+              <Sparkles className="h-4 w-4 text-blue-600" /> Custom fields
+            </h2>
+            <p className={`text-[11px] ${t.muted}`}>
+              Categorise your data: bands, groups, date parts, calculations and
+              rule segments. They work like any other field in charts, filters
+              and tables.
+            </p>
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+        <div className="grid min-h-0 flex-1 md:grid-cols-[240px_minmax(0,1fr)]">
+          <div
+            className={`min-h-0 overflow-y-auto border-b p-3 md:border-b-0 md:border-r ${t.lineStrong}`}
+          >
+            <div className={`mb-1.5 text-[11px] font-semibold ${t.muted}`}>
+              Create new
+            </div>
+            <div className="space-y-1">
+              {(Object.keys(DERIVED_META) as DerivedKind[]).map((k) => {
+                const M = DERIVED_META[k];
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => {
+                      const d = newDerived(k, fields);
+                      setDraft(d);
+                      setEdgesText('');
+                    }}
+                    className={`flex w-full items-start gap-2 rounded-lg border p-2 text-left ${draft && !draft.key && draft.kind === k ? t.selected : t.btn} ${FOCUS}`}
+                  >
+                    <span
+                      className={`grid h-7 w-7 shrink-0 place-items-center rounded-md ${t.chipIcon}`}
+                    >
+                      <M.icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[13px] font-semibold">
+                        {DERIVED_LABEL[k]}
+                      </span>
+                      <span
+                        className={`block text-[11px] leading-snug ${t.muted}`}
+                      >
+                        {M.hint}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className={`mb-1.5 mt-4 text-[11px] font-semibold ${t.muted}`}>
+              Your fields ({derived.length})
+            </div>
+            {derived.length === 0 && (
+              <p className={`text-xs ${t.muted}`}>None yet.</p>
+            )}
+            <ul className="space-y-1">
+              {derived.map((d) => (
+                <li
+                  key={d.id}
+                  className={`flex items-center gap-1 rounded-lg border px-2 py-1.5 ${draft?.id === d.id ? t.selected : t.lineStrong}`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraft(JSON.parse(JSON.stringify(d)));
+                      setEdgesText(
+                        d.kind === 'bands' ? d.edges.join(', ') : ''
+                      );
+                    }}
+                    className={`min-w-0 flex-1 text-left ${FOCUS}`}
+                  >
+                    <span
+                      className={`block truncate text-[13px] font-medium ${t.text}`}
+                    >
+                      {d.label}
+                    </span>
+                    <span className={`block text-[10px] ${t.muted}`}>
+                      {DERIVED_LABEL[d.kind]}
+                    </span>
+                  </button>
+                  <IconButton
+                    label={`Delete ${d.label}`}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete "${d.label}"? Widgets using it will be updated.`
+                        )
+                      ) {
+                        onRemove(d.id);
+                        if (draft?.id === d.id) setDraft(null);
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </IconButton>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="min-h-0 overflow-y-auto p-4">
+            {!draft ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                <Sparkles className="h-8 w-8 text-blue-500" />
+                <p className={`text-[13px] font-medium ${t.text}`}>
+                  Pick a type on the left to start
+                </p>
+                <p className={`max-w-sm text-xs ${t.muted}`}>
+                  For example, band the transaction amount into Low / Medium /
+                  High value, group fraud types into customer-facing and
+                  internal, or flag high-priority alerts that were not
+                  escalated.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${t.chipIcon}`}
+                  >
+                    {DERIVED_LABEL[draft.kind]}
+                  </span>
+                  <div className="flex-1">
+                    <TextInput
+                      aria-label="Field name"
+                      value={draft.label}
+                      onChange={(e) => set({ label: e.target.value })}
+                      placeholder="Field name, e.g. Value band"
+                    />
+                  </div>
+                </div>
+                {body}
+                <div className={`rounded-xl border p-3 ${t.inset}`}>
+                  <div className={`mb-2 text-xs font-semibold ${t.text}`}>
+                    Live preview{' '}
+                    <span className={`font-normal ${t.muted}`}>
+                      · first {Math.min(rows.length, 3000).toLocaleString()}{' '}
+                      records
+                    </span>
+                  </div>
+                  {!preview ? (
+                    <p className={`text-xs ${t.muted}`}>
+                      Complete the settings above to see how your data is
+                      categorised.
+                    </p>
+                  ) : preview.groups.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {preview.groups.map((g) => (
+                        <li
+                          key={g.key}
+                          className="grid grid-cols-[minmax(80px,30%)_minmax(0,1fr)_auto] items-center gap-2 text-xs"
+                        >
+                          <span className={`truncate ${t.body}`}>{g.key}</span>
+                          <span
+                            className={`h-2 overflow-hidden rounded-full ${t.dark ? 'bg-white/10' : 'bg-slate-200'}`}
+                          >
+                            <span
+                              className="block h-full rounded-full bg-blue-500"
+                              style={{
+                                width: `${(g.rows.length / maxG) * 100}%`,
+                              }}
+                            />
+                          </span>
+                          <span className={`tabular-nums ${t.muted}`}>
+                            {g.rows.length.toLocaleString()}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <dl className="grid grid-cols-3 gap-2 text-xs">
+                      {(
+                        [
+                          ['Min', preview.profile.min],
+                          ['Average', preview.profile.avg],
+                          ['Max', preview.profile.max],
+                        ] as const
+                      ).map(([k, v]) => (
+                        <div key={k}>
+                          <dt className={t.muted}>{k}</dt>
+                          <dd
+                            className={`text-[13px] font-semibold tabular-nums ${t.text}`}
+                          >
+                            {v ?? '—'}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div
+          className={`flex items-center justify-end gap-2 border-t px-4 py-3 ${t.lineStrong}`}
+        >
+          <GhostButton onClick={onClose}>Close</GhostButton>
+          <button
+            type="button"
+            disabled={!draft || !isDraftValid(draft)}
+            onClick={() => draft && onSave(draft)}
+            className={PRIMARY_BTN}
+          >
+            <Check className="h-3.5 w-3.5" />{' '}
+            {draft?.key ? 'Update field' : 'Save and use field'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const x_ok = (n: number) => Number.isFinite(n);
+
+/** Keeps Tab inside a dialog, moves focus in on open and restores it on close. */
+function useFocusTrap<T extends HTMLElement>(active: boolean) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (!active) return;
+    const prev = document.activeElement as HTMLElement | null;
+    const el = ref.current;
+    const sel =
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+    window.setTimeout(
+      () => (el?.querySelector<HTMLElement>(sel) ?? el)?.focus(),
+      0
+    );
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !el) return;
+      const items = [...el.querySelectorAll<HTMLElement>(sel)];
+      if (items.length === 0) return;
+      const first = items[0],
+        last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      prev?.focus?.();
+    };
+  }, [active]);
+  return ref;
+}
+
+/* ==========================================================================
+ * Calculated metrics: ratio of aggregates (Fraud rate, False-positive ratio, Recovery rate, bps ...)
+ * ======================================================================== */
+const metricField = (m: CalculatedMetric): FieldDef => ({
+  key: m.key,
+  label: m.label,
+  type: 'number',
+  group: 'Metrics',
+  metric: m,
+  scale: 2,
+});
+const SIDE_AGGS: SimpleAgg[] = [
+  'count',
+  'sum',
+  'avg',
+  'min',
+  'max',
+  'distinct',
+];
+const UNIT_LABEL: Record<CalculatedMetric['unit'], string> = {
+  pct: 'Percentage (%)',
+  bps: 'Basis points (bps)',
+  ratio: 'Ratio (×)',
+};
+const blankMetric = (): CalculatedMetric => ({
+  id: uid(),
+  key: '',
+  label: 'New metric',
+  unit: 'pct',
+  numerator: { agg: 'count', where: [] },
+  denominator: { agg: 'count', where: [] },
+});
+const sideText = (s: MetricSide, fm: Map<string, FieldDef>) => {
+  const f = s.field ? fm.get(s.field)?.label : undefined;
+  const w = activeRules(s.where).length;
+  return `${aggLabel(s.agg)}${f ? ` of ${f.toLowerCase()}` : ''}${w ? ` where ${w} condition${w > 1 ? 's' : ''} match` : ''}`;
+};
+const metricValid = (m: CalculatedMetric) => {
+  if (!m.label.trim()) return false;
+  if (m.formula) {
+    const parsed = parseFormula(m.formula.expression);
+    return (
+      parsed.ok &&
+      parsed.refs.every((r) => {
+        const s = m.formula!.terms[r];
+        return !!s && (s.agg === 'count' || !!s.field);
+      })
+    );
+  }
+  return [m.numerator, m.denominator].every(
+    (s) => s.agg === 'count' || !!s.field
+  );
+};
+
+const MetricModal: React.FC<{
+  open: boolean;
+  fields: FieldDef[];
+  fieldMap: Map<string, FieldDef>;
+  certified: CalculatedMetric[];
+  mine: CalculatedMetric[];
+  rows: Row[];
+  onClose: () => void;
+  onSave: (m: CalculatedMetric) => void;
+  onRemove: (id: string) => void;
+}> = ({
+  open,
+  fields,
+  fieldMap,
+  certified,
+  mine,
+  rows,
+  onClose,
+  onSave,
+  onRemove,
+}) => {
+  const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
+  const [draft, setDraft] = useState<CalculatedMetric | null>(null);
+  useEffect(() => {
+    if (open) setDraft(blankMetric());
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [open, onClose]);
+
+  const nums = fields.filter((x) => isNumeric(x.type));
+  const preview = useMemo(() => {
+    if (!draft || !metricValid(draft)) return null;
+    const key = draft.key || '__preview';
+    const fm = new Map(fieldMap);
+    fm.set(key, metricField({ ...draft, key }));
+    return {
+      text: fmtMeasure(
+        aggregate(rows, 'metric', key, fm),
+        'metric',
+        fm.get(key),
+        'AED'
+      ),
+      den: aggregate(
+        applyFilters(rows, draft.denominator.where, fm),
+        draft.denominator.agg,
+        draft.denominator.field,
+        fm
+      ),
+    };
+  }, [draft, rows, fieldMap]);
+  if (!open) return null;
+
+  const set = (p: Partial<CalculatedMetric>) =>
+    setDraft((d) => (d ? { ...d, ...p } : d));
+  const side = (
+    title: string,
+    s: MetricSide,
+    change: (s: MetricSide) => void
+  ) => (
+    <div className={`space-y-2 rounded-lg border p-2.5 ${t.inset}`}>
+      <div className={`text-xs font-semibold ${t.text}`}>{title}</div>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Value">
+          <Select
+            value={s.agg}
+            options={SIDE_AGGS.map((a) => ({ value: a, label: aggLabel(a) }))}
+            onChange={(v) => {
+              const a = v as SimpleAgg;
+              const pool = a === 'distinct' ? fields : nums;
+              change({
+                ...s,
+                agg: a,
+                field:
+                  a === 'count'
+                    ? undefined
+                    : pool.some((x) => x.key === s.field)
+                      ? s.field
+                      : pool[0]?.key,
+              });
+            }}
+          />
+        </Field>
+        {s.agg !== 'count' ? (
+          <Field label="Field">
+            <Select
+              value={s.field ?? ''}
+              options={(s.agg === 'distinct' ? fields : nums).map((x) => ({
+                value: x.key,
+                label: x.label,
+              }))}
+              onChange={(v) => change({ ...s, field: v })}
+            />
+          </Field>
+        ) : (
+          <span />
+        )}
+      </div>
+      <div className={`text-[11px] font-semibold ${t.muted}`}>
+        Only include records where all of these match
+      </div>
+      <FilterEditor
+        fields={fields}
+        rules={s.where}
+        allRows={rows}
+        onChange={(where) => change({ ...s, where })}
+      />
+    </div>
+  );
+
+  const listItem = (m: CalculatedMetric, editable: boolean) => (
+    <li
+      key={m.id}
+      className={`flex items-center gap-1 rounded-lg border px-2 py-1.5 ${draft?.id === m.id ? t.selected : t.lineStrong}`}
+    >
+      <button
+        type="button"
+        onClick={() =>
+          setDraft(
+            editable
+              ? JSON.parse(JSON.stringify(m))
+              : {
+                  ...JSON.parse(JSON.stringify(m)),
+                  id: uid(),
+                  key: '',
+                  certified: false,
+                  label: `${m.label} (copy)`,
+                }
+          )
+        }
+        title={
+          editable ? 'Edit' : 'Certified: click to start a copy you can change'
+        }
+        className={`min-w-0 flex-1 text-left ${FOCUS}`}
+      >
+        <span className={`block truncate text-[13px] font-medium ${t.text}`}>
+          {m.label}
+        </span>
+        <span className={`block truncate text-[10px] ${t.muted}`}>
+          {m.certified ? 'Certified · ' : ''}
+          {m.description ?? UNIT_LABEL[m.unit]}
+        </span>
+      </button>
+      {editable && (
+        <IconButton
+          label={`Delete ${m.label}`}
+          onClick={() => {
+            if (
+              window.confirm(
+                `Delete "${m.label}"? Widgets using it fall back to a count.`
+              )
+            )
+              onRemove(m.id);
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </IconButton>
+      )}
+    </li>
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Calculated metrics"
+        ref={trapRef}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className={`flex h-[min(760px,92vh)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
+      >
+        <div
+          className={`flex items-center justify-between border-b px-4 py-3 ${t.lineStrong}`}
+        >
+          <div>
+            <h2
+              className={`flex items-center gap-2 text-sm font-semibold ${t.text}`}
+            >
+              <Hash className="h-4 w-4 text-blue-600" /> Calculated metrics
+            </h2>
+            <p className={`text-[11px] ${t.muted}`}>
+              A metric is one total divided by another (e.g. false-positive
+              alerts ÷ all alerts). It stays correct for any chart grouping,
+              unlike averaging a per-row percentage. Use it from any KPI, chart
+              or insight via Value → Calculated metric.
+            </p>
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+        <div className="grid min-h-0 flex-1 md:grid-cols-[250px_minmax(0,1fr)]">
+          <div
+            className={`min-h-0 space-y-3 overflow-y-auto border-b p-3 md:border-b-0 md:border-r ${t.lineStrong}`}
+          >
+            <GhostButton
+              onClick={() => setDraft(blankMetric())}
+              icon={<Plus className="h-3.5 w-3.5" />}
+            >
+              New metric
+            </GhostButton>
+            <div>
+              <div className={`mb-1 text-[11px] font-semibold ${t.muted}`}>
+                Certified ({certified.length})
+              </div>
+              <ul className="space-y-1">
+                {certified.length === 0 && (
+                  <li className={`text-xs ${t.muted}`}>
+                    None for this data source.
+                  </li>
+                )}
+                {certified.map((m) => listItem(m, false))}
+              </ul>
+            </div>
+            <div>
+              <div className={`mb-1 text-[11px] font-semibold ${t.muted}`}>
+                Yours ({mine.length})
+              </div>
+              <ul className="space-y-1">
+                {mine.length === 0 && (
+                  <li className={`text-xs ${t.muted}`}>None yet.</li>
+                )}
+                {mine.map((m) => listItem(m, true))}
+              </ul>
+            </div>
+          </div>
+          <div className="min-h-0 space-y-3 overflow-y-auto p-4">
+            {draft && (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Metric name">
+                    <TextInput
+                      value={draft.label}
+                      onChange={(e) => set({ label: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Show as">
+                    <Select
+                      value={draft.unit}
+                      options={(
+                        Object.keys(UNIT_LABEL) as CalculatedMetric['unit'][]
+                      ).map((k) => ({
+                        value: k,
+                        label: UNIT_LABEL[k],
+                      }))}
+                      onChange={(v) =>
+                        set({ unit: v as CalculatedMetric['unit'] })
+                      }
+                    />
+                  </Field>
+                </div>
+                <Field label="Description (shown to other users)">
+                  <TextInput
+                    value={draft.description ?? ''}
+                    onChange={(e) => set({ description: e.target.value })}
+                    placeholder="What does this measure and how is it defined?"
+                  />
+                </Field>
+                {!draft.formula ? (
+                  <>
+                    {side(
+                      'Top of the fraction (numerator)',
+                      draft.numerator,
+                      (numerator) => set({ numerator })
+                    )}
+                    {side(
+                      'Bottom of the fraction (denominator)',
+                      draft.denominator,
+                      (denominator) => set({ denominator })
+                    )}
+                    <GhostButton
+                      onClick={() =>
+                        set({
+                          formula: {
+                            expression: 'PCT(a, b)',
+                            terms: { a: draft.numerator, b: draft.denominator },
+                          },
+                        })
+                      }
+                    >
+                      Use a custom formula instead (growth %, weighted score,
+                      conditions)
+                    </GhostButton>
+                  </>
+                ) : (
+                  <>
+                    <Field label="Formula">
+                      <TextInput
+                        aria-label="Formula"
+                        value={draft.formula.expression}
+                        onChange={(e) =>
+                          set({
+                            formula: {
+                              ...draft.formula!,
+                              expression: e.target.value,
+                            },
+                          })
+                        }
+                        placeholder="e.g. PCT(fraud, total)  or  (x - PREV(x)) / PREV(x) * 100"
+                      />
+                    </Field>
+                    {(() => {
+                      const parsed = parseFormula(draft.formula.expression);
+                      return parsed.ok ? (
+                        <>
+                          <p className={`text-[11px] ${t.muted}`}>
+                            Functions: IF(cond, a, b) · MIN · MAX · ABS ·
+                            ROUND(x, n) · PCT(a, b) · PREV(x) = value in the
+                            comparison period. The result is shown in the unit
+                            chosen above, so write PCT(a, b) for a percentage.
+                            Division by zero shows 0.
+                          </p>
+                          {parsed.refs.map((r) =>
+                            side(
+                              `Value "${r}"`,
+                              draft.formula!.terms[r] ?? {
+                                agg: 'count',
+                                where: [],
+                              },
+                              (s) =>
+                                set({
+                                  formula: {
+                                    ...draft.formula!,
+                                    terms: { ...draft.formula!.terms, [r]: s },
+                                  },
+                                })
+                            )
+                          )}
+                        </>
+                      ) : (
+                        <p role="alert" className="text-xs text-red-600">
+                          {parsed.error}
+                        </p>
+                      );
+                    })()}
+                    <GhostButton onClick={() => set({ formula: undefined })}>
+                      Back to simple fraction
+                    </GhostButton>
+                  </>
+                )}
+                <div
+                  className={`rounded-xl border p-3 text-xs ${t.inset} ${t.body}`}
+                >
+                  <div className={`mb-1 font-semibold ${t.text}`}>In words</div>
+                  {draft.formula ? (
+                    draft.formula.expression
+                  ) : (
+                    <>
+                      {sideText(draft.numerator, fieldMap)} ÷{' '}
+                      {sideText(draft.denominator, fieldMap)}
+                    </>
+                  )}
+                  <div className={`mt-2 ${t.text}`}>
+                    Value on the current data:{' '}
+                    <strong>
+                      {preview
+                        ? preview.text
+                        : 'complete the settings to preview'}
+                    </strong>
+                    {preview && !draft.formula && preview.den === 0 && (
+                      <span className="ml-2 text-amber-600">
+                        Denominator is zero, so the result shows 0.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+        <div
+          className={`flex items-center justify-end gap-2 border-t px-4 py-3 ${t.lineStrong}`}
+        >
+          <GhostButton onClick={onClose}>Close</GhostButton>
+          <button
+            type="button"
+            disabled={!draft || !metricValid(draft)}
+            onClick={() => draft && onSave(draft)}
+            className={PRIMARY_BTN}
+          >
+            <Check className="h-3.5 w-3.5" />{' '}
+            {draft?.key ? 'Update metric' : 'Save metric'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Data preview
+ * ======================================================================== */
+const DataPreview: React.FC<{
+  rows: Row[];
+  fields: FieldDef[];
+  currency: string;
+  limit?: number;
+}> = ({ rows, fields, currency, limit = 12 }) => {
+  const t = useT();
+  const [page, setPage] = useState(0);
+  const pages = Math.max(1, Math.ceil(rows.length / limit));
+  useEffect(() => setPage(0), [rows, fields]);
+  const slice = rows.slice(page * limit, page * limit + limit);
+  if (fields.length === 0)
+    return (
+      <p className={`py-10 text-center text-[13px] ${t.muted}`}>
+        Select at least one field to preview data.
+      </p>
+    );
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="min-h-0 flex-1 overflow-auto">
+        <table className="w-full text-left text-[11px]">
+          <thead className="sticky top-0">
+            <tr
+              className={`${t.dark ? 'bg-slate-800' : 'bg-slate-50'} ${t.muted}`}
+            >
+              {fields.map((x) => (
+                <th
+                  key={x.key}
+                  className="whitespace-nowrap px-2.5 py-1.5 font-medium"
+                >
+                  {x.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {slice.map((r, i) => (
+              <tr key={i} className={`border-b ${t.line} ${t.body}`}>
+                {fields.map((x) => (
+                  <td
+                    key={x.key}
+                    className="max-w-[200px] truncate px-2.5 py-1.5"
+                  >
+                    <CellValue field={x} value={r[x.key]} currency={currency} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {slice.length === 0 && (
+              <tr>
+                <td
+                  colSpan={fields.length}
+                  className={`py-10 text-center ${t.muted}`}
+                >
+                  No records match the current filters.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div
+        className={`flex shrink-0 items-center justify-between pt-2 text-[11px] ${t.muted}`}
+      >
+        <span>{rows.length.toLocaleString()} records</span>
+        <span className="flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={page === 0}
+            onClick={() => setPage((p) => p - 1)}
+            className={`rounded-md border px-2 py-0.5 disabled:opacity-40 ${t.btn} ${FOCUS}`}
+          >
+            Prev
+          </button>
+          {page + 1} / {pages}
+          <button
+            type="button"
+            disabled={page >= pages - 1}
+            onClick={() => setPage((p) => p + 1)}
+            className={`rounded-md border px-2 py-0.5 disabled:opacity-40 ${t.btn} ${FOCUS}`}
+          >
+            Next
+          </button>
+        </span>
+      </div>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Inspectors
+ * ======================================================================== */
+const CHART_TYPES: {
+  value: ChartType;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}[] = [
+  { value: 'doughnut', label: 'Doughnut', icon: CircleDot },
+  { value: 'pie', label: 'Pie', icon: PieChart },
+  { value: 'bar', label: 'Column', icon: BarChart3 },
+  { value: 'stacked', label: 'Stacked', icon: Layers },
+  { value: 'hbar', label: 'Ranking', icon: BarChartHorizontal },
+  { value: 'line', label: 'Line', icon: LineIcon },
+  { value: 'area', label: 'Area', icon: AreaChart },
+  { value: 'scatter', label: 'Scatter', icon: ScatterChart },
+  { value: 'heatmap', label: 'Heatmap', icon: Grid3x3 },
+  { value: 'pivot', label: 'Pivot', icon: LayoutGrid },
+];
+const SPAN_OPTIONS: { value: string; label: string }[] = [
+  { value: '3', label: '¼' },
+  { value: '4', label: '⅓' },
+  { value: '6', label: '½' },
+  { value: '8', label: '⅔' },
+  { value: '12', label: 'Full' },
+];
+
+const WidgetInspector: React.FC<{
+  widget: Widget;
+  fields: FieldDef[];
+  metricFields: FieldDef[];
+  allFields: FieldDef[];
+  allRows: Row[];
+  onPatch: (p: Partial<Widget>, coalesceKey?: string) => void;
+  onDuplicate: () => void;
+  onRemove: () => void;
+  sources: SourceInfo[];
+  drillPaths: DrillPath[];
+}> = ({
+  widget,
+  fields,
+  metricFields,
+  allFields,
+  allRows,
+  onPatch,
+  onDuplicate,
+  onRemove,
+  sources,
+  drillPaths,
+}) => {
+  const t = useT();
+  const patch = (p: Record<string, unknown>, key?: string) =>
+    onPatch(p as Partial<Widget>, key);
+  const numeric = fields.filter((x) => isNumeric(x.type));
+  const canView = useContext(MaskCtx);
+  // Sensitive fields are not offered as dimensions unless the viewer may see their values.
+  const dims = fields.filter((x) => isDim(x.type) && (!x.sensitive || canView));
+  const cats = fields.filter((x) => isCat(x.type) && (!x.sensitive || canView));
+  const bools = fields.filter((x) => x.type === 'boolean');
+  const AGGS: Agg[] = [
+    'count',
+    'sum',
+    'avg',
+    'min',
+    'max',
+    'distinct',
+    'yes',
+    'rate',
+    'metric',
+  ];
+  const measureOpts = (agg: Agg) =>
+    (agg === 'metric'
+      ? metricFields
+      : agg === 'distinct'
+        ? fields
+        : agg === 'yes' || agg === 'rate'
+          ? bools
+          : numeric
+    ).map((x) => ({ value: x.key, label: x.label }));
+  const aggOpts = AGGS.filter(
+    (a) => a === 'count' || measureOpts(a).length > 0
+  ).map((a) => ({ value: a, label: aggLabel(a) }));
+
+  const measure = (agg: Agg, field?: string) => (
+    <div className="grid grid-cols-2 gap-2">
+      <Field label="Value">
+        <Select
+          value={agg}
+          options={aggOpts}
+          onChange={(v) => {
+            const a = v as Agg;
+            const o = measureOpts(a);
+            patch({
+              agg: a,
+              field:
+                a === 'count'
+                  ? undefined
+                  : o.some((x) => x.value === field)
+                    ? field
+                    : o[0]?.value,
+            });
+          }}
+        />
+      </Field>
+      {agg !== 'count' ? (
+        <Field label="Measure">
+          <Select
+            value={field ?? ''}
+            options={measureOpts(agg)}
+            onChange={(v) => patch({ field: v })}
+          />
+        </Field>
+      ) : (
+        <span />
+      )}
+    </div>
+  );
+
+  const setChartType = (type: ChartType) => {
+    if (widget.kind !== 'chart') return;
+    const p: Record<string, unknown> = { chartType: type };
+    if (type === 'scatter') {
+      p.xField = widget.xField ?? numeric[0]?.key;
+      p.field = numeric.find((x) => x.key !== p.xField)?.key ?? numeric[0]?.key;
+      p.agg = 'avg';
+    }
+    if (
+      (type === 'stacked' || type === 'heatmap' || type === 'pivot') &&
+      !widget.breakBy
+    )
+      p.breakBy = cats.find((x) => x.key !== widget.groupBy)?.key;
+    patch(p);
+  };
+
+  const noteField = (
+    <Field label="Annotation (shown under the title)">
+      <TextInput
+        value={widget.note ?? ''}
+        onChange={(e) => patch({ note: e.target.value }, `note-${widget.id}`)}
+        placeholder="e.g. Driven by card-not-present spikes"
+      />
+    </Field>
+  );
+
+  const layout = (
+    <Section
+      title="Layout"
+      badge={`${SPAN_OPTIONS.find((s) => s.value === String(widget.span))?.label ?? ''} width`}
+    >
+      <Field label="Width">
+        <Segmented
+          label="Width"
+          value={String(widget.span)}
+          options={SPAN_OPTIONS}
+          onChange={(v) => patch({ span: Number(v) })}
+        />
+      </Field>
+      {widget.kind === 'chart' && (
+        <Field label="Height">
+          <Segmented
+            label="Height"
+            value={widget.height}
+            options={[
+              { value: 'sm', label: 'Short' },
+              { value: 'md', label: 'Medium' },
+              { value: 'lg', label: 'Tall' },
+            ]}
+            onChange={(v) => patch({ height: v })}
+          />
+        </Field>
+      )}
+      <SwitchRow
+        label="Start on a new page when printing"
+        checked={!!widget.pageBreak}
+        onChange={(v) => patch({ pageBreak: v })}
+      />
+    </Section>
+  );
+
+  const filters = (
+    <Section
+      title="Widget filters"
+      badge={widget.filters.length ? String(widget.filters.length) : undefined}
+    >
+      <FilterEditor
+        fields={allFields}
+        rules={widget.filters}
+        allRows={allRows}
+        onChange={(f) => patch({ filters: f })}
+      />
+    </Section>
+  );
+
+  const kindLabel =
+    (
+      {
+        kpi: 'KPI card',
+        chart: 'Chart',
+        table: 'Table',
+        text: 'Commentary',
+        insight: 'Key insights',
+      } as Record<string, string>
+    )[widget.kind] ??
+    getWidget(widget.kind)?.label ??
+    widget.kind;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={`border-b p-3 ${t.line}`}>
+          <Field label={`${kindLabel} title`}>
+            <TextInput
+              value={widget.title}
+              onChange={(e) =>
+                patch({ title: e.target.value }, `title-${widget.id}`)
+              }
+            />
+          </Field>
+        </div>
+
+        {widget.kind === 'chart' && (
+          <>
+            <Section
+              title="Visualisation"
+              defaultOpen
+              badge={
+                CHART_TYPES.find((c) => c.value === widget.chartType)?.label
+              }
+            >
+              <div className="grid grid-cols-5 gap-1.5">
+                {CHART_TYPES.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    title={c.label}
+                    aria-label={c.label}
+                    aria-pressed={widget.chartType === c.value}
+                    onClick={() => setChartType(c.value)}
+                    className={`flex flex-col items-center gap-1 rounded-lg border py-1.5 text-[10px] font-medium ${widget.chartType === c.value ? t.selected : t.btn} ${FOCUS}`}
+                  >
+                    <c.icon className="h-4 w-4" />
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </Section>
+            <Section title="Data" defaultOpen>
+              {widget.chartType === 'scatter' ? (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="X axis">
+                      <Select
+                        value={widget.xField ?? ''}
+                        options={numeric.map((x) => ({
+                          value: x.key,
+                          label: x.label,
+                        }))}
+                        onChange={(v) => patch({ xField: v })}
+                      />
+                    </Field>
+                    <Field label="Y axis">
+                      <Select
+                        value={widget.field ?? ''}
+                        options={numeric.map((x) => ({
+                          value: x.key,
+                          label: x.label,
+                        }))}
+                        onChange={(v) => patch({ field: v })}
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Colour by">
+                    <Select
+                      value={widget.breakBy ?? ''}
+                      options={[
+                        { value: '', label: 'None' },
+                        ...cats.map((x) => ({ value: x.key, label: x.label })),
+                      ]}
+                      onChange={(v) => patch({ breakBy: v || undefined })}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field
+                    label={
+                      widget.chartType === 'heatmap' ||
+                      widget.chartType === 'pivot'
+                        ? 'Rows'
+                        : 'Group by'
+                    }
+                  >
+                    <Select
+                      value={widget.groupBy}
+                      options={dims.map((x) => ({
+                        value: x.key,
+                        label: x.label,
+                      }))}
+                      onChange={(v) => patch({ groupBy: v })}
+                    />
+                  </Field>
+                  {!['doughnut', 'pie', 'hbar'].includes(widget.chartType) && (
+                    <Field
+                      label={
+                        widget.chartType === 'heatmap' ||
+                        widget.chartType === 'pivot'
+                          ? 'Columns'
+                          : 'Break down by'
+                      }
+                    >
+                      <Select
+                        value={widget.breakBy ?? ''}
+                        options={[
+                          { value: '', label: 'None' },
+                          ...cats
+                            .filter((x) => x.key !== widget.groupBy)
+                            .map((x) => ({ value: x.key, label: x.label })),
+                        ]}
+                        onChange={(v) => patch({ breakBy: v || undefined })}
+                      />
+                    </Field>
+                  )}
+                  {isDateType(
+                    allFields.find((x) => x.key === widget.groupBy)?.type ??
+                      'text'
+                  ) ? (
+                    <Field label="Interval">
+                      <Segmented
+                        label="Interval"
+                        value={widget.bucket}
+                        options={[
+                          { value: 'auto', label: 'Auto' },
+                          { value: 'day', label: 'Day' },
+                          { value: 'week', label: 'Week' },
+                          { value: 'month', label: 'Month' },
+                        ]}
+                        onChange={(v) => patch({ bucket: v })}
+                      />
+                    </Field>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Show top">
+                          <Select
+                            value={String(widget.topN)}
+                            options={[3, 4, 5, 6, 8, 10, 15, 20].map((n) => ({
+                              value: String(n),
+                              label: `${n} groups`,
+                            }))}
+                            onChange={(v) => patch({ topN: Number(v) })}
+                          />
+                        </Field>
+                        <Field label="Order">
+                          <Select
+                            value={widget.sort ?? 'auto'}
+                            options={[
+                              {
+                                value: 'auto',
+                                label: allFields.find(
+                                  (x) => x.key === widget.groupBy
+                                )?.order
+                                  ? 'Ranked (priority)'
+                                  : 'Auto (largest first)',
+                              },
+                              {
+                                value: 'valueDesc',
+                                label: 'Value, high → low',
+                              },
+                              { value: 'valueAsc', label: 'Value, low → high' },
+                              { value: 'label', label: 'Name, A → Z' },
+                            ]}
+                            onChange={(v) => patch({ sort: v })}
+                          />
+                        </Field>
+                      </div>
+                      <SwitchRow
+                        label="Group the rest as “Others”"
+                        checked={!!widget.others}
+                        onChange={(v) => patch({ others: v })}
+                      />
+                    </>
+                  )}
+                  {measure(widget.agg, widget.field)}
+                </>
+              )}
+            </Section>
+            <Section title="Display">
+              {widget.chartType !== 'scatter' && (
+                <SwitchRow
+                  label="Legend"
+                  checked={widget.showLegend}
+                  onChange={(v) => patch({ showLegend: v })}
+                />
+              )}
+              <SwitchRow
+                label="Data labels"
+                checked={widget.showLabels}
+                onChange={(v) => patch({ showLabels: v })}
+              />
+              {(widget.chartType === 'doughnut' ||
+                widget.chartType === 'pie') && (
+                <SwitchRow
+                  label="Percentages"
+                  checked={widget.showPercentage}
+                  onChange={(v) => patch({ showPercentage: v })}
+                />
+              )}
+              {widget.chartType === 'stacked' && (
+                <SwitchRow
+                  label="100% stacked"
+                  checked={!!widget.normalize}
+                  onChange={(v) => patch({ normalize: v })}
+                />
+              )}
+              {widget.chartType === 'pivot' && (
+                <SwitchRow
+                  label="Row and column totals"
+                  checked={!!widget.showTotals}
+                  onChange={(v) => patch({ showTotals: v })}
+                />
+              )}
+              {['bar', 'line', 'area', 'stacked'].includes(widget.chartType) &&
+                !widget.normalize && (
+                  <Field label="Target line (optional)">
+                    <TextInput
+                      type="number"
+                      value={widget.refLine ?? ''}
+                      onChange={(e) =>
+                        patch(
+                          {
+                            refLine:
+                              e.target.value === ''
+                                ? undefined
+                                : Number(e.target.value),
+                          },
+                          `ref-${widget.id}`
+                        )
+                      }
+                      placeholder="e.g. 50 000"
+                    />
+                  </Field>
+                )}
+              {noteField}
+            </Section>
+          </>
+        )}
+
+        {widget.kind === 'kpi' && (
+          <>
+            <Section title="Data" defaultOpen>
+              {measure(widget.agg, widget.field)}
+            </Section>
+            <Section title="Display" defaultOpen>
+              <Field label="Colour">
+                <div
+                  className="flex gap-2"
+                  role="radiogroup"
+                  aria-label="Card colour"
+                >
+                  {(Object.keys(TONES) as Tone[]).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      role="radio"
+                      aria-checked={widget.tone === k}
+                      aria-label={k}
+                      onClick={() => patch({ tone: k })}
+                      className={`grid h-6 w-6 place-items-center rounded-full ring-offset-2 ${widget.tone === k ? 'ring-2 ring-blue-500' : ''} ${t.dark ? 'ring-offset-slate-900' : ''} ${FOCUS}`}
+                      style={{ background: TONES[k].hex }}
+                    >
+                      {widget.tone === k && (
+                        <Check className="h-3 w-3 text-white" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              <Field label="Number format">
+                <Segmented
+                  label="Number format"
+                  value={widget.format ?? 'compact'}
+                  options={[
+                    { value: 'compact', label: 'Compact (AED 1.2M)' },
+                    { value: 'full', label: 'Exact (AED 1,234,567.89)' },
+                  ]}
+                  onChange={(v) => patch({ format: v })}
+                />
+              </Field>
+              <SwitchRow
+                label="Compare with prior period"
+                checked={widget.showTrend}
+                onChange={(v) => patch({ showTrend: v })}
+              />
+              <SwitchRow
+                label="Sparkline"
+                checked={widget.showSparkline}
+                onChange={(v) => patch({ showSparkline: v })}
+              />
+              <SwitchRow
+                label="Lower is better"
+                checked={widget.lowerIsBetter}
+                onChange={(v) => patch({ lowerIsBetter: v })}
+              />
+              <Field label="Target (optional)">
+                <TextInput
+                  type="number"
+                  value={widget.target ?? ''}
+                  onChange={(e) =>
+                    patch(
+                      {
+                        target:
+                          e.target.value === ''
+                            ? undefined
+                            : Number(e.target.value),
+                      },
+                      `tg-${widget.id}`
+                    )
+                  }
+                  placeholder="e.g. 20"
+                />
+              </Field>
+              <Field
+                label="Warning threshold (optional)"
+                hint="Between the target and this value the card shows Warning; beyond it, Breach."
+              >
+                <TextInput
+                  type="number"
+                  value={widget.warn ?? ''}
+                  onChange={(e) =>
+                    patch(
+                      {
+                        warn:
+                          e.target.value === ''
+                            ? undefined
+                            : Number(e.target.value),
+                      },
+                      `wn-${widget.id}`
+                    )
+                  }
+                  placeholder="e.g. 30"
+                />
+              </Field>
+              {noteField}
+            </Section>
+          </>
+        )}
+
+        {widget.kind === 'table' && (
+          <>
+            <Section
+              title="Columns"
+              defaultOpen
+              badge={`${widget.columns.length}`}
+            >
+              <div className="flex flex-wrap gap-1.5">
+                {fields.map((x) => {
+                  const on = widget.columns.includes(x.key);
+                  return (
+                    <button
+                      key={x.key}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => {
+                        const columns = on
+                          ? widget.columns.filter((c) => c !== x.key)
+                          : [...widget.columns, x.key];
+                        if (columns.length) patch({ columns });
+                      }}
+                      className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${on ? 'border-blue-600 bg-blue-600 text-white' : t.btn} ${FOCUS}`}
+                    >
+                      {x.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Section>
+            <Section title="Sorting and rows" defaultOpen>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Sort by">
+                  <Select
+                    value={widget.sortBy ?? ''}
+                    options={[
+                      { value: '', label: 'None' },
+                      ...fields.map((x) => ({ value: x.key, label: x.label })),
+                    ]}
+                    onChange={(v) => patch({ sortBy: v || undefined })}
+                  />
+                </Field>
+                <Field label="Order">
+                  <Select
+                    value={widget.sortDir}
+                    options={[
+                      { value: 'desc', label: 'High → low' },
+                      { value: 'asc', label: 'Low → high' },
+                    ]}
+                    onChange={(v) => patch({ sortDir: v })}
+                  />
+                </Field>
+              </div>
+              <Field label="Rows">
+                <Select
+                  value={String(widget.limit)}
+                  options={[5, 8, 10, 15, 25, 50].map((n) => ({
+                    value: String(n),
+                    label: `${n} rows`,
+                  }))}
+                  onChange={(v) => patch({ limit: Number(v) })}
+                />
+              </Field>
+            </Section>
+            <Section title="Display">
+              <SwitchRow
+                label="Data bars on numbers"
+                checked={widget.dataBars}
+                onChange={(v) => patch({ dataBars: v })}
+              />
+              <SwitchRow
+                label="Totals row"
+                checked={widget.showTotals}
+                onChange={(v) => patch({ showTotals: v })}
+              />
+              {noteField}
+            </Section>
+          </>
+        )}
+
+        {widget.kind === 'text' && (
+          <Section title="Content" defaultOpen>
+            <Segmented
+              label="Style"
+              value={widget.variant}
+              options={[
+                { value: 'heading', label: 'Heading' },
+                { value: 'paragraph', label: 'Text' },
+                { value: 'callout', label: 'Callout' },
+              ]}
+              onChange={(v) => patch({ variant: v })}
+            />
+            <Field
+              label="Text"
+              hint="Variables: {{records}} {{range}} {{source}} {{date}}"
+            >
+              <textarea
+                value={widget.text}
+                onChange={(e) =>
+                  patch({ text: e.target.value }, `txt-${widget.id}`)
+                }
+                rows={5}
+                className={`w-full resize-none rounded-lg border px-2.5 py-2 text-[13px] ${t.input} ${FOCUS}`}
+              />
+            </Field>
+          </Section>
+        )}
+
+        {(widget.kind === 'chart' || widget.kind === 'insight') &&
+          drillPaths.length > 0 && (
+            <Section title="Drill-down">
+              <Field label="Drill path">
+                <Select
+                  value={widget.drillPathId ?? ''}
+                  options={[
+                    { value: '', label: 'None (click filters the report)' },
+                    ...drillPaths.map((d) => ({ value: d.id, label: d.name })),
+                  ]}
+                  onChange={(v) => patch({ drillPathId: v || undefined })}
+                />
+              </Field>
+            </Section>
+          )}
+        {!LEGACY_KINDS.has(widget.kind) && getWidget(widget.kind) && (
+          <Section title={getWidget(widget.kind)!.label} defaultOpen>
+            <SchemaInspector
+              widget={widget as unknown as RegistryWidget}
+              schema={getWidget(widget.kind)!.config}
+              fields={fields as unknown as FieldInfo[]}
+              sources={sources}
+              onPatch={(pp, key) => patch(pp, key)}
+            />
+            {noteField}
+          </Section>
+        )}
+        {widget.kind === 'insight' && (
+          <Section title="Data" defaultOpen>
+            <Field label="Analyse by">
+              <Select
+                value={widget.groupBy}
+                options={dims.map((x) => ({ value: x.key, label: x.label }))}
+                onChange={(v) => patch({ groupBy: v })}
+              />
+            </Field>
+            {measure(widget.agg, widget.field)}
+            <Field label="Subject noun">
+              <TextInput
+                value={widget.subject}
+                onChange={(e) =>
+                  patch({ subject: e.target.value }, `subj-${widget.id}`)
+                }
+                placeholder="cases"
+              />
+            </Field>
+            {noteField}
+          </Section>
+        )}
+
+        {layout}
+        {widget.kind !== 'text' && filters}
+      </div>
+      <div className={`flex shrink-0 gap-2 border-t p-2.5 ${t.lineStrong}`}>
+        <GhostButton
+          onClick={onDuplicate}
+          icon={<Copy className="h-3.5 w-3.5" />}
+        >
+          Duplicate
+        </GhostButton>
+        <button
+          type="button"
+          onClick={onRemove}
+          className={`inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-2.5 text-[13px] font-medium text-red-600 hover:bg-red-50 ${FOCUS}`}
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Remove
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const ReportInspector: React.FC<{
+  def: ReportDefinition;
+  allFields: FieldDef[];
+  allRows: Row[];
+  onChange: (
+    fn: (d: ReportDefinition) => ReportDefinition,
+    key?: string
+  ) => void;
+  onAutoBuild: () => void;
+}> = ({ def, allFields, allRows, onChange, onAutoBuild }) => {
+  const t = useT();
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className={`border-b p-3 ${t.line}`}>
+        <p className={`flex items-start gap-1.5 text-[11px] ${t.muted}`}>
+          <MousePointerClick className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Select a
+          widget on the canvas to configure it. These settings apply to the
+          whole report.
+        </p>
+      </div>
+      <Section
+        title="Drill-down paths"
+        badge={String((def.drillPaths ?? []).length || '')}
+      >
+        <p className={`text-[11px] ${t.muted}`}>
+          A path is an ordered hierarchy (e.g. Channel › Region). Attach it to a
+          chart in the widget inspector; clicking a bar then drills one level
+          down, and the last level opens the records.
+        </p>
+        {(def.drillPaths ?? []).map((path) => (
+          <div
+            key={path.id}
+            className={`space-y-2 rounded-lg border p-2 ${t.inset}`}
+          >
+            <TextInput
+              aria-label="Path name"
+              value={path.name}
+              onChange={(e) =>
+                onChange(
+                  (d) => ({
+                    ...d,
+                    drillPaths: (d.drillPaths ?? []).map((x) =>
+                      x.id === path.id ? { ...x, name: e.target.value } : x
+                    ),
+                  }),
+                  `dp-${path.id}`
+                )
+              }
+            />
+            {path.levels.map((lv, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <span className={`w-4 text-[11px] ${t.muted}`}>{i + 1}</span>
+                <div className="flex-1">
+                  <Select
+                    label={`Level ${i + 1}`}
+                    value={lv.field}
+                    options={allFields
+                      .filter((f) => isDim(f.type))
+                      .map((f) => ({ value: f.key, label: f.label }))}
+                    onChange={(v) =>
+                      onChange((d) => ({
+                        ...d,
+                        drillPaths: (d.drillPaths ?? []).map((x) =>
+                          x.id === path.id
+                            ? {
+                                ...x,
+                                levels: x.levels.map((l, j) =>
+                                  j === i ? { field: v } : l
+                                ),
+                              }
+                            : x
+                        ),
+                      }))
+                    }
+                  />
+                </div>
+                {path.levels.length > 2 && (
+                  <IconButton
+                    label="Remove level"
+                    onClick={() =>
+                      onChange((d) => ({
+                        ...d,
+                        drillPaths: (d.drillPaths ?? []).map((x) =>
+                          x.id === path.id
+                            ? {
+                                ...x,
+                                levels: x.levels.filter((_, j) => j !== i),
+                              }
+                            : x
+                        ),
+                      }))
+                    }
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </IconButton>
+                )}
+              </div>
+            ))}
+            <div className="flex justify-between">
+              <GhostButton
+                onClick={() => {
+                  const used = new Set(path.levels.map((l) => l.field));
+                  const next = allFields.find(
+                    (f) => isCat(f.type) && !used.has(f.key)
+                  );
+                  if (next)
+                    onChange((d) => ({
+                      ...d,
+                      drillPaths: (d.drillPaths ?? []).map((x) =>
+                        x.id === path.id
+                          ? { ...x, levels: [...x.levels, { field: next.key }] }
+                          : x
+                      ),
+                    }));
+                }}
+              >
+                Add level
+              </GhostButton>
+              <GhostButton
+                onClick={() =>
+                  onChange((d) => ({
+                    ...d,
+                    drillPaths: (d.drillPaths ?? []).filter(
+                      (x) => x.id !== path.id
+                    ),
+                    widgets: d.widgets.map((w) =>
+                      w.drillPathId === path.id
+                        ? { ...w, drillPathId: undefined }
+                        : w
+                    ),
+                  }))
+                }
+              >
+                Delete path
+              </GhostButton>
+            </div>
+          </div>
+        ))}
+        <GhostButton
+          onClick={() => {
+            const cats = allFields.filter((f) => isCat(f.type));
+            if (cats.length < 2) return;
+            onChange((d) => ({
+              ...d,
+              drillPaths: [
+                ...(d.drillPaths ?? []),
+                {
+                  id: uid(),
+                  name: `${cats[0].label} › ${cats[1].label}`,
+                  levels: [{ field: cats[0].key }, { field: cats[1].key }],
+                },
+              ],
+            }));
+          }}
+        >
+          Add drill path
+        </GhostButton>
+      </Section>
+
+      <Section title="Cover, header & footer">
+        <Field label="Subtitle">
+          <TextInput
+            value={def.presentation?.subtitle ?? ''}
+            placeholder="e.g. Monthly fraud management report"
+            onChange={(e) =>
+              onChange(
+                (d) => ({
+                  ...d,
+                  presentation: {
+                    ...(d.presentation ?? DEFAULT_PRESENTATION),
+                    subtitle: e.target.value,
+                  },
+                }),
+                'pres-sub'
+              )
+            }
+          />
+        </Field>
+        <Field label="Organisation / brand">
+          <TextInput
+            value={def.presentation?.brandName ?? ''}
+            onChange={(e) =>
+              onChange(
+                (d) => ({
+                  ...d,
+                  presentation: {
+                    ...(d.presentation ?? DEFAULT_PRESENTATION),
+                    brandName: e.target.value,
+                  },
+                }),
+                'pres-brand'
+              )
+            }
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Header text">
+            <TextInput
+              value={def.presentation?.headerText ?? ''}
+              onChange={(e) =>
+                onChange(
+                  (d) => ({
+                    ...d,
+                    presentation: {
+                      ...(d.presentation ?? DEFAULT_PRESENTATION),
+                      headerText: e.target.value,
+                    },
+                  }),
+                  'pres-h'
+                )
+              }
+            />
+          </Field>
+          <Field label="Footer text">
+            <TextInput
+              value={def.presentation?.footerText ?? ''}
+              placeholder="Confidential"
+              onChange={(e) =>
+                onChange(
+                  (d) => ({
+                    ...d,
+                    presentation: {
+                      ...(d.presentation ?? DEFAULT_PRESENTATION),
+                      footerText: e.target.value,
+                    },
+                  }),
+                  'pres-f'
+                )
+              }
+            />
+          </Field>
+        </div>
+        <Field label="Accent colour">
+          <input
+            type="color"
+            aria-label="Accent colour"
+            value={def.presentation?.accent ?? '#2563eb'}
+            onChange={(e) =>
+              onChange(
+                (d) => ({
+                  ...d,
+                  presentation: {
+                    ...(d.presentation ?? DEFAULT_PRESENTATION),
+                    accent: e.target.value,
+                  },
+                }),
+                'pres-acc'
+              )
+            }
+            className="h-8 w-14 cursor-pointer rounded border"
+          />
+        </Field>
+        <Toggle
+          checked={def.presentation?.showPageNumbers ?? true}
+          onChange={(v) =>
+            onChange((d) => ({
+              ...d,
+              presentation: {
+                ...(d.presentation ?? DEFAULT_PRESENTATION),
+                showPageNumbers: v,
+              },
+            }))
+          }
+          label="Page numbers on print / PDF"
+        />
+      </Section>
+
+      <Section
+        title="Report period"
+        defaultOpen
+        badge={PRESET_LABEL[def.period.preset]}
+      >
+        <PeriodPicker
+          value={def.period}
+          onChange={(period) => onChange((d) => ({ ...d, period }))}
+          timezone={def.timezone ?? DEFAULT_TZ}
+        />
+        <Field
+          label="Time zone"
+          hint="Decides which day a record belongs to and what 'today' means."
+        >
+          <Select
+            value={def.timezone ?? DEFAULT_TZ}
+            options={TIMEZONES.map((z) => ({ value: z, label: z }))}
+            onChange={(v) => onChange((d) => ({ ...d, timezone: v }))}
+          />
+        </Field>
+        <SwitchRow
+          label="Compare with previous period"
+          checked={def.compare}
+          onChange={(v) => onChange((d) => ({ ...d, compare: v }))}
+        />
+      </Section>
+      <Section
+        title="Report filters"
+        defaultOpen
+        badge={def.filters.length ? String(def.filters.length) : undefined}
+      >
+        <FilterEditor
+          fields={allFields}
+          rules={def.filters}
+          allRows={allRows}
+          onChange={(filters) => onChange((d) => ({ ...d, filters }))}
+        />
+      </Section>
+      <Section
+        title="Appearance"
+        defaultOpen
+        badge={PALETTES[def.palette].label}
+      >
+        <Field label="Chart palette">
+          <div
+            className="grid grid-cols-5 gap-1.5"
+            role="radiogroup"
+            aria-label="Chart palette"
+          >
+            {(Object.keys(PALETTES) as PaletteKey[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                role="radio"
+                aria-checked={def.palette === k}
+                title={PALETTES[k].label}
+                onClick={() => onChange((d) => ({ ...d, palette: k }))}
+                className={`flex h-8 overflow-hidden rounded-lg border-2 ${def.palette === k ? 'border-blue-500' : 'border-transparent'} ${FOCUS}`}
+              >
+                {PALETTES[k].colors.slice(0, 4).map((c) => (
+                  <span key={c} className="flex-1" style={{ background: c }} />
+                ))}
+              </button>
+            ))}
+          </div>
+        </Field>
+        <Field label="Classification label">
+          <Select
+            value={def.classification}
+            options={(Object.keys(CLASSIFICATION) as Classification[]).map(
+              (k) => ({ value: k, label: CLASSIFICATION[k].label })
+            )}
+            onChange={(v) =>
+              onChange((d) => ({ ...d, classification: v as Classification }))
+            }
+          />
+        </Field>
+      </Section>
+      <Section title="Layout">
+        <p className={`text-[11px] ${t.muted}`}>
+          Rebuild the canvas with a recommended executive layout. You can undo
+          this.
+        </p>
+        <GhostButton
+          onClick={onAutoBuild}
+          icon={<Sparkles className="h-3.5 w-3.5 text-blue-600" />}
+        >
+          Auto-build layout
+        </GhostButton>
+      </Section>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Expand modal, templates drawer
+ * ======================================================================== */
+/** Paginated record list for a drill-through (server-side paging in the actual report). */
+const DrillThroughModal: React.FC<{
+  info: { title: string; filters: QueryFilter[]; sourceId?: string } | null;
+  data: DataCtx;
+  onClose: () => void;
+}> = ({ info, data, onClose }) => {
+  const t = useT();
+  const PAGE = 25;
+  const [offset, setOffset] = useState(0);
+  const [state, setState] = useState<{
+    loading: boolean;
+    error?: string;
+    result?: RecordsResult;
+    fields: FieldDef[];
+  }>({ loading: false, fields: [] });
+  useEffect(() => setOffset(0), [info]);
+  useEffect(() => {
+    if (!info || !data.fetchRecords) return;
+    let live = true;
+    setState((s) => ({ ...s, loading: true, error: undefined }));
+    data
+      .fetchRecords({
+        filters: info.filters,
+        sourceId: info.sourceId,
+        offset,
+        limit: PAGE,
+      })
+      .then(
+        (r) =>
+          live &&
+          setState({ loading: false, result: r.result, fields: r.fields })
+      )
+      .catch(
+        (e) =>
+          live &&
+          setState({
+            loading: false,
+            fields: [],
+            error: e instanceof Error ? e.message : 'Could not load records.',
+          })
+      );
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, offset]);
+  useEffect(() => {
+    if (!info) return;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [info, onClose]);
+  if (!info) return null;
+  const r = state.result;
+  return (
+    <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Records"
+        className={`flex max-h-[85vh] w-full max-w-5xl flex-col rounded-2xl border ${t.card}`}
+      >
+        <div
+          className={`flex items-start justify-between gap-3 border-b p-4 ${t.lineStrong}`}
+        >
+          <div>
+            <h2 className={`text-base font-bold ${t.text}`}>{info.title}</h2>
+            <p className={`mt-0.5 text-xs ${t.muted}`}>
+              {data.mode === 'final'
+                ? 'Actual records'
+                : 'Preview sample records'}
+              {r ? ` · ${r.totalRows.toLocaleString()} match` : ''}
+            </p>
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          {state.error ? (
+            <p role="alert" className="py-10 text-center text-sm text-red-600">
+              {state.error}
+            </p>
+          ) : !r ? (
+            <p className={`py-10 text-center text-sm ${t.muted}`}>
+              Loading records…
+            </p>
+          ) : r.rows.length === 0 ? (
+            <Empty />
+          ) : (
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className={`${t.inset} ${t.muted}`}>
+                  {state.fields.map((f) => (
+                    <th
+                      key={f.key}
+                      className="whitespace-nowrap px-2 py-1.5 font-medium"
+                    >
+                      {f.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {r.rows.map((row, i) => (
+                  <tr
+                    key={i}
+                    className={`border-b last:border-b-0 ${t.line} ${t.body}`}
+                  >
+                    {state.fields.map((f) => (
+                      <td
+                        key={f.key}
+                        className={`max-w-[220px] truncate px-2 py-1.5 ${isNumeric(f.type) ? 'text-right tabular-nums' : ''}`}
+                      >
+                        <CellValue
+                          field={f}
+                          value={row[f.key]}
+                          currency={data.currency}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {r && (
+          <div
+            className={`flex items-center justify-between border-t px-4 py-2 text-xs ${t.lineStrong} ${t.muted}`}
+          >
+            <span>
+              {r.totalRows === 0 ? 0 : offset + 1}–
+              {Math.min(offset + PAGE, r.totalRows)} of{' '}
+              {r.totalRows.toLocaleString()}
+            </span>
+            <span className="flex gap-2">
+              <GhostButton
+                onClick={() => setOffset(Math.max(0, offset - PAGE))}
+              >
+                Previous
+              </GhostButton>
+              <GhostButton onClick={() => setOffset(offset + PAGE)}>
+                Next
+              </GhostButton>
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const WidgetModal: React.FC<{
+  widget: Widget | null;
+  data: DataCtx;
+  onClose: () => void;
+}> = ({ widget, data, onClose }) => {
+  const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(!!widget);
+  const [tab, setTab] = useState<'data' | 'records'>('data');
+  useEffect(() => {
+    setTab('data');
+  }, [widget?.id]);
+  useEffect(() => {
+    if (!widget) return;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [widget, onClose]);
+  const records = useMemo(
+    () =>
+      widget ? applyFilters(data.rows, widget.filters, data.fieldMap) : [],
+    [widget, data.rows, data.fieldMap]
+  );
+  if (!widget) return null;
+  const tbl = widgetTable(widget, data);
+  const bigData = { ...data, onExpand: undefined, onPick: undefined };
+  const big =
+    widget.kind === 'chart'
+      ? { ...widget, height: 'lg' as Height, span: 12 as Span }
+      : widget;
+  // In the actual report, files are produced by the export service only (never downloaded from here),
+  // and record-level access goes through drill-through, which pages server-side.
+  const showRecords = widget.kind !== 'text' && data.mode !== 'final';
+  const exportRecords = () =>
+    downloadCsv(
+      `${slug(widget.title)}-records.csv`,
+      data.fields.map((x) => x.label),
+      records.map((r) =>
+        data.fields.map((x) => exportCell(x, r[x.key], data.canViewSensitive))
+      )
+    );
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={widget.title}
+        ref={trapRef}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className={`flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
+      >
+        <div
+          className={`flex items-center justify-between border-b px-4 py-3 ${t.lineStrong}`}
+        >
+          <h2 className={`truncate text-sm font-semibold ${t.text}`}>
+            {widget.title}
+          </h2>
+          <div className="flex gap-2">
+            {tab === 'data' &&
+              tbl.headers.length > 0 &&
+              data.mode !== 'final' && (
+                <GhostButton
+                  onClick={() =>
+                    downloadCsv(
+                      `${slug(widget.title)}.csv`,
+                      tbl.headers,
+                      tbl.rows
+                    )
+                  }
+                  icon={<Download className="h-3.5 w-3.5" />}
+                >
+                  Download data
+                </GhostButton>
+              )}
+            {tab === 'records' && (
+              <GhostButton
+                onClick={exportRecords}
+                icon={<Download className="h-3.5 w-3.5" />}
+              >
+                Download records
+              </GhostButton>
+            )}
+            <IconButton label="Close" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </IconButton>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+          <WidgetView widget={big} data={bigData} />
+          {showRecords && (
+            <div className="w-72">
+              <Segmented
+                label="Detail view"
+                value={tab}
+                options={[
+                  { value: 'data', label: 'Chart data' },
+                  {
+                    value: 'records',
+                    label: `Records (${records.length.toLocaleString()})`,
+                  },
+                ]}
+                onChange={setTab}
+              />
+            </div>
+          )}
+          {tab === 'data' && tbl.headers.length > 0 && (
+            <div
+              className={`overflow-x-auto rounded-xl border ${t.lineStrong}`}
+            >
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className={`${t.inset} ${t.muted}`}>
+                    {tbl.headers.map((h) => (
+                      <th
+                        key={h}
+                        className="whitespace-nowrap px-3 py-2 font-medium"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tbl.rows.slice(0, 100).map((r, i) => (
+                    <tr key={i} className={`border-t ${t.line} ${t.body}`}>
+                      {r.map((c, j) => (
+                        <td key={j} className="px-3 py-1.5">
+                          {typeof c === 'number' ? c.toLocaleString() : c}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {tab === 'records' && showRecords && (
+            <div className="h-80 min-h-0">
+              <DataPreview
+                rows={records}
+                fields={data.fields}
+                currency={data.currency}
+                limit={8}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TemplatesDrawer: React.FC<{
+  open: boolean;
+  templates: ReportTemplate[];
+  sources: ReportSource[];
+  onClose: () => void;
+  onOpen: (t: ReportTemplate, run: boolean) => void;
+  onDuplicate: (t: ReportTemplate) => void;
+  onDelete: (t: ReportTemplate) => void;
+  onImport: (file: File) => void;
+}> = ({
+  open,
+  templates,
+  sources,
+  onClose,
+  onOpen,
+  onDuplicate,
+  onDelete,
+  onImport,
+}) => {
+  const t = useT();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
+  const [q, setQ] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [open, onClose]);
+  if (!open) return null;
+  const list = templates.filter((x) =>
+    `${x.name} ${x.description}`.toLowerCase().includes(q.toLowerCase())
+  );
+  return (
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-slate-900/40"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Report templates"
+        ref={trapRef}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className={`flex h-full w-full max-w-md flex-col border-l ${t.dark ? 'bg-slate-900' : 'bg-white'} ${t.lineStrong}`}
+      >
+        <div
+          className={`flex items-center justify-between border-b px-4 py-3 ${t.lineStrong}`}
+        >
+          <div>
+            <h2 className={`text-sm font-semibold ${t.text}`}>
+              Templates and drafts
+            </h2>
+            <p className={`text-[11px] ${t.muted}`}>
+              Edit one, or run it straight away.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onImport(f);
+                e.target.value = '';
+              }}
+            />
+            <GhostButton
+              onClick={() => fileRef.current?.click()}
+              icon={<Upload className="h-3.5 w-3.5" />}
+            >
+              Import
+            </GhostButton>
+            <IconButton label="Close templates" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </IconButton>
+          </div>
+        </div>
+        <div className="p-3">
+          <div className="relative">
+            <Search
+              className={`pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${t.muted}`}
+            />
+            <TextInput
+              aria-label="Search templates"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search templates…"
+              className="pl-8"
+            />
+          </div>
+        </div>
+        <ul className="flex-1 space-y-2 overflow-y-auto px-3 pb-3">
+          {list.length === 0 && (
+            <li className={`py-12 text-center text-[13px] ${t.muted}`}>
+              No templates match your search.
+            </li>
+          )}
+          {list.map((tp) => {
+            const src = sources.find((s) => s.id === tp.definition.sourceId);
+            const Icon = src?.icon ?? Database;
+            return (
+              <li key={tp.id} className={`rounded-xl border p-3 ${t.card}`}>
+                <div className="flex items-start gap-2.5">
+                  <span
+                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${t.chipIcon}`}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`truncate text-[13px] font-semibold ${t.text}`}
+                      >
+                        {tp.name}
+                      </span>
+                      {tp.builtIn && <Badge value="Built-in" tone="blue" />}
+                      {tp.isDraft && <Badge value="Draft" />}
+                    </div>
+                    <p className={`mt-0.5 line-clamp-2 text-[11px] ${t.muted}`}>
+                      {tp.description || 'No description'}
+                    </p>
+                    <p className={`mt-0.5 text-[10px] ${t.muted}`}>
+                      {src?.name ?? 'Unknown source'} ·{' '}
+                      {tp.definition.widgets.length} widgets · updated{' '}
+                      {new Date(tp.updatedAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <GhostButton
+                    onClick={() => onOpen(tp, false)}
+                    icon={<Pencil className="h-3.5 w-3.5" />}
+                  >
+                    Edit
+                  </GhostButton>
+                  <button
+                    type="button"
+                    onClick={() => onOpen(tp, true)}
+                    className={PRIMARY_BTN}
+                  >
+                    <Play className="h-3.5 w-3.5" /> Run
+                  </button>
+                  <GhostButton
+                    onClick={() => onDuplicate(tp)}
+                    icon={<Copy className="h-3.5 w-3.5" />}
+                  >
+                    Duplicate
+                  </GhostButton>
+                  <GhostButton
+                    onClick={() => downloadJson(`${slug(tp.name)}.json`, tp)}
+                    icon={<Download className="h-3.5 w-3.5" />}
+                    title="Export as JSON to share"
+                  >
+                    Export
+                  </GhostButton>
+                  {!tp.builtIn && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(tp)}
+                      className={`ml-auto inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-red-600 hover:bg-red-50 ${FOCUS}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
+};
+
+/* ==========================================================================
+ * Main page
+ * ======================================================================== */
+interface History {
+  past: ReportDefinition[];
+  present: ReportDefinition;
+  future: ReportDefinition[];
+}
+
+const STEPS = [
+  { full: 'Data source & fields', short: 'Data' },
+  { full: 'Design & configure', short: 'Design' },
+  { full: 'Review & generate', short: 'Generate' },
+];
+
+const ReportBuilder: React.FC<ReportBuilderProps> = ({
+  sources = SOURCES,
+  templateStore = localTemplateStore,
+  onGenerate,
+  onBack,
+  currentUser = 'Current user',
+  currency = 'AED',
+  theme = 'light',
+  height = 'calc(100vh - 6rem)',
+  canViewSensitive = false,
+  capabilities,
+  onAudit,
+  provider: providerProp,
+  previewLimit: previewLimitProp = DEFAULT_PREVIEW_LIMIT,
+  tenantId,
+  fiscalYearStartMonth,
+}) => {
+  const t = theme === 'dark' ? DARK : LIGHT;
+   const { getMenuId } = useMenuIds();
+  const REPORT_BUILDER_MENU_ID = getMenuId('report_builder');
+
+  const dark = theme === 'dark' ? 'bg-white/5 border-white/20' : 'bg-white border-gray-200';
+
+  const provider = useMemo(
+    () =>
+      providerProp ??
+      createLocalProvider({ sources, canViewSensitive, latencyMs: 350 }),
+    [providerProp, sources, canViewSensitive]
+  );
+  const run = useReportRun(provider);
+  /** true while the canvas shows the generated (ACTUAL) report; false = design-time preview sample. */
+  const [viewingFinal, setViewingFinal] = useState(false);
+  const viewMode: 'preview' | 'final' =
+    viewingFinal && run.state.result ? 'final' : 'preview';
+
+  const [hist, setHist] = useState<History>(() => ({
+    past: [],
+    present: blankDefinition(sources[0]),
+    future: [],
+  }));
+  const def = hist.present;
+  // Idempotent render-time sync of the active report time zone (see dayOf / zonedParts).
+  setReportTimezone(def.timezone ?? DEFAULT_TZ);
+  const lastEdit = useRef<{ key: string; at: number } | null>(null);
+
+  const [step, setStep] = useState(1);
+  const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(true);
+  const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
+  const [railTab, setRailTab] = useState<'widgets' | 'fields'>('widgets');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'data' | 'summary'>('data');
+  const [crossFilter, setCrossFilter] = useState<{
+    field: string;
+    value: string;
+  } | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { addNotification } = useNotifications();
+
+  const [rowsState, setRowsState] = useState<{
+    id: string;
+    rows: Row[];
+    truncated: boolean;
+    at?: string;
+    total?: number;
+  }>({
+    id: '',
+    rows: [],
+    truncated: false,
+  });
+  const rawRows = useMemo(() => {
+    const src = sources.find((x) => x.id === def.sourceId) ?? sources[0];
+    if (rowsState.id !== src.id) return [];
+    // Defence in depth: viewers without the grant never hold raw sensitive values in component state.
+    return canViewSensitive
+      ? rowsState.rows
+      : maskSensitive(rowsState.rows, src.fields);
+  }, [rowsState, sources, def.sourceId, canViewSensitive]);
+  const [rowsLoading, setRowsLoading] = useState(false);
+  const [rowsError, setRowsError] = useState<string | null>(null);
+  const rowCache = useRef(
+    new Map<
+      string,
+      { rows: Row[]; truncated: boolean; at?: string; total?: number }
+    >()
+  );
+  const [reloadTick, setReloadTick] = useState(0);
+  const refreshData = () => {
+    rowCache.current.clear();
+    try {
+      Object.keys(sessionStorage)
+        .filter((k) => k.startsWith(PREVIEW_SS_PREFIX))
+        .forEach((k) => sessionStorage.removeItem(k));
+    } catch {
+      /* ignore */
+    }
+    setReloadTick((n) => n + 1);
+  };
+
+  const [userTemplates, setUserTemplates] = useState<ReportTemplate[]>([]);
+  const [templateId, setTemplateId] = useState<string | null>(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [visibility, setVisibility] = useState<TemplateVisibility>('private');
+
+  const [output, setOutput] = useState<OutputOptions>({
+    format: 'pdf',
+    orientation: 'landscape',
+    paper: 'A4',
+  });
+  const [generating, setGenerating] = useState(false);
+  const [lastRun, setLastRun] = useState<{
+    at: Date;
+    rows: number;
+    format: OutputFormat;
+  } | null>(null);
+  const [toast, setToast] = useState<{
+    msg: string;
+    tone: 'info' | 'success' | 'error';
+  } | null>(null);
+
+  const source = sources.find((s) => s.id === def.sourceId) ?? sources[0];
+  const rowsTruncated = rowsState.id === source.id && rowsState.truncated;
+  const loadedAt = rowsState.id === source.id ? rowsState.at : undefined;
+  const baseFields = useMemo(
+    () => enrichFields(source.fields, rawRows),
+    [source, rawRows]
+  );
+  const derivedOut = useMemo(
+    () => applyDerived(rawRows, def.derived ?? [], baseFields),
+    [rawRows, def.derived, baseFields, def.timezone]
+  );
+  const allRows = derivedOut.rows;
+  /** Full field catalogue: source fields (enriched) plus the report's custom fields. */
+  const catalogue = derivedOut.fields;
+  const certifiedMetrics = source.metrics ?? [];
+  const allMetrics = useMemo(
+    () => [...certifiedMetrics, ...(def.metrics ?? [])],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [source, def.metrics]
+  );
+  const metricFields = useMemo(() => allMetrics.map(metricField), [allMetrics]);
+  const fieldMap = useMemo(
+    () => new Map([...catalogue, ...metricFields].map((x) => [x.key, x])),
+    [catalogue, metricFields]
+  );
+  const selectedFields = useMemo(
+    () =>
+      def.fields.map((k) => fieldMap.get(k)).filter((x): x is FieldDef => !!x),
+    [def.fields, fieldMap]
+  );
+  const selectedWidget =
+    def.widgets.find((w) => w.id === selectedWidgetId) ?? null;
+  const interactive = step === 3 || (step === 2 && !editMode);
+
+  const notify = useCallback(
+    (msg: string, tone: 'info' | 'success' | 'error' = 'info') =>
+      setToast({ msg, tone }),
+    []
+  );
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), 3600);
+    return () => window.clearTimeout(id);
+  }, [toast]);
+
+  /* ---- definition updates with undo/redo ---- */
+  const update = useCallback(
+    (fn: (d: ReportDefinition) => ReportDefinition, key?: string) => {
+      const now = Date.now();
+      const coalesce =
+        !!key &&
+        lastEdit.current?.key === key &&
+        now - lastEdit.current.at < 1000;
+      lastEdit.current = key ? { key, at: now } : null;
+      setHist((h) => {
+        const next = fn(h.present);
+        if (next === h.present) return h;
+        return coalesce
+          ? { ...h, present: next }
+          : {
+              past: [...h.past.slice(-49), h.present],
+              present: next,
+              future: [],
+            };
+      });
+    },
+    []
+  );
+  const undo = useCallback(() => {
+    lastEdit.current = null;
+    setHist((h) =>
+      h.past.length
+        ? {
+            past: h.past.slice(0, -1),
+            present: h.past[h.past.length - 1],
+            future: [h.present, ...h.future],
+          }
+        : h
+    );
+  }, []);
+  const redo = useCallback(() => {
+    lastEdit.current = null;
+    setHist((h) =>
+      h.future.length
+        ? {
+            past: [...h.past, h.present],
+            present: h.future[0],
+            future: h.future.slice(1),
+          }
+        : h
+    );
+  }, []);
+  const resetHistory = (d: ReportDefinition) => {
+    lastEdit.current = null;
+    setHist({ past: [], present: d, future: [] });
+  };
+  const dirty = hist.past.length > 0;
+
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [dirty]);
+
+  /* ---- design-time preview data: ONLY the latest N rows are loaded (never the full dataset) ---- */
+  const previewLimit = Math.max(
+    10,
+    Math.min(MAX_PREVIEW_LIMIT, def.previewLimit ?? previewLimitProp)
+  );
+  useEffect(() => {
+    let cancelled = false;
+    const ctrl = new AbortController();
+    // Permission is part of the key: after a canViewSensitive change, stale
+    // (masked or unmasked) cached rows are never reused.
+    const cacheKey = `${source.id}:${previewLimit}:${canViewSensitive ? 1 : 0}`;
+    const ssKey = `${PREVIEW_SS_PREFIX}${cacheKey}`;
+    // Memory cache first, then the session-store copy (survives a page refresh).
+    const cached = rowCache.current.get(cacheKey) ?? readPreviewCache(ssKey);
+    if (cached) {
+      rowCache.current.set(cacheKey, cached);
+      setRowsState({ id: source.id, ...cached });
+      setRowsError(null);
+      return;
+    }
+    setRowsLoading(true);
+    setRowsError(null);
+    provider
+      .loadPreview({
+        sourceId: source.id,
+        limit: previewLimit,
+        signal: ctrl.signal,
+      })
+      .then((res) => {
+        if (cancelled) return;
+        // Defence in depth: enforce the cap even if a backend ignores `limit`.
+        const capped = res.rows.length > previewLimit;
+        const clean = normalizeRows(
+          capped ? res.rows.slice(0, previewLimit) : res.rows,
+          source.fields
+        );
+        const entry = {
+          rows: clean,
+          truncated: capped || (res.totalInSource ?? 0) > clean.length,
+          at: res.asOf ?? new Date().toISOString(),
+          total: res.totalInSource,
+        };
+        rowCache.current.set(cacheKey, entry);
+        // Restricted reports never touch browser storage (same rule as the design autosave).
+        if (def.classification !== 'restricted') {
+          try {
+            sessionStorage.setItem(ssKey, JSON.stringify(entry));
+          } catch {
+            /* quota */
+          }
+        }
+        setRowsState({ id: source.id, ...entry });
+      })
+      .catch(
+        () =>
+          !cancelled &&
+          setRowsError(`Could not load preview data for ${source.name}.`)
+      )
+      .finally(() => !cancelled && setRowsLoading(false));
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, reloadTick, provider, previewLimit, canViewSensitive]);
+
+  useEffect(() => {
+    templateStore
+      .list()
+      .then(setUserTemplates)
+      .catch(() => notify('Could not load saved templates.', 'error'));
+  }, [templateStore, notify]);
+
+  /* ---- derived data ---- */
+  const tz = def.timezone ?? DEFAULT_TZ;
+  const today = todayIn(tz);
+  const ropts = useMemo(
+    () => ({ today, fiscalYearStartMonth }),
+    [today, fiscalYearStartMonth]
+  );
+  /** Period of the ACTUAL report. Never used to filter the preview sample. */
+  const period = useMemo(
+    () => resolvePeriod(def.period, ropts),
+    [def.period, ropts]
+  );
+  const effCompare: CompareMode = def.compare ? def.period.compare : 'none';
+  const comparePeriod = useMemo(
+    () => resolveComparison(period, effCompare, ropts),
+    [period, effCompare, ropts]
+  );
+  const rangeErr = periodError(def.period);
+  /** Dates actually spanned by the preview sample (what the design-time charts show). */
+  const previewExtent = useMemo<Win | null>(() => {
+    let lo = '',
+      hi = '';
+    for (const r of allRows) {
+      const d = dayOf(String(r[source.dateField] ?? ''));
+      if (!d || d === 'Unknown') continue;
+      if (!lo || d < lo) lo = d;
+      if (!hi || d > hi) hi = d;
+    }
+    return lo
+      ? {
+          from: lo,
+          to: hi,
+          days:
+            Math.round(
+              (parseIso(hi).getTime() - parseIso(lo).getTime()) / 864e5
+            ) + 1,
+        }
+      : null;
+  }, [allRows, source.dateField]);
+  const win: Win | null =
+    viewMode === 'final'
+      ? period
+        ? { from: period.from, to: period.to, days: period.days }
+        : null
+      : previewExtent;
+  const autoBucket = autoBucketFor(win);
+  const baseRows = useMemo(
+    () => applyFilters(allRows, def.filters, fieldMap),
+    [allRows, def.filters, fieldMap]
+  );
+  // Preview: every sample row (no period filter, no previous-period comparison: neither is meaningful on N rows).
+  // Final: widgets render from server results, so no rows are held here at all.
+  const rows = useMemo(
+    () => (viewMode === 'final' ? [] : baseRows),
+    [baseRows, viewMode]
+  );
+  const prevRows = null as Row[] | null;
+
+  useEffect(() => {
+    if (!interactive) setCrossFilter(null);
+  }, [interactive]);
+  const xf = interactive ? crossFilter : null;
+  const viewRows = useMemo(
+    () =>
+      xf
+        ? rows.filter((r) => cellKey(fieldMap.get(xf.field), r) === xf.value)
+        : rows,
+    [rows, xf, fieldMap]
+  );
+  const viewPrev = useMemo(
+    () =>
+      xf && prevRows
+        ? prevRows.filter(
+            (r) => cellKey(fieldMap.get(xf.field), r) === xf.value
+          )
+        : prevRows,
+    [prevRows, xf, fieldMap]
+  );
+
+  const colors = PALETTES[def.palette].colors;
+  const rangeText =
+    def.period.preset === 'custom' && def.period.from && def.period.to
+      ? `${fmtDate(def.period.from)} to ${fmtDate(def.period.to)}`
+      : PRESET_LABEL[def.period.preset].toLowerCase();
+  const vars = useMemo(
+    () => ({
+      records:
+        viewMode === 'final'
+          ? (run.state.result?.meta.recordsMatched ?? 0).toLocaleString()
+          : `${viewRows.length.toLocaleString()} (preview)`,
+      range: rangeText,
+      source: source.name,
+      date: new Date().toLocaleDateString(),
+    }),
+    [viewRows.length, rangeText, source.name, viewMode, run.state.result]
+  );
+
+  const pickHandler = useCallback((field: string, value: string) => {
+    setCrossFilter((cur) =>
+      cur && cur.field === field && cur.value === value
+        ? null
+        : { field, value }
+    );
+  }, []);
+
+  /* ---- preview execution for registry widgets (same query vocabulary as the backend, tiny local sample) ---- */
+  const [otherPreview, setOtherPreview] = useState<
+    Record<
+      string,
+      { rows: Row[]; fm: Map<string, FieldDef>; src: ReportSource }
+    >
+  >({});
+  const otherInflight = useRef(new Set<string>());
+  useEffect(() => {
+    setOtherPreview({});
+    otherInflight.current.clear();
+  }, [provider, previewLimit, def.sourceId]);
+  const ensureOther = useCallback(
+    (sid: string) => {
+      if (otherInflight.current.has(sid)) return;
+      const src = sources.find((s) => s.id === sid);
+      if (!src) return;
+      otherInflight.current.add(sid);
+      provider
+        .loadPreview({ sourceId: sid, limit: previewLimit })
+        .then((res) => {
+          const raw = normalizeRows(
+            res.rows.slice(0, previewLimit),
+            src.fields
+          );
+          const rs = canViewSensitive ? raw : maskSensitive(raw, src.fields);
+          const fs = enrichFields(src.fields, rs);
+          setOtherPreview((o) => ({
+            ...o,
+            [sid]: {
+              rows: rs,
+              src,
+              fm: new Map(
+                [...fs, ...(src.metrics ?? []).map(metricField)].map((f) => [
+                  f.key,
+                  f,
+                ])
+              ),
+            },
+          }));
+        })
+        .catch(() => otherInflight.current.delete(sid));
+    },
+    [sources, provider, previewLimit, canViewSensitive]
+  );
+  const previewExec = useCallback(
+    (spec: QuerySpec, w: Widget): QueryResult | undefined => {
+      const sid = spec.sourceId ?? source.id;
+      let rs: Row[];
+      let fm: Map<string, FieldDef>;
+      let df: string;
+      if (sid === source.id) {
+        rs = baseRows;
+        fm = fieldMap;
+        df = source.dateField;
+      } else {
+        const o = otherPreview[sid];
+        if (!o) {
+          ensureOther(sid);
+          return undefined;
+        }
+        rs = o.rows;
+        fm = o.fm;
+        df = o.src.dateField;
+      }
+      const xfApplies =
+        xf &&
+        sid === source.id &&
+        !(
+          getWidget(w.kind)?.skipsCrossFilter?.(
+            w as unknown as RegistryWidget,
+            xf
+          ) ?? false
+        );
+      const {
+        suffix: _s,
+        label: _l,
+        sourceId: _sid,
+        extraFilters,
+        compare: _c,
+        ...rest
+      } = spec;
+      const q: ReportQuery = {
+        ...rest,
+        id: w.id,
+        widgetId: w.id,
+        label: w.title,
+        sourceId: sid,
+        period: null,
+        filters: [
+          ...w.filters
+            .filter((r) => r.field && r.value !== '')
+            .map((r) => ({ field: r.field, op: r.op, value: r.value })),
+          ...(xfApplies && xf
+            ? [{ field: xf.field, op: 'eq' as const, value: xf.value }]
+            : []),
+          ...(extraFilters ?? []),
+        ],
+        dimensions: (rest.dimensions ?? []).map((d) => ({
+          ...d,
+          bucket: d.bucket === 'auto' ? autoBucket : d.bucket,
+        })),
+        measures: rest.measures ?? [],
+      };
+      try {
+        return runLocalQuery(q, rs, fm, df);
+      } catch {
+        return undefined;
+      }
+    },
+    [source, baseRows, fieldMap, otherPreview, ensureOther, xf, autoBucket]
+  );
+
+  const runResult = viewMode === 'final' ? run.state.result : undefined;
+
+  /* ---- drill-down paths + drill-through ---- */
+  const [drill, setDrill] = useState<Record<string, string[]>>({});
+  const [drillThrough, setDrillThrough] = useState<{
+    title: string;
+    filters: QueryFilter[];
+    sourceId?: string;
+  } | null>(null);
+  const pathOf = useCallback(
+    (w: Widget) => def.drillPaths?.find((x) => x.id === w.drillPathId),
+    [def.drillPaths]
+  );
+  const applyDrill = useCallback(
+    (w: Widget): Widget => {
+      const path = pathOf(w);
+      if (!path || path.levels.length === 0) return w;
+      const vals = drill[w.id] ?? [];
+      const lvl = Math.min(vals.length, path.levels.length - 1);
+      return {
+        ...w,
+        groupBy: path.levels[lvl].field,
+        filters: [
+          ...w.filters,
+          ...vals.map((v, i) => ({
+            id: `drill${i}`,
+            field: path.levels[i].field,
+            op: 'eq' as FilterOp,
+            value: v,
+          })),
+        ],
+      } as Widget;
+    },
+    [pathOf, drill]
+  );
+  /** Section filters + drill state folded into each widget: what is actually rendered and queried. */
+  const effectiveWidgets = useMemo(
+    () =>
+      (
+        applySectionFilters(
+          def.widgets as unknown as RegistryWidget[]
+        ) as unknown as Widget[]
+      ).map(applyDrill),
+    [def.widgets, applyDrill]
+  );
+  const drillKey = JSON.stringify(drill);
+  const drillClick = useCallback(
+    (w: Widget, value: string) => {
+      const path = pathOf(w);
+      if (!path) return false;
+      const vals = drill[w.id] ?? [];
+      if (vals.length < path.levels.length - 1) {
+        setDrill((d) => ({ ...d, [w.id]: [...vals, value] }));
+      } else {
+        const all = [...vals, value];
+        setDrillThrough({
+          title: `${w.title}: ${all.join(' › ')}`,
+          filters: all.map((v, i) => ({
+            field: path.levels[i].field,
+            op: 'eq' as const,
+            value: v,
+          })),
+        });
+      }
+      return true;
+    },
+    [pathOf, drill]
+  );
+  const drillCrumbs = useCallback(
+    (w: Widget) => {
+      const path = pathOf(w);
+      if (!path) return null;
+      const vals = drill[w.id] ?? [];
+      const lbl = (i: number) =>
+        path.levels[i].label ??
+        fieldMap.get(path.levels[i].field)?.label ??
+        path.levels[i].field;
+      return (
+        <nav
+          aria-label="Drill path"
+          className="rb-noprint mt-1 flex flex-wrap items-center gap-1 text-[11px]"
+        >
+          <button
+            type="button"
+            onClick={() => setDrill((d) => ({ ...d, [w.id]: [] }))}
+            className={`rounded px-1 font-semibold ${vals.length ? 'text-blue-600 hover:underline' : ''} ${FOCUS}`}
+          >
+            {lbl(0)}
+          </button>
+          {vals.map((v, i) => (
+            <React.Fragment key={i}>
+              <span aria-hidden="true">›</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setDrill((d) => ({ ...d, [w.id]: vals.slice(0, i + 1) }))
+                }
+                className={`rounded px-1 ${i < vals.length - 1 ? 'text-blue-600 hover:underline' : 'font-semibold'} ${FOCUS}`}
+              >
+                {v}
+              </button>
+            </React.Fragment>
+          ))}
+          <span className="opacity-60">
+            {vals.length < path.levels.length - 1
+              ? `· click a bar to drill into ${lbl(vals.length + 1)}`
+              : '· click a bar to open records'}
+          </span>
+        </nav>
+      );
+    },
+    [pathOf, drill, fieldMap]
+  );
+  const fetchRecords = useCallback(
+    async (o: {
+      filters: QueryFilter[];
+      sourceId?: string;
+      offset: number;
+      limit: number;
+    }) => {
+      const sid = o.sourceId ?? source.id;
+      const own = sid === source.id;
+      const src = sources.find((s) => s.id === sid);
+      if (!src) throw new Error('Unknown data source.');
+      const other = otherPreview[sid];
+      const fm = own
+        ? fieldMap
+        : (other?.fm ??
+          new Map(
+            enrichFields(src.fields, []).map((f) => [f.key, f] as const)
+          ));
+      const cols = own
+        ? def.fields.filter((k) => fm.has(k) && !k.startsWith(METRIC_PREFIX))
+        : src.fields.slice(0, 8).map((f) => f.key);
+      const q: ReportQuery = {
+        id: '__drill',
+        widgetId: '__drill',
+        label: 'Records',
+        sourceId: sid,
+        shape: 'records',
+        period: viewMode === 'final' && own ? period : null,
+        filters: [
+          ...(own
+            ? def.filters
+                .filter((r) => r.field && r.value !== '')
+                .map((r) => ({ field: r.field, op: r.op, value: r.value }))
+            : []),
+          ...o.filters,
+        ],
+        dimensions: [],
+        measures: [],
+        columns: cols,
+        offset: o.offset,
+        limit: o.limit,
+        orderBy: { field: src.dateField, dir: 'desc' },
+      };
+      const fields = cols
+        .map((k) => fm.get(k))
+        .filter((x): x is FieldDef => !!x);
+      if (viewMode === 'final' && runResult) {
+        if (!provider.execute)
+          throw new Error(
+            'This data backend does not support record drill-through.'
+          );
+        const res = await provider.execute(runResult.compiled.request, [q], {
+          signal: new AbortController().signal,
+        });
+        const r = res.results.__drill;
+        if (!r || r.shape !== 'records')
+          throw new Error(res.failures[0]?.message ?? 'No records returned.');
+        return { result: r, fields };
+      }
+      const rs = own ? baseRows : other?.rows;
+      if (!rs) {
+        ensureOther(sid);
+        throw new Error('Loading preview data… try again in a moment.');
+      }
+      return {
+        result: runLocalQuery(q, rs, fm, src.dateField) as RecordsResult,
+        fields,
+      };
+    },
+    [
+      source,
+      sources,
+      otherPreview,
+      fieldMap,
+      def.fields,
+      def.filters,
+      viewMode,
+      period,
+      runResult,
+      provider,
+      baseRows,
+      ensureOther,
+    ]
+  );
+
+  /* ---- host services handed to registry widgets ---- */
+  const env: WidgetEnv = useMemo(
+    () => ({
+      mode: viewMode,
+      source: source as unknown as SourceInfo,
+      fieldMap: fieldMap as unknown as Map<string, FieldInfo>,
+      colors,
+      currency,
+      compare: viewMode === 'final' && def.compare && effCompare !== 'none',
+      period,
+      vars,
+      fmt: (v, agg, field, style) =>
+        fmtMeasure(
+          v,
+          agg as Agg,
+          field ? fieldMap.get(field) : undefined,
+          currency,
+          style
+        ),
+      fmtPct: (v, d = 1) => `${v.toFixed(d)}%`,
+      onPick: interactive ? pickHandler : undefined,
+      onExpand: setExpandedId,
+      onDrillThrough: (widgetId, filters, sourceId) =>
+        setDrillThrough({
+          title: `${def.widgets.find((w) => w.id === widgetId)?.title ?? 'Records'}`,
+          filters,
+          sourceId,
+        }),
+      active: xf,
+    }),
+    [
+      viewMode,
+      source,
+      fieldMap,
+      colors,
+      currency,
+      def.compare,
+      effCompare,
+      period,
+      vars,
+      interactive,
+      pickHandler,
+      xf,
+      def.widgets,
+    ]
+  );
+
+  const failedMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const f of runResult?.failures ?? [])
+      m[f.queryId.split('#')[0]] = f.message;
+    return m;
+  }, [runResult]);
+
+  const dataCtx: DataCtx = useMemo(
+    () => ({
+      rows: viewRows,
+      fullRows: rows,
+      xf,
+      prevRows: viewPrev,
+      source,
+      fieldMap,
+      fields: selectedFields,
+      currency,
+      colors,
+      autoBucket,
+      compare: def.compare && effCompare !== 'none',
+      canViewSensitive,
+      onPick: interactive ? pickHandler : undefined,
+      onExpand: setExpandedId,
+      vars,
+      mode: viewMode,
+      results: runResult?.results,
+      failed: failedMap,
+      env,
+      drillClick: interactive ? drillClick : undefined,
+      drillCrumbs,
+      fetchRecords,
+      previewExec: viewMode === 'preview' ? previewExec : undefined,
+      previewTick: Object.keys(otherPreview).length,
+    }),
+    [
+      viewRows,
+      rows,
+      xf,
+      viewPrev,
+      source,
+      fieldMap,
+      selectedFields,
+      currency,
+      colors,
+      autoBucket,
+      def.compare,
+      effCompare,
+      canViewSensitive,
+      interactive,
+      pickHandler,
+      vars,
+      viewMode,
+      runResult,
+      failedMap,
+      env,
+      previewExec,
+      otherPreview,
+      drillClick,
+      drillCrumbs,
+      fetchRecords,
+    ]
+  );
+
+  /* ---- validation (live, actionable) ---- */
+  const sourceInfos = sources as unknown as SourceInfo[];
+  const widgetsAsRegistry = def.widgets as unknown as RegistryWidget[];
+  const issues = useMemo(
+    () =>
+      validateReport({
+        name: def.name,
+        sourceId: def.sourceId,
+        period: { ...def.period, compare: effCompare },
+        filters: def.filters,
+        widgets: widgetsAsRegistry,
+        schedule: def.schedule,
+        // Output files are produced by the host's export service (onGenerate), not by the data provider.
+        sources: sourceInfos,
+        fieldMap: fieldMap as unknown as Map<string, FieldInfo>,
+        capabilities: provider.capabilities ?? {},
+        canExport: capabilities?.canExport,
+        canViewSensitive,
+        today,
+      }),
+    [
+      def,
+      effCompare,
+      widgetsAsRegistry,
+      output.format,
+      sourceInfos,
+      fieldMap,
+      provider,
+      capabilities,
+      canViewSensitive,
+      today,
+    ]
+  );
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [runDialog, setRunDialog] = useState(false);
+
+  /* ---- compile + run (ACTUAL report) ---- */
+  const compilable = useMemo<CompilableDefinition>(
+    () => ({
+      name: def.name,
+      sourceId: def.sourceId,
+      schemaVersion: SCHEMA_VERSION,
+      timezone: tz,
+      period: { ...def.period, compare: effCompare },
+      filters: def.filters,
+      widgets: widgetsAsRegistry,
+      metrics: allMetrics,
+      derived: def.derived ?? [],
+      createdAt: def.createdAt,
+    }),
+    [def, tz, effCompare, widgetsAsRegistry, allMetrics]
+  );
+  const compileNow = useCallback(
+    (
+      cross: { field: string; value: string } | null,
+      runId = uid(),
+      drilled = false
+    ) =>
+      compileReport({
+        definition: drilled
+          ? {
+              ...compilable,
+              widgets: def.widgets.map(
+                applyDrill
+              ) as unknown as RegistryWidget[],
+            }
+          : compilable,
+        sources: sourceInfos,
+        fieldMap: fieldMap as unknown as Map<string, FieldInfo>,
+        today,
+        fiscalYearStartMonth,
+        crossFilter: cross,
+        runId,
+        user: currentUser,
+        tenantId,
+      }),
+    [
+      compilable,
+      def.widgets,
+      applyDrill,
+      sourceInfos,
+      fieldMap,
+      today,
+      fiscalYearStartMonth,
+      currentUser,
+      tenantId,
+    ]
+  );
+  const currentHash = useMemo(() => definitionHash(compilable), [compilable]);
+  /** The definition changed after the report was generated: what is on screen is no longer what the design says. */
+  const stale =
+    !!run.state.result && run.state.result.meta.definitionHash !== currentHash;
+  const refinedKey = useRef('');
+
+  const startRun = () => {
+    if (hasErrors(issues)) {
+      setIssuesOpen(true);
+      return notify(
+        `Fix ${issues.filter((i) => i.severity === 'error').length} issue(s) before generating the report.`,
+        'error'
+      );
+    }
+    setCrossFilter(null);
+    setDrill({});
+    refinedKey.current = '';
+    setViewingFinal(false);
+    setRunDialog(true);
+    void run.start(compileNow(null), {
+      reportName: def.name,
+      sourceName: source.name,
+      user: currentUser,
+      filterLabels: def.filters
+        .filter((r) => r.field && r.value !== '')
+        .map((r) => ruleLabel(r, fieldMap)),
+      viewFilterLabels: [],
+    });
+  };
+  useEffect(() => {
+    if (run.state.phase === 'succeeded' && runDialog) {
+      setViewingFinal(true);
+      setRunDialog(false);
+      const m = run.state.result!.meta;
+      onAudit?.({
+        type: 'report.export',
+        reportName: def.name,
+        detail: `generated ${m.runId}, ${m.recordsMatched ?? '?'} records`,
+        at: m.generatedAt,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.state.phase]);
+
+  // Cross-filtering the ACTUAL report re-queries the backend (debounced); the source widget keeps its full data.
+  const xfKey = `${xf ? `${xf.field}=${xf.value}` : ''}|${drillKey === '{}' ? '' : drillKey}`;
+  useEffect(() => {
+    if (viewMode !== 'final' || !run.state.result) return;
+    if (refinedKey.current === xfKey) return;
+    const id = window.setTimeout(() => {
+      refinedKey.current = xfKey;
+      const c = compileNow(xf, run.state.result!.runId, true);
+      run.refine(
+        c,
+        c.queries.filter((q) => q.id !== RECORDS_QUERY_ID).map((q) => q.id),
+        [
+          ...(xf
+            ? [`${fieldMap.get(xf.field)?.label ?? xf.field} = ${xf.value}`]
+            : []),
+          ...Object.entries(drill)
+            .filter(([, v]) => v.length)
+            .map(
+              ([id2, v]) =>
+                `${def.widgets.find((w) => w.id === id2)?.title ?? 'Widget'}: ${v.join(' › ')}`
+            ),
+        ]
+      );
+    }, 250);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [xfKey, viewMode, run.state.result?.runId]);
+
+  // const compareKey = `${def.compare}|${effCompare}|${def.period.preset}|${def.period.from ?? ''}|${def.period.to ?? ''}`;
+  // const autoRan = useRef(false);
+  // const lastAutoKey = useRef(compareKey);
+  // useEffect(() => {
+  //   if (!autoRan.current) {
+  //     autoRan.current = true;
+  //     if (
+  //       def.name.trim() &&
+  //       def.fields.length > 0 &&
+  //       def.widgets.length > 0 &&
+  //       !hasErrors(issues)
+  //     )
+  //       startRun();
+  //     return;
+  //   }
+  //   if (viewMode !== 'final' || !run.state.result) return;
+  //   if (lastAutoKey.current === compareKey) return;
+  //   const id = window.setTimeout(() => {
+  //     lastAutoKey.current = compareKey;
+  //     startRun();
+  //   }, 400);
+  //   return () => window.clearTimeout(id);
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [compareKey, viewMode, run.state.result?.runId]);
+
+  /* ---- field actions ---- */
+  const setFields = (keys: string[]) =>
+    update((d) =>
+      reconcile(
+        {
+          ...d,
+          fields: catalogue.map((x) => x.key).filter((k) => keys.includes(k)),
+        },
+        catalogue
+      )
+    );
+  const toggleField = (key: string) =>
+    update((d) =>
+      reconcile(
+        {
+          ...d,
+          fields: d.fields.includes(key)
+            ? d.fields.filter((k) => k !== key)
+            : [...d.fields, key],
+        },
+        catalogue
+      )
+    );
+  const moveField = (key: string, dir: -1 | 1) =>
+    update((d) => {
+      const i = d.fields.indexOf(key),
+        j = i + dir;
+      if (i < 0 || j < 0 || j >= d.fields.length) return d;
+      const next = [...d.fields];
+      [next[i], next[j]] = [next[j], next[i]];
+      return { ...d, fields: next };
+    });
+
+  const changeSource = (id: string) => {
+    if (id === def.sourceId) return;
+    if (
+      dirty &&
+      !window.confirm(
+        'Changing the data source resets the selected fields, widgets and filters. Continue?'
+      )
+    )
+      return;
+    const s = sources.find((x) => x.id === id)!;
+    update((d) => ({
+      ...d,
+      sourceId: id,
+      fields: [...s.defaultFields],
+      widgets: autoWidgets(s, s.defaultFields, s.fields),
+      filters: [],
+      derived: [],
+    }));
+    setSelectedWidgetId(null);
+  };
+
+  /* ---- widget actions ---- */
+  const patchWidget = (id: string, p: Partial<Widget>, key?: string) =>
+    update(
+      (d) => ({
+        ...d,
+        widgets: d.widgets.map((w) =>
+          w.id === id ? ({ ...w, ...p } as Widget) : w
+        ),
+      }),
+      key
+    );
+  const addWidget = (w: Widget) => {
+    update((d) => ({ ...d, widgets: [...d.widgets, w] }));
+    setSelectedWidgetId(w.id);
+  };
+
+  const addRegistryWidget = (kind: string) => {
+    const d = getWidget(kind);
+    if (!d) return;
+    const out = d.create({
+      source: source as unknown as SourceInfo,
+      fields: selectedFields as unknown as FieldInfo[],
+      sources: sourceInfos,
+    });
+    if ('unavailable' in out && !('kind' in out))
+      return notify(
+        String((out as { unavailable: string }).unavailable),
+        'error'
+      );
+    setEditMode(true);
+    addWidget(out as unknown as Widget);
+  };
+  const addOfType = (id: string) => {
+    if (id.startsWith('ext:')) return addRegistryWidget(id.slice(4));
+    const cats = selectedFields
+      .filter((x) => isCat(x.type))
+      .sort((a, b) => Number(!!b.order) - Number(!!a.order));
+    const dates = selectedFields.filter((x) => isDateType(x.type));
+    const bools = selectedFields.filter((x) => x.type === 'boolean');
+    const nums = selectedFields.filter((x) => isNumeric(x.type));
+    const money = selectedFields.find((x) => x.type === 'currency');
+    setEditMode(true);
+    if (id === 'kpi') {
+      if (money)
+        return addWidget(
+          mkKpi(money.label, { agg: 'sum', field: money.key, tone: 'amber' })
+        );
+      if (bools[0])
+        return addWidget(
+          mkKpi(`${bools[0].label} rate`, {
+            agg: 'rate',
+            field: bools[0].key,
+            tone: 'violet',
+          })
+        );
+      return addWidget(mkKpi(`Total ${source.recordLabel}`));
+    }
+    if (id === 'text')
+      return addWidget(
+        mkText(
+          'Add your commentary here. Use {{records}} and {{range}} to insert live values.',
+          'callout'
+        )
+      );
+    if (id === 'table')
+      return addWidget(
+        mkTable(
+          'New table',
+          selectedFields.slice(0, 5).map((x) => x.key),
+          { sortBy: money?.key, dataBars: !!money }
+        )
+      );
+    if (id === 'insight') {
+      const by = cats[0] ?? dates[0];
+      if (!by) return notify('Select a category or date field first.', 'error');
+      return addWidget(
+        mkInsight('Key insights', by.key, { subject: source.recordLabel })
+      );
+    }
+    if (id === 'scatter') {
+      if (nums.length < 2)
+        return notify('Scatter plots need two numeric fields.', 'error');
+      return addWidget(
+        mkChart('Relationship', 'scatter', cats[0]?.key ?? nums[0].key, {
+          xField: nums[0].key,
+          field: nums[1].key,
+          agg: 'avg',
+          breakBy: cats[0]?.key,
+        })
+      );
+    }
+    const timeBased = ['line', 'area', 'stacked'].includes(id);
+    const dim = timeBased ? (dates[0] ?? cats[0]) : (cats[0] ?? dates[0]);
+    if (!dim)
+      return notify(
+        'Select a category or date field first to build a chart.',
+        'error'
+      );
+    const o: Partial<ChartWidget> = {};
+    if (id === 'stacked' || id === 'heatmap')
+      o.breakBy = cats.find((c) => c.key !== dim.key)?.key;
+    addWidget(mkChart('New chart', id as ChartType, dim.key, o));
+  };
+
+  const quickAddFromField = (fld: FieldDef) => {
+    setEditMode(true);
+    if (fld.type === 'boolean')
+      return addWidget(
+        mkKpi(`${fld.label} rate`, {
+          agg: 'rate',
+          field: fld.key,
+          tone: 'violet',
+        })
+      );
+    if (fld.type === 'category')
+      return addWidget(
+        mkChart(`By ${fld.label.toLowerCase()}`, 'doughnut', fld.key)
+      );
+    if (isDateType(fld.type))
+      return addWidget(
+        mkChart(`${cap(source.recordLabel)} over time`, 'area', fld.key)
+      );
+    if (isNumeric(fld.type))
+      return addWidget(
+        mkKpi(fld.label, { agg: 'sum', field: fld.key, tone: 'amber' })
+      );
+    addWidget(
+      mkTable(`${fld.label} list`, [
+        fld.key,
+        ...selectedFields
+          .filter((x) => x.key !== fld.key)
+          .slice(0, 4)
+          .map((x) => x.key),
+      ])
+    );
+  };
+
+  const removeWidget = (id: string) => {
+    update((d) => ({ ...d, widgets: d.widgets.filter((w) => w.id !== id) }));
+    setSelectedWidgetId((cur) => (cur === id ? null : cur));
+  };
+  const duplicateWidget = (id: string) => {
+    const w = def.widgets.find((x) => x.id === id);
+    if (!w) return;
+    const copy = {
+      ...JSON.parse(JSON.stringify(w)),
+      id: uid(),
+      title: `${w.title} (copy)`,
+    } as Widget;
+    update((d) => {
+      const i = d.widgets.findIndex((x) => x.id === id);
+      const next = [...d.widgets];
+      next.splice(i + 1, 0, copy);
+      return { ...d, widgets: next };
+    });
+    setSelectedWidgetId(copy.id);
+  };
+  const moveWidget = (id: string, dir: -1 | 1) =>
+    update((d) => {
+      const i = d.widgets.findIndex((x) => x.id === id),
+        j = i + dir;
+      if (i < 0 || j < 0 || j >= d.widgets.length) return d;
+      const next = [...d.widgets];
+      [next[i], next[j]] = [next[j], next[i]];
+      return { ...d, widgets: next };
+    });
+  const reorderWidget = (fromId: string, toId: string) =>
+    update((d) => {
+      const from = d.widgets.findIndex((x) => x.id === fromId),
+        to = d.widgets.findIndex((x) => x.id === toId);
+      if (from < 0 || to < 0) return d;
+      const next = [...d.widgets];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return { ...d, widgets: next };
+    });
+  const autoBuild = () => {
+    update((d) => ({
+      ...d,
+      widgets: autoWidgets(source, d.fields, catalogue),
+    }));
+    setSelectedWidgetId(null);
+    notify('Layout rebuilt. Press Ctrl+Z to undo.', 'success');
+  };
+
+  /* ---- custom fields (categorisation) ---- */
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customEdit, setCustomEdit] = useState<string | null>(null);
+  /* ---- calculated metrics ---- */
+  const [metricOpen, setMetricOpen] = useState(false);
+  const openMetric = () => setMetricOpen(true);
+  const saveMetric = (m: CalculatedMetric) => {
+    update((cur) => {
+      const list = cur.metrics ?? [];
+      if (m.key) {
+        return { ...cur, metrics: list.map((x) => (x.id === m.id ? m : x)) };
+      }
+      const taken = new Set([
+        ...certifiedMetrics.map((x) => x.key),
+        ...list.map((x) => x.key),
+      ]);
+      const base = `${METRIC_PREFIX}${slug(m.label).replace(/-/g, '_')}`;
+      let key = base,
+        i = 2;
+      while (taken.has(key)) key = `${base}_${i++}`;
+      return { ...cur, metrics: [...list, { ...m, key, certified: false }] };
+    });
+    notify(
+      `Metric “${m.label}” saved. Use it via Value → Calculated metric.`,
+      'success'
+    );
+  };
+  const removeMetric = (id: string) =>
+    update((cur) => {
+      const gone = (cur.metrics ?? []).find((x) => x.id === id);
+      if (!gone) return cur;
+      return {
+        ...cur,
+        metrics: (cur.metrics ?? []).filter((x) => x.id !== id),
+        widgets: cur.widgets.map((w) =>
+          (w.kind === 'kpi' || w.kind === 'chart' || w.kind === 'insight') &&
+          w.field === gone.key
+            ? ({ ...w, field: undefined, agg: 'count' } as Widget)
+            : w
+        ),
+      };
+    });
+
+  const openCustom = (key?: string) => {
+    setCustomEdit(key ?? null);
+    setCustomOpen(true);
+  };
+  const saveDerived = (d: DerivedField) => {
+    let savedKey = d.key;
+    update((cur) => {
+      const taken = new Set([
+        ...source.fields.map((x) => x.key),
+        ...(cur.derived ?? []).map((x) => x.key),
+      ]);
+      const saved = (
+        d.key ? d : { ...d, key: uniqueKey(d.label, taken) }
+      ) as DerivedField;
+      savedKey = saved.key;
+      const list = cur.derived ?? [];
+      const derived = list.some((x) => x.id === saved.id)
+        ? list.map((x) => (x.id === saved.id ? saved : x))
+        : [...list, saved];
+      return {
+        ...cur,
+        derived,
+        fields: cur.fields.includes(saved.key)
+          ? cur.fields
+          : [...cur.fields, saved.key],
+      };
+    });
+    setCustomOpen(false);
+    notify(
+      `Custom field “${d.label}” saved and added to the report.`,
+      'success'
+    );
+    return savedKey;
+  };
+  const removeDerived = (id: string) =>
+    update((cur) => {
+      const gone = (cur.derived ?? []).find((x) => x.id === id);
+      if (!gone) return cur;
+      const derived = (cur.derived ?? []).filter((x) => x.id !== id);
+      const catalogueAfter = applyDerived([], derived, baseFields).fields;
+      return reconcile(
+        {
+          ...cur,
+          derived,
+          fields: cur.fields.filter((k) => k !== gone.key),
+          filters: cur.filters.filter((r) => r.field !== gone.key),
+        },
+        catalogueAfter
+      );
+    });
+
+  /* ---- autosave + automatic restore of an unsaved session ----
+   * The design is restored immediately on load, so a refresh never loses it.
+   * Only a manual "New report" or a successful save clears it. */
+  const [restore, setRestore] = useState<{
+    def: ReportDefinition;
+    at: string;
+  } | null>(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LS_AUTOSAVE);
+      const p = raw ? JSON.parse(raw) : null;
+      if (
+        p?.def?.widgets &&
+        sources.some((x: ReportSource) => x.id === p.def.sourceId)
+      ) {
+        // Restore the design and its template link right away (silent resume).
+        resetHistory(cloneDefinition(p.def));
+        setTemplateId(p.templateId ?? null);
+        setRestore({ def: p.def, at: p.at ?? new Date().toISOString() });
+        if (typeof p.step === 'number' && p.step >= 1 && p.step <= 3)
+          setStep(p.step);
+      }
+    } catch {
+      /* ignore */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    // Restricted reports are never written to browser storage.
+    if (def.classification === 'restricted') return;
+    const id = window.setTimeout(() => {
+      try {
+        localStorage.setItem(
+          LS_AUTOSAVE,
+          JSON.stringify({
+            def,
+            templateId,
+            step,
+            at: new Date().toISOString(),
+          })
+        );
+      } catch {
+        /* quota */
+      }
+    }, 800);
+    return () => window.clearTimeout(id);
+  }, [def, templateId, step]);
+  const clearAutosave = () => {
+    try {
+      localStorage.removeItem(LS_AUTOSAVE);
+    } catch {
+      /* ignore */
+    }
+    setRestore(null);
+  };
+
+  /* ---- keyboard shortcuts ---- */
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      } else if (step === 2 && editMode && selectedWidgetId) {
+        if (mod && e.key.toLowerCase() === 'd') {
+          e.preventDefault();
+          duplicateWidget(selectedWidgetId);
+        } else if (e.key === 'Delete') {
+          e.preventDefault();
+          removeWidget(selectedWidgetId);
+        } else if (e.key === 'Escape') setSelectedWidgetId(null);
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  });
+
+  /* ---- navigation ---- */
+  const validate = (target: number): string | null => {
+    if (target >= 2 && rangeErr) return rangeErr;
+    if (target >= 3 && def.schedule.frequency !== 'none') {
+      const bad = def.schedule.recipients
+        .split(',')
+        .map((x) => x.trim())
+        .filter((x) => x && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+      if (bad.length) return `Invalid recipient e-mail: ${bad[0]}`;
+      if (!def.schedule.recipients.trim())
+        return 'Add at least one recipient for the schedule, or set it to on-demand.';
+    }
+    if (target >= 2) {
+      if (!def.name.trim()) return 'Give your report a name before continuing.';
+      if (def.fields.length === 0)
+        return 'Select at least one field to continue.';
+    }
+    if (target >= 3 && def.widgets.length === 0)
+      return 'Add at least one widget to the report.';
+    return null;
+  };
+  const goStep = (n: number) => {
+    if (n > step) {
+      const err = validate(n);
+      if (err) return notify(err, 'error');
+    }
+    setStep(n);
+    if (n !== 2) setSelectedWidgetId(null);
+  };
+
+  /* ---- templates ---- */
+  const saveTemplate = async (draft: boolean, asCopy = false) => {
+    if (!def.name.trim())
+      return notify('Give your report a name before saving.', 'error');
+    const now = new Date().toISOString();
+    // Identity: the template being edited (by id), or an existing template with the
+    // same name (case-insensitive). Either way we UPDATE it instead of minting a
+    // duplicate. "Save as copy" always creates a new template.
+    const name = def.name.trim();
+    const existing = asCopy
+      ? undefined
+      : (userTemplates.find((x) => x.id === templateId) ??
+        userTemplates.find(
+          (x) => x.name.trim().toLowerCase() === name.toLowerCase()
+        ));
+    const tpl: ReportTemplate = {
+      id: existing?.id ?? uid(),
+      name: asCopy ? `${name} (copy)` : name,
+      description: def.description,
+      definition: JSON.parse(JSON.stringify(def)),
+      isDraft: draft,
+      visibility,
+      createdBy: existing?.createdBy ?? currentUser,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    try {
+      await templateStore.save(tpl);
+      setUserTemplates((p) => [tpl, ...p.filter((x) => x.id !== tpl.id)]);
+      setTemplateId(tpl.id);
+      resetHistory(def);
+      clearAutosave();
+      onAudit?.({
+        type: 'report.save',
+        reportName: tpl.name,
+        detail: draft ? 'draft' : 'template',
+        at: now,
+      });
+      notify(
+        asCopy
+          ? 'Saved as a copy.'
+          : draft
+            ? 'Draft saved.'
+            : existing
+              ? 'Template updated. Find it under Templates.'
+              : 'Template saved. Find it under Templates.',
+        'success'
+      );
+    } catch {
+      notify('Could not save. Check your connection and try again.', 'error');
+    }
+  };
+  const openTemplate = (tp: ReportTemplate, run: boolean) => {
+    if (
+      dirty &&
+      !window.confirm(
+        'Opening a template replaces your current unsaved report. Continue?'
+      )
+    )
+      return;
+    resetHistory(cloneDefinition(tp.definition));
+    //setTemplateId(tp.builtIn ? null : tp.id);
+    setTemplateId(tp.id);
+    setSelectedWidgetId(null);
+    setTemplatesOpen(false);
+    setLastRun(null);
+    setEditMode(true);
+    setStep(run ? 3 : 2);
+  };
+  const duplicateTemplate = async (tp: ReportTemplate) => {
+    const now = new Date().toISOString();
+    const copy: ReportTemplate = {
+      ...tp,
+      id: uid(),
+      name: `${tp.name} (copy)`,
+      builtIn: false,
+      isDraft: false,
+      createdBy: currentUser,
+      createdAt: now,
+      updatedAt: now,
+      definition: {
+        ...cloneDefinition(tp.definition),
+        name: `${tp.name} (copy)`,
+      },
+    };
+    try {
+      await templateStore.save(copy);
+      setUserTemplates((p) => [copy, ...p]);
+      notify('Template duplicated.', 'success');
+    } catch {
+      notify('Could not duplicate the template.', 'error');
+    }
+  };
+  const deleteTemplate = async (tp: ReportTemplate) => {
+    if (!window.confirm(`Delete "${tp.name}"? This cannot be undone.`)) return;
+    try {
+      await templateStore.remove(tp.id);
+      setUserTemplates((p) => p.filter((x) => x.id !== tp.id));
+      if (templateId === tp.id) setTemplateId(null);
+      onAudit?.({
+        type: 'report.delete',
+        reportName: tp.name,
+        at: new Date().toISOString(),
+      });
+      notify('Template deleted.', 'success');
+    } catch {
+      notify('Could not delete the template.', 'error');
+    }
+  };
+  const importTemplate = async (file: File) => {
+    try {
+      const text = await file.text();
+      if (text.length > 2_000_000) throw new Error('too large');
+      const raw = JSON.parse(text);
+      const d = validateImportedDefinition(raw.definition ?? raw, sources);
+      const now = new Date().toISOString();
+      const tpl: ReportTemplate = {
+        id: uid(),
+        name: raw.name ?? d.name ?? 'Imported report',
+        description: raw.description ?? d.description ?? '',
+        definition: d,
+        isDraft: false,
+        visibility: 'private',
+        createdBy: currentUser,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await templateStore.save(tpl);
+      setUserTemplates((p) => [tpl, ...p]);
+      notify('Template imported.', 'success');
+    } catch {
+      notify(
+        'That file is not a valid report template for the available data sources.',
+        'error'
+      );
+    }
+  };
+  const newReport = () => {
+    if (
+      dirty &&
+      !window.confirm('Start a new report? Unsaved changes will be lost.')
+    )
+      return;
+    resetHistory(blankDefinition(sources[0]));
+    clearAutosave();
+    setTemplateId(null);
+    setSelectedWidgetId(null);
+    setLastRun(null);
+    setEditMode(true);
+    setStep(1);
+  };
+
+  /* ---- export: ONLY from an actual run, ONLY through the host's export handler (`onGenerate`) ----
+   * The builder never creates or downloads files itself: PDF / CSV / Excel are produced by the host service
+   * (e.g. reportBuilderService.generateReportFile), which also records the run. */
+  const exportReport = async () => {
+    if (capabilities?.canExport === false)
+      return notify('You do not have permission to export reports.', 'error');
+    const r = run.state.result;
+    if (!r || viewMode !== 'final')
+      return notify(
+        'Generate the report first. Exports always use actual data, never the preview sample.',
+        'error'
+      );
+    if (stale)
+      return notify(
+        'The report changed after it was generated. Regenerate before exporting.',
+        'error'
+      );
+    if (!onGenerate)
+      return notify(
+        'No export handler is configured. Pass an onGenerate handler (e.g. generateReportFile from reportBuilderService) to enable PDF, CSV and Excel.',
+        'error'
+      );
+    setGenerating(true);
+    try {
+      // Records of the actual period, for CSV / Excel. PDF prints the on-screen report, so it needs none.
+      let rows: Row[] = [];
+      let rowsTruncated = false;
+      if (output.format !== 'pdf' && provider.fetchExportRows) {
+        const ex = await provider.fetchExportRows(r.compiled.request, {
+          signal: new AbortController().signal,
+          maxRows: MAX_EXPORT_ROWS,
+        });
+        rows = ex.rows;
+        rowsTruncated = ex.truncated;
+      }
+      const tables = def.widgets.flatMap((w) => {
+        const tb = resultTable(w, r.results, dataCtx);
+        return tb && tb.headers.length
+          ? [{ widgetId: w.id, title: w.title, ...tb }]
+          : [];
+      });
+      await onGenerate({
+        definition: def,
+        templateId: templateId ?? undefined,
+        run: { meta: r.meta, request: r.compiled.request, results: r.results },
+        rows,
+        rowsTruncated,
+        tables,
+        columns: selectedFields,
+        format: output.format,
+        options: output,
+        schedule: def.schedule,
+      });
+      setLastRun({
+        at: new Date(),
+        rows: r.meta.recordsMatched ?? rows.length,
+        format: output.format,
+      });
+      onAudit?.({
+        type: 'report.export',
+        reportName: def.name,
+        detail: `${output.format}, run ${r.meta.runId}, ${r.meta.recordsMatched ?? '?'} records`,
+        at: new Date().toISOString(),
+      });
+      notify(
+        rowsTruncated
+          ? `Report exported (first ${MAX_EXPORT_ROWS.toLocaleString()} records of ${(r.meta.recordsMatched ?? 0).toLocaleString()}).`
+          : 'Report exported.',
+        'success'
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[ReportBuilder] export failed', e);
+      const msg = e instanceof Error && e.message ? e.message : '';
+      notify(
+        msg
+          ? `Export failed: ${msg.slice(0, 220)}`
+          : 'Export failed. Try again.',
+        'error'
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  /* ==========================================================================
+   * Shared pieces
+   * ======================================================================== */
+  const crossChip = xf && (
+    <button
+      type="button"
+      onClick={() => setCrossFilter(null)}
+      title="Clear drill-down filter"
+      className={`inline-flex h-8 items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-2.5 text-xs font-medium text-blue-700 ${FOCUS}`}
+    >
+      <Filter className="h-3.5 w-3.5" /> {fieldMap.get(xf.field)?.label}:{' '}
+      {xf.value} <X className="h-3.5 w-3.5" />
+    </button>
+  );
+
+  const filtersPopover = (
+    <Popover
+      width={320}
+      trigger={({ toggle, ref }) => (
+        <button
+          ref={ref}
+          type="button"
+          onClick={toggle}
+          className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[13px] font-medium ${t.btn} ${FOCUS}`}
+        >
+          <Filter className="h-3.5 w-3.5" /> Filters
+          {def.filters.length > 0 && (
+            <span className="rounded-full bg-blue-600 px-1.5 text-[10px] text-white">
+              {def.filters.length}
+            </span>
+          )}
+        </button>
+      )}
+    >
+      {() => (
+        <div>
+          <FilterEditor
+            fields={catalogue}
+            rules={def.filters}
+            allRows={allRows}
+            onChange={(filters) => update((d) => ({ ...d, filters }))}
+          />
+          <div className={`space-y-1.5 border-t p-3 ${t.line}`}>
+            <p className={`text-[11px] font-semibold ${t.muted}`}>
+              Filter presets
+            </p>
+            {(def.filterPresets ?? []).map((pr) => (
+              <div key={pr.id} className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    update((d) => ({
+                      ...d,
+                      filters: pr.rules.map((r) => ({ ...r, id: uid() })),
+                    }))
+                  }
+                  className={`flex-1 truncate rounded-lg border px-2 py-1 text-left text-xs ${t.btn} ${FOCUS}`}
+                >
+                  {pr.name}
+                </button>
+                <IconButton
+                  label={`Delete preset ${pr.name}`}
+                  onClick={() =>
+                    update((d) => ({
+                      ...d,
+                      filterPresets: (d.filterPresets ?? []).filter(
+                        (x) => x.id !== pr.id
+                      ),
+                    }))
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </IconButton>
+              </div>
+            ))}
+            <div className="flex gap-1.5">
+              <TextInput
+                aria-label="Preset name"
+                placeholder="Name this filter set"
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+              />
+              <GhostButton
+                onClick={() => {
+                  const rules = def.filters.filter(
+                    (r) => r.field && r.value !== ''
+                  );
+                  if (!presetName.trim() || !rules.length)
+                    return notify(
+                      'Add at least one filter and a name to save a preset.',
+                      'error'
+                    );
+                  update((d) => ({
+                    ...d,
+                    filterPresets: [
+                      ...(d.filterPresets ?? []),
+                      {
+                        id: uid(),
+                        name: presetName.trim().slice(0, 60),
+                        rules,
+                      },
+                    ],
+                  }));
+                  setPresetName('');
+                }}
+              >
+                Save
+              </GhostButton>
+            </div>
+          </div>
+        </div>
+      )}
+    </Popover>
+  );
+
+  const periodButton = (
+    <Popover
+      width={300}
+      trigger={({ toggle, ref }) => (
+        <button
+          ref={ref}
+          type="button"
+          onClick={toggle}
+          title="Reporting period for the actual report (the preview sample is not filtered by it)"
+          className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[13px] font-medium ${rangeErr ? 'border-red-400 text-red-600' : t.btn} ${FOCUS}`}
+        >
+          <Calendar className="h-3.5 w-3.5" /> {PRESET_LABEL[def.period.preset]}
+        </button>
+      )}
+    >
+      {() => (
+        <div className="p-3">
+          <PeriodPicker
+            value={def.period}
+            onChange={(pd) => update((d) => ({ ...d, period: pd }))}
+            timezone={tz}
+            fiscalYearStartMonth={fiscalYearStartMonth}
+          />
+        </div>
+      )}
+    </Popover>
+  );
+
+  /* chips: every active scope in one glance (period · filters · cross-filter) */
+  const filterChips = (
+    <div
+      className="flex flex-wrap items-center gap-1.5"
+      aria-label="Active filters"
+    >
+      <span
+        className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] font-medium ${t.inset} ${t.body}`}
+      >
+        <Calendar className="h-3 w-3" /> {describePeriod(period)}
+      </span>
+      {def.filters
+        .filter((r) => r.field && r.value !== '')
+        .map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() =>
+              update((d) => ({
+                ...d,
+                filters: d.filters.filter((x) => x.id !== r.id),
+              }))
+            }
+            title="Remove filter"
+            className={`inline-flex h-6 items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 text-[11px] font-medium text-blue-800 ${FOCUS}`}
+          >
+            {ruleLabel(r, fieldMap)} <X className="h-3 w-3" />
+          </button>
+        ))}
+    </div>
+  );
+
+  /* preview / actual banner shown above the report */
+  const previewBanner = (
+    <PreviewBanner
+      info={{
+        limit: previewLimit,
+        loaded: allRows.length,
+        total: rowsState.id === source.id ? rowsState.total : undefined,
+        from: previewExtent?.from,
+        to: previewExtent?.to,
+        loadedAt,
+        sourceName: source.name,
+        recordLabel: source.recordLabel,
+      }}
+      options={PREVIEW_LIMIT_OPTIONS}
+      onLimit={(n) => update((d) => ({ ...d, previewLimit: n }))}
+      onRefresh={refreshData}
+      loading={rowsLoading}
+      periodLabel={describePeriod(period)}
+    />
+  );
+  const modeBanner =
+    viewMode === 'final' && run.state.result ? (
+      <ActualBanner
+        meta={run.state.result.meta}
+        stale={stale}
+        refining={run.state.refining}
+        onRegenerate={startRun}
+        onBackToDesign={() => setViewingFinal(false)}
+      />
+    ) : (
+      previewBanner
+    );
+  const paperMode = viewMode;
+  /** Section widgets pass their filters down to the widgets that follow them. */
+  const canvasWidgets = effectiveWidgets;
+  const paperMeta = runResult?.meta;
+  const paperCount =
+    viewMode === 'final'
+      ? (runResult?.meta.recordsMatched ?? 0)
+      : viewRows.length;
+
+  const statusLabel = dirty ? 'Unsaved' : templateId ? 'Saved' : 'New';
+
+  /* ==========================================================================
+   * Step 1: data
+   * ======================================================================== */
+  const SrcIcon = source.icon;
+  const quickTemplates = [...BUILTIN_TEMPLATES, ...userTemplates].slice(0, 6);
+
+  const renderStep1 = () => (
+    <div className="grid min-h-0 gap-2 xl:h-full xl:grid-cols-[280px_minmax(0,1fr)_300px]">
+      <Panel>
+        <div className={`shrink-0 border-b p-3 ${t.lineStrong}`}>
+          <span className={`mb-1 block text-[11px] font-semibold ${t.muted}`}>
+            Data source
+          </span>
+          <Popover
+            width={320}
+            trigger={({ toggle, ref }) => (
+              <button
+                ref={ref}
+                type="button"
+                onClick={toggle}
+                className={`flex w-full items-center gap-2.5 rounded-lg border p-2 text-left ${t.btn} ${FOCUS}`}
+              >
+                <span
+                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${t.chipIcon}`}
+                >
+                  <SrcIcon className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span
+                    className={`block truncate text-[13px] font-semibold ${t.text}`}
+                  >
+                    {source.name}
+                  </span>
+                  <span className={`block truncate text-[11px] ${t.muted}`}>
+                    {rawRows.length.toLocaleString()} records ·{' '}
+                    {catalogue.length} fields
+                  </span>
+                </span>
+                <ChevronDown className={`h-4 w-4 ${t.muted}`} />
+              </button>
+            )}
+          >
+            {(close) => (
+              <div
+                role="radiogroup"
+                aria-label="Data source"
+                className="space-y-0.5"
+              >
+                {sources.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={s.id === def.sourceId}
+                    onClick={() => {
+                      changeSource(s.id);
+                      close();
+                    }}
+                    className={`flex w-full items-start gap-2.5 rounded-lg p-2 text-left ${s.id === def.sourceId ? t.selected : t.hover} ${FOCUS}`}
+                  >
+                    <span
+                      className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${t.chipIcon}`}
+                    >
+                      <s.icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] font-semibold">
+                        {s.name}
+                      </span>
+                      <span className={`block text-[11px] ${t.muted}`}>
+                        {s.description}
+                      </span>
+                    </span>
+                    {s.id === def.sourceId && (
+                      <Check className="h-4 w-4 text-blue-600" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </Popover>
+        </div>
+        <FieldsPanel
+          fields={catalogue}
+          resetKey={source.id}
+          rows={allRows}
+          selected={def.fields}
+          mode="select"
+          onToggle={toggleField}
+          onSetAll={setFields}
+          onAdd={quickAddFromField}
+          onCustom={openCustom}
+          onMetric={() => openMetric()}
+        />
+      </Panel>
+
+      <div className="flex min-h-0 flex-col gap-2">
+        <div
+          className={`flex shrink-0 items-center gap-2 overflow-x-auto rounded-xl border px-3 py-2 ${t.card}`}
+        >
+          <span
+            className={`flex shrink-0 items-center gap-1.5 text-xs font-semibold ${t.muted}`}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-blue-600" /> Start from
+          </span>
+          {quickTemplates.map((tp) => {
+            const I =
+              sources.find((s) => s.id === tp.definition.sourceId)?.icon ??
+              Database;
+            return (
+              <button
+                key={tp.id}
+                type="button"
+                onClick={() => openTemplate(tp, false)}
+                title={tp.description}
+                className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium ${t.btn} ${FOCUS}`}
+              >
+                <I className="h-3.5 w-3.5 text-blue-600" />
+                {tp.name}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setTemplatesOpen(true)}
+            className={`shrink-0 text-xs font-medium text-blue-600 hover:underline ${FOCUS}`}
+          >
+            All templates
+          </button>
+        </div>
+        <Panel className="flex-1">
+          <PanelHead
+            title={
+              <>
+                <Table2 className="h-4 w-4" /> Data preview
+              </>
+            }
+            hint={`${selectedFields.length} fields · ${rows.length.toLocaleString()} preview records (latest ${previewLimit})`}
+          />
+          <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+            {previewBanner}
+            {rowsLoading ? (
+              <div className="space-y-2" aria-hidden="true">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={`h-7 animate-pulse rounded-md ${t.skeleton}`}
+                  />
+                ))}
+              </div>
+            ) : rowsError ? (
+              <p className="py-8 text-center text-[13px] text-red-600">
+                {rowsError}
+              </p>
+            ) : (
+              <DataPreview
+                rows={rows}
+                fields={selectedFields}
+                currency={currency}
+                limit={14}
+              />
+            )}
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHead title="Report details" />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className={`space-y-3 border-b p-3 ${t.line}`}>
+            <Field label="Report name">
+              <TextInput
+                value={def.name}
+                onChange={(e) =>
+                  update((d) => ({ ...d, name: e.target.value }), 'name')
+                }
+                placeholder="e.g. Weekly fraud exposure"
+              />
+            </Field>
+            <Field label="Description">
+              <textarea
+                value={def.description}
+                onChange={(e) =>
+                  update((d) => ({ ...d, description: e.target.value }), 'desc')
+                }
+                rows={2}
+                placeholder="What is this report for?"
+                className={`w-full resize-none rounded-lg border px-2.5 py-2 text-[13px] ${t.input} ${FOCUS}`}
+              />
+            </Field>
+            <Field label="Audience">
+              <Select
+                value={def.audience ?? 'management'}
+                options={[
+                  { value: 'executive', label: 'Executive' },
+                  { value: 'management', label: 'Management' },
+                  { value: 'analytical', label: 'Analytical' },
+                ]}
+                onChange={(v) =>
+                  update((d) => ({
+                    ...d,
+                    audience: v as ReportDefinition['audience'],
+                  }))
+                }
+              />
+            </Field>
+            <Field label="Tags (comma-separated)">
+              <TextInput
+                value={def.tags ?? ''}
+                onChange={(e) =>
+                  update((d) => ({ ...d, tags: e.target.value }), 'tags')
+                }
+                placeholder="e.g. monthly, board"
+              />
+            </Field>
+            <Field label="Classification">
+              <Select
+                value={def.classification}
+                options={(Object.keys(CLASSIFICATION) as Classification[]).map(
+                  (k) => ({ value: k, label: CLASSIFICATION[k].label })
+                )}
+                onChange={(v) =>
+                  update((d) => ({ ...d, classification: v as Classification }))
+                }
+              />
+            </Field>
+          </div>
+          <div className="p-3">
+            <div className={`mb-2 text-xs font-semibold ${t.text}`}>
+              Selected fields ({selectedFields.length}){' '}
+              <span className={`font-normal ${t.muted}`}>· column order</span>
+            </div>
+            <ul className="space-y-1">
+              {selectedFields.length === 0 && (
+                <li className={`py-6 text-center text-xs ${t.muted}`}>
+                  No fields selected yet.
+                </li>
+              )}
+              {selectedFields.map((x, i) => (
+                <li
+                  key={x.key}
+                  className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[13px] ${t.lineStrong} ${t.body}`}
+                >
+                  <span className="flex-1 truncate">{x.label}</span>
+                  <button
+                    type="button"
+                    aria-label={`Move ${x.label} up`}
+                    disabled={i === 0}
+                    onClick={() => moveField(x.key, -1)}
+                    className={`rounded p-0.5 disabled:opacity-30 ${t.hover} ${FOCUS}`}
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Move ${x.label} down`}
+                    disabled={i === selectedFields.length - 1}
+                    onClick={() => moveField(x.key, 1)}
+                    className={`rounded p-0.5 disabled:opacity-30 ${t.hover} ${FOCUS}`}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${x.label}`}
+                    onClick={() => toggleField(x.key)}
+                    className={`rounded p-0.5 text-red-600 ${t.hover} ${FOCUS}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </Panel>
+    </div>
+  );
+
+  /* ==========================================================================
+   * Step 2: design
+   * ======================================================================== */
+  const renderStep2 = () => (
+    <div className="grid min-h-0 gap-2 xl:h-full xl:grid-cols-[250px_minmax(0,1fr)_300px]">
+      <Panel>
+        <div className={`shrink-0 border-b p-2 ${t.lineStrong}`}>
+          <Segmented
+            label="Left panel"
+            value={railTab}
+            options={[
+              { value: 'widgets', label: 'Widgets' },
+              { value: 'fields', label: 'Fields' },
+            ]}
+            onChange={setRailTab}
+          />
+        </div>
+        {railTab === 'widgets' ? (
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <p className={`px-1 pb-2 text-[11px] ${t.muted}`}>
+              Click to add. Drag widgets on the canvas to reorder.
+            </p>
+            <div className="grid grid-cols-2 gap-1.5">
+              {WIDGET_LIBRARY.map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  onClick={() => addOfType(w.id)}
+                  title={w.hint}
+                  className={`flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2.5 text-[11px] font-medium transition-colors ${t.btn} ${FOCUS}`}
+                >
+                  <w.icon className="h-[18px] w-[18px] text-blue-600" />
+                  {w.label}
+                </button>
+              ))}
+            </div>
+            <div className={`my-3 border-t ${t.line}`} />
+            <RegistryPalette
+              capabilities={provider.capabilities}
+              onAdd={addRegistryWidget}
+            />
+          </div>
+        ) : (
+          <FieldsPanel
+            fields={catalogue}
+            resetKey={source.id}
+            rows={allRows}
+            selected={def.fields}
+            mode="add"
+            onToggle={toggleField}
+            onSetAll={setFields}
+            onAdd={quickAddFromField}
+            onCustom={openCustom}
+            onMetric={() => openMetric()}
+          />
+        )}
+      </Panel>
+
+      <Panel>
+        <div
+          className={`flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 ${t.lineStrong}`}
+        >
+          <div className="w-40">
+            <Segmented
+              label="Mode"
+              value={editMode ? 'edit' : 'preview'}
+              options={[
+                {
+                  value: 'edit',
+                  label: (
+                    <>
+                      <Pencil className="h-3 w-3" />
+                      Edit
+                    </>
+                  ),
+                },
+                {
+                  value: 'preview',
+                  label: (
+                    <>
+                      <Eye className="h-3 w-3" />
+                      Preview
+                    </>
+                  ),
+                },
+              ]}
+              onChange={(v) => {
+                setEditMode(v === 'edit');
+                setSelectedWidgetId(null);
+              }}
+            />
+          </div>
+          <div className="w-[72px]">
+            <Segmented
+              label="Device"
+              value={device}
+              options={[
+                {
+                  value: 'desktop',
+                  label: <Monitor className="h-3.5 w-3.5" />,
+                  title: 'Desktop',
+                },
+                {
+                  value: 'mobile',
+                  label: <Smartphone className="h-3.5 w-3.5" />,
+                  title: 'Mobile',
+                },
+              ]}
+              onChange={setDevice}
+            />
+          </div>
+          {periodButton}
+          {filtersPopover}
+          {crossChip}
+          <div className="ml-auto flex items-center gap-2">
+            <GhostButton
+              onClick={autoBuild}
+              icon={<Sparkles className="h-3.5 w-3.5 text-blue-600" />}
+              title="Rebuild with a recommended layout"
+            >
+              Auto-build
+            </GhostButton>
+            <Popover
+              width={300}
+              trigger={({ toggle, ref }) => (
+                <button
+                  ref={ref}
+                  type="button"
+                  onClick={toggle}
+                  className={PRIMARY_BTN}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add
+                </button>
+              )}
+            >
+              {(close) => <WidgetMenu onPick={addOfType} close={close} />}
+            </Popover>
+          </div>
+        </div>
+
+        <div className={`min-h-0 flex-1 overflow-y-auto p-3 ${t.canvas}`}>
+          {rowsLoading ? (
+            <div className="grid grid-cols-4 gap-3" aria-hidden="true">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div
+                  key={i}
+                  className={`h-24 animate-pulse rounded-xl ${t.skeleton}`}
+                />
+              ))}
+            </div>
+          ) : rowsError ? (
+            <p className="py-16 text-center text-[13px] text-red-600">
+              {rowsError}
+            </p>
+          ) : (
+            <div
+              className="mx-auto space-y-3 transition-[max-width] duration-200"
+              style={{ maxWidth: device === 'mobile' ? 390 : '100%' }}
+            >
+              {modeBanner}
+              {filterChips}
+              <ReportPaper
+                def={def}
+                source={source}
+                fieldMap={fieldMap}
+                recordCount={paperCount}
+                user={currentUser}
+                mode={paperMode}
+                meta={paperMeta}
+              >
+                <Canvas
+                  widgets={canvasWidgets}
+                  data={dataCtx}
+                  selectedId={selectedWidgetId}
+                  readOnly={!editMode}
+                  onSelect={setSelectedWidgetId}
+                  onMove={moveWidget}
+                  onReorder={reorderWidget}
+                  onDuplicate={duplicateWidget}
+                  onRemove={removeWidget}
+                  onAdd={addOfType}
+                />
+              </ReportPaper>
+            </div>
+          )}
+        </div>
+
+        <div className={`shrink-0 border-t ${t.lineStrong}`}>
+          <button
+            type="button"
+            aria-expanded={drawerOpen}
+            onClick={() => setDrawerOpen((o) => !o)}
+            className={`flex w-full items-center justify-between px-3 py-2 text-xs font-medium ${t.body} ${t.hover} ${FOCUS}`}
+          >
+            <span className="flex items-center gap-2">
+              <Table2 className="h-3.5 w-3.5" /> Data and summary{' '}
+              <span className={t.muted}>
+                · {viewRows.length.toLocaleString()} records ·{' '}
+                {selectedFields.length} fields · {def.widgets.length} widgets
+              </span>
+            </span>
+            {drawerOpen ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronUp className="h-4 w-4" />
+            )}
+          </button>
+          {drawerOpen && (
+            <div className={`flex h-64 flex-col border-t p-3 ${t.line}`}>
+              <div className="mb-2 w-56 shrink-0">
+                <Segmented
+                  label="Drawer tab"
+                  value={drawerTab}
+                  options={[
+                    { value: 'data', label: 'Data preview' },
+                    { value: 'summary', label: 'Summary' },
+                  ]}
+                  onChange={setDrawerTab}
+                />
+              </div>
+              {drawerTab === 'data' ? (
+                <DataPreview
+                  rows={viewRows}
+                  fields={selectedFields}
+                  currency={currency}
+                  limit={6}
+                />
+              ) : (
+                <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto sm:grid-cols-2">
+                  <dl className="space-y-1.5 text-[13px]">
+                    {(
+                      [
+                        ['Source', source.name],
+                        ['Period', describeFilters(def, fieldMap)],
+                        ['Records', viewRows.length.toLocaleString()],
+                        ['Created by', currentUser],
+                      ] as const
+                    ).map(([k, v]) => (
+                      <div
+                        key={k}
+                        className="grid grid-cols-[80px_minmax(0,1fr)] gap-2"
+                      >
+                        <dt className={t.muted}>{k}</dt>
+                        <dd className={`break-words ${t.text}`}>{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <ul
+                    className={`divide-y rounded-lg border text-xs ${t.lineStrong} ${t.line}`}
+                  >
+                    {def.widgets.map((w) => (
+                      <li
+                        key={w.id}
+                        className={`flex items-center justify-between gap-2 px-3 py-1.5 ${t.body}`}
+                      >
+                        <span className="truncate">{w.title}</span>
+                        <span className={t.muted}>
+                          {w.kind === 'chart'
+                            ? CHART_TYPES.find((c) => c.value === w.chartType)
+                                ?.label
+                            : w.kind}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Panel>
+
+      <Panel>
+        <PanelHead
+          title={
+            <>
+              <Settings2 className="h-4 w-4" />{' '}
+              {selectedWidget && editMode
+                ? 'Widget settings'
+                : 'Report settings'}
+            </>
+          }
+          action={
+            selectedWidget && editMode ? (
+              <IconButton
+                label="Back to report settings"
+                onClick={() => setSelectedWidgetId(null)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </IconButton>
+            ) : undefined
+          }
+        />
+        {selectedWidget && editMode ? (
+          <WidgetInspector
+            key={selectedWidget.id}
+            widget={selectedWidget}
+            fields={selectedFields}
+            metricFields={metricFields}
+            allFields={catalogue}
+            allRows={allRows}
+            onPatch={(p, key) => patchWidget(selectedWidget.id, p, key)}
+            onDuplicate={() => duplicateWidget(selectedWidget.id)}
+            onRemove={() => removeWidget(selectedWidget.id)}
+            sources={sourceInfos}
+            drillPaths={def.drillPaths ?? []}
+          />
+        ) : (
+          <ReportInspector
+            def={def}
+            allFields={catalogue}
+            allRows={allRows}
+            onChange={update}
+            onAutoBuild={autoBuild}
+          />
+        )}
+      </Panel>
+    </div>
+  );
+
+  /* ==========================================================================
+   * Step 3: review & generate
+   * ======================================================================== */
+  const renderStep3 = () => (
+    <div className="grid min-h-0 gap-2 xl:h-full xl:grid-cols-[minmax(0,1fr)_320px]">
+      <Panel>
+        <PanelHead
+          title={
+            <>
+              <Eye className="h-4 w-4" /> Report preview
+            </>
+          }
+          hint="Click a chart segment to drill down. Hover a widget to expand it."
+          action={<div className="flex items-center gap-2">{crossChip}</div>}
+        />
+        <div className={`min-h-0 flex-1 overflow-y-auto p-4 ${t.canvas}`}>
+          <div className="mx-auto max-w-[1100px] space-y-3">
+            <div className="rb-noprint space-y-3">
+              {modeBanner}
+              {filterChips}
+            </div>
+            <ReportPaper
+              id="rb-print"
+              def={def}
+              source={source}
+              fieldMap={fieldMap}
+              recordCount={paperCount}
+              user={currentUser}
+              mode={paperMode}
+              meta={paperMeta}
+            >
+              <Canvas
+                widgets={canvasWidgets}
+                data={dataCtx}
+                selectedId={null}
+                readOnly
+                onSelect={() => undefined}
+                onMove={moveWidget}
+                onReorder={reorderWidget}
+                onDuplicate={duplicateWidget}
+                onRemove={removeWidget}
+              />
+            </ReportPaper>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Section
+            title="Report period & filters"
+            defaultOpen
+            badge={PRESET_LABEL[def.period.preset]}
+          >
+            <PeriodPicker
+              value={def.period}
+              onChange={(pd) => update((d) => ({ ...d, period: pd }))}
+              timezone={tz}
+              fiscalYearStartMonth={fiscalYearStartMonth}
+            />
+            <FilterEditor
+              fields={catalogue}
+              rules={def.filters}
+              allRows={allRows}
+              onChange={(filters) => update((d) => ({ ...d, filters }))}
+            />
+          </Section>
+
+          <Section
+            title="Checks before generating"
+            defaultOpen
+            badge={
+              issues.filter((i) => i.severity === 'error').length
+                ? `${issues.filter((i) => i.severity === 'error').length} to fix`
+                : 'Ready'
+            }
+          >
+            <IssuesPanel
+              issues={issues}
+              onJump={(i) => {
+                if (i.widgetId) {
+                  setStep(2);
+                  setEditMode(true);
+                  setViewingFinal(false);
+                  setSelectedWidgetId(i.widgetId);
+                } else if (i.fix === 'data') setStep(1);
+                else if (i.fix === 'period' || i.fix === 'filters') setStep(3);
+              }}
+            />
+          </Section>
+
+          <Section
+            title="Output"
+            defaultOpen
+            badge={output.format.toUpperCase()}
+          >
+            <div
+              role="radiogroup"
+              aria-label="Output format"
+              className="grid grid-cols-3 gap-1.5"
+            >
+              {(
+                [
+                  ['pdf', 'PDF', FileText],
+                  ['csv', 'CSV', Table2],
+                  ['xlsx', 'Excel', Table2],
+                ] as const
+              ).map(([id, label, Icon]) => {
+                const disabled = !onGenerate;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={output.format === id}
+                    disabled={disabled}
+                    title={
+                      disabled
+                        ? 'Provide an onGenerate handler (export service) to enable downloads'
+                        : undefined
+                    }
+                    onClick={() => setOutput((o) => ({ ...o, format: id }))}
+                    className={`flex flex-col items-center gap-1 rounded-lg border py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${output.format === id ? t.selected : t.btn} ${FOCUS}`}
+                  >
+                    <Icon className="h-4 w-4 text-blue-600" /> {label}
+                  </button>
+                );
+              })}
+            </div>
+            {output.format === 'pdf' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Orientation">
+                  <Select
+                    value={output.orientation}
+                    options={[
+                      { value: 'landscape', label: 'Landscape' },
+                      { value: 'portrait', label: 'Portrait' },
+                    ]}
+                    onChange={(v) =>
+                      setOutput((o) => ({
+                        ...o,
+                        orientation: v as 'portrait' | 'landscape',
+                      }))
+                    }
+                  />
+                </Field>
+                <Field label="Paper">
+                  <Select
+                    value={output.paper}
+                    options={[
+                      { value: 'A4', label: 'A4' },
+                      { value: 'Letter', label: 'Letter' },
+                    ]}
+                    onChange={(v) =>
+                      setOutput((o) => ({ ...o, paper: v as 'A4' | 'Letter' }))
+                    }
+                  />
+                </Field>
+              </div>
+            )}
+          </Section>
+
+          <Section
+            title="Schedule and distribution"
+            badge={
+              def.schedule.frequency === 'none'
+                ? 'Off'
+                : cap(def.schedule.frequency)
+            }
+          >
+            <Field label="Repeat">
+              <Select
+                value={def.schedule.frequency}
+                options={[
+                  { value: 'none', label: 'Run on demand only' },
+                  { value: 'daily', label: 'Daily' },
+                  { value: 'weekly', label: 'Weekly (Mondays)' },
+                  { value: 'monthly', label: 'Monthly (1st)' },
+                ]}
+                onChange={(v) =>
+                  update((d) => ({
+                    ...d,
+                    schedule: {
+                      ...d.schedule,
+                      frequency: v as ScheduleFrequency,
+                    },
+                  }))
+                }
+              />
+            </Field>
+            {def.schedule.frequency !== 'none' && (
+              <Field
+                label="Recipients"
+                hint="Comma-separated e-mail addresses. Delivery needs your onGenerate / scheduler backend."
+              >
+                <TextInput
+                  value={def.schedule.recipients}
+                  onChange={(e) =>
+                    update(
+                      (d) => ({
+                        ...d,
+                        schedule: { ...d.schedule, recipients: e.target.value },
+                      }),
+                      'rcpt'
+                    )
+                  }
+                  placeholder="cfo@bank.com, risk@bank.com"
+                />
+              </Field>
+            )}
+          </Section>
+
+          <Section title="Save as template" defaultOpen>
+            <Field label="Who can use it">
+              <Select
+                value={visibility}
+                options={[
+                  { value: 'private', label: 'Only me' },
+                  { value: 'team', label: 'My team' },
+                  { value: 'org', label: 'Everyone in the organisation' },
+                ]}
+                onChange={(v) => setVisibility(v as TemplateVisibility)}
+              />
+            </Field>
+            <GhostButton
+              onClick={() => saveTemplate(false)}
+              icon={<LayoutTemplate className="h-3.5 w-3.5" />}
+            >
+              {templateId ? 'Update template' : 'Save template'}
+            </GhostButton>
+          </Section>
+        </div>
+        <div className={`shrink-0 space-y-2 border-t p-3 ${t.lineStrong}`}>
+          {lastRun && (
+            <p
+              role="status"
+              className="flex items-start gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700"
+            >
+              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />{' '}
+              {lastRun.rows.toLocaleString()} records as{' '}
+              {lastRun.format.toUpperCase()} at{' '}
+              {lastRun.at.toLocaleTimeString()}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={startRun}
+            disabled={run.state.phase === 'running' || rowsLoading}
+            className={`${viewMode === 'final' && !stale ? `${t.btn} border` : PRIMARY_BTN} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold`}
+          >
+            {run.state.phase === 'running' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            {viewMode === 'final' ? 'Regenerate report' : 'Generate report'}
+          </button>
+          <PermissionGuard
+            menuId={REPORT_BUILDER_MENU_ID}
+            action="export"
+            fallback={
+              <button
+                onClick={() =>
+                  addNotification(
+                    'You do not have permission to export, Contact Administrator.',
+                    'warning'
+                  )
+                }
+                className={`${viewMode === 'final' && !stale ? PRIMARY_BTN : `${t.btn} border`} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                <Download className="w-4 h-4" />
+                Export
+              </button>
+            }
+          >
+            <button
+              type="button"
+              onClick={exportReport}
+              disabled={
+                generating || viewMode !== 'final' || stale || !onGenerate
+              }
+              title={
+                !onGenerate
+                  ? 'No export handler configured (onGenerate)'
+                  : viewMode !== 'final'
+                    ? 'Generate the report first: exports use actual data only'
+                    : stale
+                      ? 'Regenerate first: the report changed'
+                      : undefined
+              }
+              className={`${viewMode === 'final' && !stale ? PRIMARY_BTN : `${t.btn} border`} inline-flex !h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold disabled:cursor-not-allowed disabled:opacity-50`}
+            >
+              {generating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {generating
+                ? 'Exporting…'
+                : `Export ${output.format.toUpperCase()}`}
+            </button>
+          </PermissionGuard>
+        </div>
+      </Panel>
+    </div>
+  );
+
+  /* ==========================================================================
+   * Render
+   * ======================================================================== */
+  const printCss = `@media print {
+    body * { visibility: hidden !important; }
+    #rb-print, #rb-print * { visibility: visible !important; }
+    #rb-print { position: absolute; left: 0; top: 0; width: 100%; border: 0 !important; box-shadow: none !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .rb-noprint { display: none !important; }
+    .rb-pb { break-before: page; }
+    .rb-avoid { break-inside: avoid; }
+    @page { size: ${output.paper} ${output.orientation}; margin: 12mm 10mm 14mm; @bottom-center { content: "${CLASSIFICATION[def.classification].label} · Page " counter(page) " of " counter(pages); font-size: 9px; color: #64748b; } }
+  }`;
+
+  return (
+    <PermissionGuard
+      menuId={REPORT_BUILDER_MENU_ID}
+      action="view"
+      fallback={
+        <div
+          className={`text-center py-20 ${dark ? 'text-white' : 'text-gray-900'}`}
+        >
+          <AlertTriangle className="w-16 h-16 mx-auto mb-4 text-red-400" />
+          <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+          <p className="text-gray-500">
+            You don't have permission to view the report builder.
+          </p>
+        </div>
+      }
+    >
+      <ThemeCtx.Provider value={t}>
+        <MaskCtx.Provider value={canViewSensitive}>
+          <style>{printCss}</style>
+          <div
+            className="flex min-h-0 flex-col gap-2 xl:h-[var(--rb-h)] xl:min-h-[620px]"
+            style={{ ['--rb-h' as string]: height } as React.CSSProperties}
+          >
+            {/* Top bar: identity, stepper and actions in one row */}
+            <div
+              className={`flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 ${t.card}`}
+            >
+              <div className="flex min-w-0 flex-1 basis-[280px] items-center gap-2">
+                {onBack && (
+                  <IconButton label="Go back" onClick={onBack}>
+                    <ArrowLeft className="h-4 w-4" />
+                  </IconButton>
+                )}
+                {/* <span
+                className={`hidden shrink-0 text-xs font-medium md:inline ${t.muted}`}
+              >
+                Report Builder
+              </span>
+              <ChevronRight
+                className={`hidden h-3.5 w-3.5 shrink-0 md:block ${t.muted}`}
+              /> */}
+                <input
+                  aria-label="Report name"
+                  value={def.name}
+                  onChange={(e) =>
+                    update((d) => ({ ...d, name: e.target.value }), 'name')
+                  }
+                  placeholder="Untitled report"
+                  className={`h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-sm font-semibold ${t.text} ${FOCUS}`}
+                />
+                <Badge
+                  value={statusLabel}
+                  tone={dirty ? 'amber' : templateId ? 'green' : 'slate'}
+                />
+              </div>
+
+              <nav aria-label="Report builder steps">
+                <ol className="flex items-center gap-1">
+                  {STEPS.map((s, i) => {
+                    const n = i + 1,
+                      done = n < step,
+                      active = n === step;
+                    return (
+                      <React.Fragment key={s.full}>
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => goStep(n)}
+                            aria-current={active ? 'step' : undefined}
+                            title={s.full}
+                            className={`flex items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 ${active ? (t.dark ? 'bg-blue-500/15' : 'bg-blue-50') : ''} ${FOCUS}`}
+                          >
+                            <span
+                              className={`grid h-6 w-6 place-items-center rounded-full text-xs font-semibold ${active ? 'bg-blue-600 text-white' : done ? 'bg-blue-100 text-blue-700' : t.dark ? 'bg-white/10 text-white/60' : 'bg-slate-200 text-slate-600'}`}
+                            >
+                              {done ? <Check className="h-3.5 w-3.5" /> : n}
+                            </span>
+                            <span
+                              className={`text-xs font-medium ${active ? t.text : t.muted}`}
+                            >
+                              <span className="hidden 2xl:inline">
+                                {s.full}
+                              </span>
+                              <span className="2xl:hidden">{s.short}</span>
+                            </span>
+                          </button>
+                        </li>
+                        {n < STEPS.length && (
+                          <li
+                            aria-hidden="true"
+                            className={`h-px w-4 ${done ? 'bg-blue-300' : t.dark ? 'bg-white/15' : 'bg-slate-200'}`}
+                          />
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </ol>
+              </nav>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <IconButton
+                  label="Undo (Ctrl+Z)"
+                  onClick={undo}
+                  disabled={hist.past.length === 0}
+                >
+                  <Undo2 className="h-4 w-4" />
+                </IconButton>
+                <IconButton
+                  label="Redo (Ctrl+Shift+Z)"
+                  onClick={redo}
+                  disabled={hist.future.length === 0}
+                >
+                  <Redo2 className="h-4 w-4" />
+                </IconButton>
+                <IconButton
+                  label="Refresh data"
+                  onClick={refreshData}
+                  disabled={rowsLoading}
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 ${rowsLoading ? 'animate-spin' : ''}`}
+                  />
+                </IconButton>
+                <GhostButton
+                  onClick={() => setTemplatesOpen(true)}
+                  icon={<FolderOpen className="h-3.5 w-3.5" />}
+                >
+                  Templates
+                </GhostButton>
+                <GhostButton
+                  onClick={newReport}
+                  icon={<Plus className="h-3.5 w-3.5" />}
+                >
+                  New
+                </GhostButton>
+                <GhostButton
+                  onClick={() => saveTemplate(true)}
+                  icon={<Save className="h-3.5 w-3.5" />}
+                >
+                  Save draft
+                </GhostButton>
+                <GhostButton
+                  onClick={() => saveTemplate(false, true)}
+                  icon={<Copy className="h-3.5 w-3.5" />}
+                  title="Save a copy under a new name"
+                >
+                  Save as
+                </GhostButton>
+                {step > 1 && (
+                  <GhostButton
+                    onClick={() => goStep(step - 1)}
+                    icon={<ArrowLeft className="h-3.5 w-3.5" />}
+                  >
+                    Back
+                  </GhostButton>
+                )}
+                {step < 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => goStep(step + 1)}
+                    className={PRIMARY_BTN}
+                  >
+                    {step === 1 ? 'Next: Design' : 'Next: Review'}{' '}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startRun}
+                    disabled={run.state.phase === 'running' || rowsLoading}
+                    className={PRIMARY_BTN}
+                  >
+                    {run.state.phase === 'running' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}{' '}
+                    Generate report
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {restore && !dirty && (
+              <div
+                role="status"
+                className={`flex shrink-0 flex-wrap items-center gap-3 rounded-xl border border-amber-300 px-3 py-2 text-xs ${t.dark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-800'}`}
+              >
+                <Clock className="h-4 w-4 shrink-0" />
+                <span className="flex-1">
+                  Resumed “{restore.def.name || 'Untitled'}” (last saved{' '}
+                  {new Date(restore.at).toLocaleString()}).
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetHistory(blankDefinition(sources[0]));
+                    setTemplateId(null);
+                    clearAutosave();
+                    setStep(1);
+                  }}
+                  className={`rounded-md border border-amber-400 px-2.5 py-1 font-medium ${FOCUS}`}
+                >
+                  Start over
+                </button>
+              </div>
+            )}
+
+            {rangeErr && (
+              <div
+                role="alert"
+                className="flex shrink-0 items-center gap-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800"
+              >
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                {rangeErr} Widgets show no data until this is fixed.
+              </div>
+            )}
+
+            <div className="min-h-0 flex-1">
+              {step === 1 && renderStep1()}
+              {step === 2 && renderStep2()}
+              {step === 3 && renderStep3()}
+            </div>
+
+            <div
+              role="status"
+              className={`flex shrink-0 flex-wrap items-center gap-x-4 gap-y-0.5 rounded-xl border px-3 py-1 text-[11px] ${t.card} ${t.muted}`}
+            >
+              <span>
+                {rowsLoading
+                  ? 'Loading data…'
+                  : rowsError
+                    ? 'Data unavailable'
+                    : 'Ready'}
+              </span>
+              {viewMode === 'final' && runResult ? (
+                <span className="font-medium text-emerald-700">
+                  ACTUAL DATA ·{' '}
+                  {(runResult.meta.recordsMatched ?? 0).toLocaleString()}{' '}
+                  records in scope · run {runResult.meta.runId.slice(0, 8)}
+                </span>
+              ) : (
+                <span className="font-medium text-amber-700">
+                  PREVIEW SAMPLE · {rawRows.length.toLocaleString()}
+                  {rowsState.id === source.id && rowsState.total
+                    ? ` of ${rowsState.total.toLocaleString()}`
+                    : ''}{' '}
+                  {source.recordLabel} loaded ·{' '}
+                  {viewRows.length.toLocaleString()} in view
+                </span>
+              )}
+              {loadedAt && viewMode === 'preview' && (
+                <span>Sample refreshed {fmtDateTime(loadedAt)}</span>
+              )}
+              <span>Time zone {def.timezone ?? DEFAULT_TZ}</span>
+              <span className="ml-auto">
+                {(rangeErr ? 1 : 0) +
+                  (rowsError ? 1 : 0) +
+                  (rowsTruncated ? 1 : 0)}{' '}
+                problem
+                {(rangeErr ? 1 : 0) +
+                  (rowsError ? 1 : 0) +
+                  (rowsTruncated ? 1 : 0) ===
+                1
+                  ? ''
+                  : 's'}
+              </span>
+            </div>
+
+            <TemplatesDrawer
+              open={templatesOpen}
+              templates={[...userTemplates, ...BUILTIN_TEMPLATES]}
+              sources={sources}
+              onClose={() => setTemplatesOpen(false)}
+              onOpen={openTemplate}
+              onDuplicate={duplicateTemplate}
+              onDelete={deleteTemplate}
+              onImport={importTemplate}
+            />
+            <CustomFieldsModal
+              open={customOpen}
+              editKey={customEdit}
+              fields={catalogue}
+              derived={def.derived ?? []}
+              rows={allRows}
+              onClose={() => setCustomOpen(false)}
+              onSave={saveDerived}
+              onRemove={removeDerived}
+            />
+            <MetricModal
+              open={metricOpen}
+              fields={catalogue}
+              fieldMap={fieldMap}
+              certified={certifiedMetrics}
+              mine={def.metrics ?? []}
+              rows={rows}
+              onClose={() => setMetricOpen(false)}
+              onSave={saveMetric}
+              onRemove={removeMetric}
+            />
+            <DrillThroughModal
+              info={drillThrough}
+              data={dataCtx}
+              onClose={() => setDrillThrough(null)}
+            />
+            <WidgetModal
+              widget={def.widgets.find((w) => w.id === expandedId) ?? null}
+              data={dataCtx}
+              onClose={() => setExpandedId(null)}
+            />
+
+            {runDialog &&
+              run.state.phase !== 'idle' &&
+              run.state.phase !== 'succeeded' && (
+                <RunDialog
+                  state={run.state}
+                  reportName={def.name}
+                  onCancel={run.cancel}
+                  onRetry={run.retry}
+                  onClose={() => {
+                    run.cancel();
+                    setRunDialog(false);
+                  }}
+                />
+              )}
+
+            {toast && (
+              <div
+                role="status"
+                aria-live="polite"
+                className={`fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-lg ${toast.tone === 'error' ? 'bg-red-600' : toast.tone === 'success' ? 'bg-emerald-600' : 'bg-slate-800'}`}
+              >
+                {toast.msg}
+              </div>
+            )}
+          </div>
+        </MaskCtx.Provider>
+      </ThemeCtx.Provider>
+    </PermissionGuard>
+  );
+};;
+
+export { createLocalProvider, runLocalQuery, SOURCES as DEMO_SOURCES };
+/** Public extension / integration API (widgets, contract, compiler, run engine). */
+export {
+  parseFormula,
+  evalFormula,
+  prevRefs,
+  printFormula,
+  resolveComparison,
+  periodError,
+  legacyRangeToPeriod,
+  addMonthsISO,
+  todayIn,
+  registerWidget,
+  __resetRegistry,
+  getWidget,
+  hasWidget,
+  listWidgets,
+  widgetKinds,
+  compileReport,
+  applySectionFilters,
+  definitionHash,
+  RECORDS_QUERY_ID,
+  resultKey,
+  executeRun,
+  fetchQueries,
+  RunError,
+  useReportRun,
+  validateReport,
+  filterProblem,
+  hasErrors,
+  stableStringify,
+  hashString,
+  queryFingerprint,
+  GEO_LAYOUTS,
+  parseEdges,
+  resolvePeriod,
+  describePeriod,
+  PRESET_LABEL,
+};
+export type {
+  FieldInfo,
+  SourceInfo,
+  RegistryWidget,
+  WidgetDescriptor,
+  ValidationIssue,
+  WidgetRenderProps,
+  WidgetEnv,
+  ConfigField,
+  QuerySpec,
+  ReportDataProvider,
+  ReportQuery,
+  QueryResult,
+  BatchResult,
+  ScalarResult,
+  GroupedResult,
+  RecordsResult,
+  ReportRunMetadata,
+  ReportRunRequest,
+  ReportPeriod,
+  ResolvedPeriod,
+  DatePreset,
+  CompilableDefinition,
+  RunContext,
+  RunState,
+  ProviderCapabilities,
+  ExportFormat,
+};
+/** @internal exposed for tests */
+export const __test = {
+  BUILTIN_TEMPLATES,
+  enrichFields,
+  metricField,
+  normalizeRows,
+  applyDerived,
+  aggregate,
+  blankMetric,
+};
+export default ReportBuilder;

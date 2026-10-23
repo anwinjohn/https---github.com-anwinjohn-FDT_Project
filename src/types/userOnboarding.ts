@@ -19,6 +19,7 @@ export interface UserOnboardingData {
   user_roles: string;
   created_at: string;
   updated_at: string;
+  can_view_sensitive: boolean;
 }
 
 export interface UserOnboardingResponse {

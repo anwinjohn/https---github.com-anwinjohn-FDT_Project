@@ -17,7 +17,7 @@ const PermissionGuard: React.FC<PermissionGuardProps> = ({
   children,
   fallback = null,
   requireAll = false,
-  actions = []
+  actions = [],
 }) => {
   const { hasPermission, loading } = usePermissions();
   const { user } = useAuth();
@@ -37,20 +37,22 @@ const PermissionGuard: React.FC<PermissionGuardProps> = ({
 
   // Check single action
   if (actions.length === 0) {
-    const permissionKey = `can${action.charAt(0).toUpperCase() + action.slice(1)}` as any;
+    const permissionKey =
+      `can${action.charAt(0).toUpperCase() + action.slice(1)}` as any;
     const hasAccess = hasPermission(menuId, permissionKey);
     return hasAccess ? <>{children}</> : <>{fallback}</>;
   }
 
   // Check multiple actions
-  const actionChecks = actions.map(act => {
-    const permissionKey = `can${act.charAt(0).toUpperCase() + act.slice(1)}` as any;
+  const actionChecks = actions.map((act) => {
+    const permissionKey =
+      `can${act.charAt(0).toUpperCase() + act.slice(1)}` as any;
     return hasPermission(menuId, permissionKey);
   });
 
-  const hasAccess = requireAll 
-    ? actionChecks.every(check => check) 
-    : actionChecks.some(check => check);
+  const hasAccess = requireAll
+    ? actionChecks.every((check) => check)
+    : actionChecks.some((check) => check);
 
   return hasAccess ? <>{children}</> : <>{fallback}</>;
 };

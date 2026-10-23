@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import apiClient from '../utils/apiClient';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 
 interface MenuIdMapping {
   [menuKey: string]: number;
