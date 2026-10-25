@@ -20,6 +20,7 @@ import {
   Brain,
   TrendingUp,
   ScanFace,
+  Rocket,
 } from 'lucide-react';
 import FaceIdLogin from './FaceIdLogin';
 import { useLocalMachine } from '../context/DeviceInfoContext';
@@ -179,6 +180,15 @@ const LoginPage = () => {
     });
   };
 
+   if (showFaceId) {
+     return (
+       <FaceIdLogin
+         onSuccess={handleFaceIdSuccess}
+         onBack={handleFaceIdBack}
+         username={username}
+       />
+     );
+   }
   const securityFeatures = [
     // { icon: Shield, text: 'Enterprise Security', description: 'Bank-grade encryption' },
     {
@@ -191,6 +201,11 @@ const LoginPage = () => {
       text: 'AI-Powered Analytics',
       description: 'Machine learning insights',
     },
+    {
+      icon: Rocket,
+      text: 'Self-Services',
+      description: 'Create, manage your own Analytics reports & share with your team, org.',
+    },
   ];
 
   if (showFaceId) {
@@ -198,7 +213,7 @@ const LoginPage = () => {
       <FaceIdLogin
         onSuccess={handleFaceIdSuccess}
         onBack={handleFaceIdBack}
-        username={formData.username}
+        username={username}
       />
     );
   }
@@ -207,6 +222,7 @@ const LoginPage = () => {
     { value: '99.9%', label: 'Uptime', icon: TrendingUp },
     { value: '24/7', label: 'Availability', icon: Activity },
     { value: 'Ai', label: 'Powered', icon: Brain },
+    { value: 'EFR', label: 'Secure', icon: ScanFace },
   ];
 
   return (
@@ -351,7 +367,7 @@ const LoginPage = () => {
 
           {/* Enhanced Stats */}
           <motion.div
-            className="grid grid-cols-3 gap-4 max-w-xl"
+            className="grid grid-cols-4 gap-4 max-w-xl"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 1.2 }}
