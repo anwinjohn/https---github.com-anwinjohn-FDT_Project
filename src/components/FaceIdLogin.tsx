@@ -18,7 +18,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react';
-
+import { appConfig as config } from '../config/runtime-config';
 /* -------------------------------------------------------------------------- */
 /*  Types & config                                                            */
 /* -------------------------------------------------------------------------- */
@@ -98,7 +98,7 @@ type Phase =
   | 'success'
   | 'error';
 
-const API_BASE = 'http://localhost:8000/auth'; // Update to your FastAPI backend
+const API_BASE = config.api.EfrvBaseUrl; // Update to your FastAPI backend
 // /auth/challenge sends min/max frames and a recommended fps (5), but no
 // duration. /auth/verify now validates the action INSIDE the frames, so the
 // window must be long enough to contain: look straight -> do the action ->
@@ -125,8 +125,7 @@ const ISSUER_KEY =
 // The issuer requires the secret `x-onboarding-issuer-key` header; that key
 // must live only on the server, so the browser never sends or contains it.
 // Expected response: { success, access_token, expires_in, token_type: "Bearer" }
-const ENROLLMENT_TOKEN_URL =
-  'http://localhost:8000/onboarding/enrollment-token';
+const ENROLLMENT_TOKEN_URL = `${API_BASE}/onboarding/enrollment-token`;
 // false = same CORS behavior as your other API calls (no cookies sent).
 // Set true ONLY if the token endpoint authenticates via a session cookie; the
 // server must then allow your exact origin + Access-Control-Allow-Credentials: true.
@@ -641,7 +640,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       // 1. challenge (always a fresh one per attempt)
       setPhase('preparing');
       const { data: ch } = await axios.get<ChallengeData>(
-        `${API_BASE}/challenge`,
+        `${API_BASE}/auth/challenge`,
         {
           timeout: 20000,
         }
@@ -692,7 +691,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       }
 
       const { data } = await axios.post<ApiResponse>(
-        `${API_BASE}/${mode === 'enroll' ? 'enroll' : 'verify'}`,
+        `${API_BASE}/auth/${mode === 'enroll' ? 'enroll' : 'verify'}`,
         form,
         { timeout: 60000, headers: enrollHeaders }
       );

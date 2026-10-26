@@ -12,6 +12,7 @@ interface AppConfig {
     timeout?: number;
     aisuggestions: string;
     [key: string]: unknown;
+    EfrvBaseUrl: string;
   };
   auth: {
     enabled: boolean;
