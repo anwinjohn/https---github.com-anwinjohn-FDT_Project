@@ -17,6 +17,8 @@ import {
   Activity,
   Check,
   X,
+  Rocket,
+  ScanFace,
 } from 'lucide-react';
 import { appConfig as config } from '../config/runtime-config';
 import { useNotifications } from '../components/notifications';
@@ -219,13 +221,20 @@ const ChangePasswordPage: React.FC = () => {
       text: 'AI-Powered Analytics',
       description: 'Machine learning insights',
     },
+    {
+      icon: Rocket,
+      text: 'Self-Services',
+      description:
+        'Create, manage custom Analytics reports & share with your team/org.',
+    },
   ];
 
-  const stats = [
-    { value: '99.9%', label: 'Uptime', icon: TrendingUp },
-    { value: '24/7', label: 'Monitoring', icon: Activity },
-    { value: 'Ai', label: 'Powered', icon: Brain },
-  ];
+   const stats = [
+     { value: '99.9%', label: 'Uptime', icon: TrendingUp },
+     { value: '24/7', label: 'Availability', icon: Activity },
+     { value: 'Ai', label: 'Powered', icon: Brain },
+     { value: 'EFRv', label: 'Secure', icon: ScanFace },
+   ];
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -355,7 +364,7 @@ const ChangePasswordPage: React.FC = () => {
 
           {/* Stats */}
           <motion.div
-            className="grid grid-cols-3 gap-4"
+            className="grid grid-cols-4 gap-4"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 1.2 }}

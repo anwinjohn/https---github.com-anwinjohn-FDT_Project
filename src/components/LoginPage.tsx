@@ -81,6 +81,7 @@ const LoginPage = () => {
   const [authMethod, setAuthMethod] = useState('password');
   const [step, setStep] = useState('login');
   const [showFaceId, setShowFaceId] = useState(false);
+ const { addNotification } = useNotifications();
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -204,7 +205,7 @@ const LoginPage = () => {
     {
       icon: Rocket,
       text: 'Self-Services',
-      description: 'Create, manage your own Analytics reports & share with your team, org.',
+      description: 'Create, manage custom Analytics reports & share with your team, org.',
     },
   ];
 
@@ -222,7 +223,7 @@ const LoginPage = () => {
     { value: '99.9%', label: 'Uptime', icon: TrendingUp },
     { value: '24/7', label: 'Availability', icon: Activity },
     { value: 'Ai', label: 'Powered', icon: Brain },
-    { value: 'EFR', label: 'Secure', icon: ScanFace },
+    { value: 'EFRv', label: 'Secure', icon: ScanFace },
   ];
 
   return (
