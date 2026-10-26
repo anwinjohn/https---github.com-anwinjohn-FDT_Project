@@ -10,44 +10,75 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    // Check localStorage first, then system preference, default to dark
-    const savedTheme = localStorage.getItem('theme') as Theme;
-    if (savedTheme) {
-      return savedTheme;
-    }
-    
-    // Check system preference
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-      return 'light';
-    }
-    
-    return 'dark'; // Default to dark theme
-  });
+// ── Reads the persisted/preferred theme outside of React state so the
+//    initializer never touches `window` on the server (SSR safe).
+function getInitialTheme(): Theme {
+  if (typeof window === 'undefined') return 'dark';
 
+  const saved = localStorage.getItem('theme') as Theme | null;
+  if (saved === 'light' || saved === 'dark') return saved;
+
+  return window.matchMedia('(prefers-color-scheme: light)').matches
+    ? 'light'
+    : 'dark';
+}
+
+// ── Applies the theme class to <html> and keeps meta theme-color in sync.
+//    Called both on mount and on every theme change.
+function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+
+  // Ensure ONLY one theme class is present at a time
+  root.classList.remove('light', 'dark');
+  root.classList.add(theme);
+
+  // Also set a data attribute — handy for CSS [data-theme] selectors
+  root.setAttribute('data-theme', theme);
+
+  // Persist
+  localStorage.setItem('theme', theme);
+
+  // Update mobile browser chrome color to match new palette
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) {
+    meta.setAttribute(
+      'content',
+      theme === 'dark'
+        ? '#09090b'   // --color-background dark  (#09090b true black)
+        : '#f8f9fb'   // --color-background light (#f8f9fb near-white)
+    );
+  }
+}
+
+export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [theme, setThemeState] = useState<Theme>(getInitialTheme);
+
+  // Apply on mount + whenever theme changes
   useEffect(() => {
-    // Apply theme to document
-    document.documentElement.classList.remove('light', 'dark');
-    document.documentElement.classList.add(theme);
-    
-    // Save to localStorage
-    localStorage.setItem('theme', theme);
-    
-    // Update meta theme-color for mobile browsers
-    const metaThemeColor = document.querySelector('meta[name="theme-color"]');
-    if (metaThemeColor) {
-      metaThemeColor.setAttribute('content', theme === 'dark' ? '#0f172a' : '#ffffff');
-    }
+    applyTheme(theme);
   }, [theme]);
 
-  const toggleTheme = () => {
-    setThemeState(prev => prev === 'dark' ? 'light' : 'dark');
-  };
+  // Keep in sync if the user changes their OS preference while the tab is open
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
 
-  const setTheme = (newTheme: Theme) => {
-    setThemeState(newTheme);
-  };
+    const handleChange = (e: MediaQueryListEvent) => {
+      // Only follow system preference if the user hasn't manually set one
+      if (!localStorage.getItem('theme')) {
+        setThemeState(e.matches ? 'light' : 'dark');
+      }
+    };
+
+    mq.addEventListener('change', handleChange);
+    return () => mq.removeEventListener('change', handleChange);
+  }, []);
+
+  const toggleTheme = () =>
+    setThemeState(prev => (prev === 'dark' ? 'light' : 'dark'));
+
+  const setTheme = (newTheme: Theme) => setThemeState(newTheme);
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>

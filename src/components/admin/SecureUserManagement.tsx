@@ -3,8 +3,10 @@ import React, {
   useMemo,
   useEffect,
   useCallback,
+  useLayoutEffect,
   useRef,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   UserOnboardingData,
@@ -12,60 +14,415 @@ import {
   UserOnboardingPagination,
 } from '../../types/userOnboarding';
 import {
-  User,
-  ArrowUpRight,
-  Loader2,
-  Filter,
   Search,
   ChevronDown,
-  Clock,
-  AlertCircle,
   ChevronLeft,
   ChevronRight,
-  Download,
   SlidersHorizontal,
   X,
-  Info,
-  Shield,
-  CheckCircle,
+  ShieldCheck,
+  ShieldAlert,
+  CheckCircle2,
   AlertTriangle,
-  Mail,
-  Eye,
   RefreshCw,
-  UserCheck,
   FileSpreadsheet,
-  Edit,
+  Pencil,
+  Eye,
   MoreVertical,
-  UserX,
-  Unlock,
-  Lock,
-  Key,
-  Send,
   Copy,
-  Trash2,
+  Loader2,
+  Lock,
+  Unlock,
+  AlertCircle,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import * as XLSX from 'xlsx';
 import { useNotifications } from '../notifications';
-import { add } from 'date-fns';
-import { update } from 'three/examples/jsm/libs/tween.module.js';
-import { log } from 'console';
 import apiClient from '../../utils/apiClient';
+import { appConfig as config } from '../../config/runtime-config';
+import {
+  setUserStatus,
+  lockUser,
+  unlockUser,
+  resetUserPassword,
+  deleteUser,
+  updateUser,
+  setSensitiveDataAccess,
+} from '../../services/userManagementService';
+import {
+  UserDetailsDrawer,
+  EditUserModal,
+  ConfirmUserActionModal,
+  ResetPasswordSentModal,
+  Avatar,
+  Pill,
+  ACTION_META,
+  getStatus,
+  btnCls,
+  cx,
+  ui,
+  useDark,
+  type UserActionKind,
+  type EventLogLoader,
+  type RoleOption,
+  type RolesStatus,
+  type UserEditPatch,
+} from './UserManagementDialogs';
+import { useAuth } from '../../context/AuthContext';
+import { useLocalMachine } from '../../context/DeviceInfoContext';
 
 interface UserOnboardingProps {
   apiEndpoint?: string;
   fullWidth?: boolean;
 }
 
+const apiBaseUrl = config.api.baseUrl;
+
+/* --------------------------------------------------------------- */
+/* Helpers                                                          */
+/* --------------------------------------------------------------- */
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+const formatDate = (dateString: string | null) => {
+  if (!dateString) return { date: 'Never', time: '' };
+  const date = new Date(dateString);
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return {
+    date: `${day}-${MONTHS[date.getMonth()]}-${date.getFullYear()}`,
+    time: `${hours}:${minutes}`,
+  };
+};
+
+const stamp = (value: string | null | undefined, fallback: string) => {
+  if (!value) return fallback;
+  const f = formatDate(value);
+  return `${f.date} ${f.time}`;
+};
+
+const writeUsersWorkbook = (
+  list: UserOnboardingData[],
+  sheetName: string,
+  filePrefix: string
+) => {
+  const rows = list.map((user) => ({
+    'Full Name': user.full_name,
+    Username: user.username,
+    Email: user.email_id,
+    'Email Verified': user.email_verified ? 'Yes' : 'No',
+    Role: user.user_roles,
+    'Account Status': user.account_status,
+    'Active Status': user.active_flag ? 'Active' : 'Inactive',
+    'Account Locked': user.account_locked ? 'Yes' : 'No',
+    'MFA Enabled': user.mfa_enabled ? 'Yes' : 'No',
+    'Last Login': stamp(user.last_login, 'Never'),
+    'Created At': stamp(user.created_at, 'N/A'),
+    'Updated At': stamp(user.updated_at, 'N/A'),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [20, 15, 25, 12, 15, 15, 12, 12, 12, 20, 20, 20].map((wch) => ({
+    wch,
+  }));
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(
+    wb,
+    `${filePrefix}_${new Date().toISOString().split('T')[0]}.xlsx`
+  );
+};
+
+/**
+ * Event logs for one user. Called ONLY when the "Event logs" tab is opened in
+ * the drawer (never on row click / drawer open) and paged to keep payloads small.
+ *
+ * ASSUMPTION – confirm against your backend:
+ *   GET /admin/users/{id}/event-logs?page=1&page_size=15
+ *   -> { data: [{ id, event_type, description, status, ip_address, created_at }],
+ *        has_next? , total_pages? }
+ * Field aliases below tolerate common naming variations. If you prefer, move
+ * this into services/userManagementService.ts next to the other user calls.
+ */
+const fetchUserEventLogs: EventLogLoader = async (userId, page, pageSize) => {
+  const res = await apiClient.get(
+    `/admin/users/${encodeURIComponent(userId)}/event-logs`,
+    { params: { page, page_size: pageSize } }
+  );
+  const body = res.data ?? {};
+  const rows: any[] = Array.isArray(body)
+    ? body
+    : (body.data ?? body.items ?? body.results ?? []);
+
+  const items = rows.map((r, i) => ({
+    id: String(r.id ?? r.event_id ?? `${page}-${i}`),
+    event_type: String(r.event_type ?? r.action ?? r.event ?? 'event'),
+    description: r.description ?? r.message ?? null,
+    status: r.status ?? r.result ?? null,
+    ip_address: r.ip_address ?? r.ip ?? null,
+    created_at: r.created_at ?? r.timestamp ?? r.event_time,
+    host_name: r.host_name ?? r.hostname ?? null,
+  }));
+
+  const hasMore =
+    typeof body.has_next === 'boolean'
+      ? body.has_next
+      : body.total_pages
+        ? page < body.total_pages
+        : rows.length === pageSize;
+
+  return { items, hasMore };
+};
+
+const ROLES_ENDPOINT = '/api/admin/roles';
+
+const fetchRoles = async (): Promise<RoleOption[]> => {
+  const res = await apiClient.get(ROLES_ENDPOINT);
+  const body = res.data ?? {};
+  const rows: any[] = Array.isArray(body)
+    ? body
+    : (body.data ?? body.roles ?? body.items ?? body.results ?? []);
+
+  const seen = new Set<string>();
+  const out: RoleOption[] = [];
+  rows.forEach((r) => {
+    const value =
+      typeof r === 'string'
+        ? r
+        : String(r.role_name ?? r.name ?? r.role ?? r.user_roles ?? r.id ?? '');
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    out.push({
+      value,
+      label:
+        typeof r === 'string'
+          ? r
+          : String(r.display_name ?? r.role_name ?? r.name ?? r.role ?? value),
+      description:
+        typeof r === 'string' ? undefined : (r.description ?? undefined),
+    });
+  });
+  return out;
+};
+
+const pageWindow = (page: number, total: number) => {
+  const count = Math.min(5, total);
+  const pages = Array.from({ length: count }, (_, i) => {
+    if (total <= 5 || page <= 3) return i + 1;
+    if (page >= total - 2) return total - 4 + i;
+    return page - 2 + i;
+  });
+  return { pages, showLast: total > 5 && page < total - 2 };
+};
+
+/* --------------------------------------------------------------- */
+/* Popover menu (portal, auto-flips, keyboard friendly)             */
+/* --------------------------------------------------------------- */
+const MenuPopover: React.FC<{
+  label: string;
+  width?: number;
+  triggerClassName: string;
+  triggerContent: React.ReactNode;
+  disabled?: boolean;
+  children: (close: () => void) => React.ReactNode;
+}> = ({
+  label,
+  width = 248,
+  triggerClassName,
+  triggerContent,
+  disabled,
+  children,
+}) => {
+  const dark = useDark();
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setPos(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current || !menuRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const h = menuRef.current.offsetHeight;
+    const gap = 6;
+    const fitsBelow = r.bottom + gap + h <= window.innerHeight - 8;
+    setPos({
+      top: fitsBelow ? r.bottom + gap : Math.max(8, r.top - gap - h),
+      left: Math.min(
+        Math.max(8, r.right - width),
+        window.innerWidth - width - 8
+      ),
+    });
+  }, [open, width]);
+
+  useEffect(() => {
+    if (pos) {
+      menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    }
+    // focus only when the menu first becomes positioned
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pos === null]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const n = e.target as Node;
+      if (menuRef.current?.contains(n) || btnRef.current?.contains(n)) return;
+      close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        close();
+        btnRef.current?.focus();
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const items = Array.from(
+          menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ??
+            []
+        );
+        const i = items.indexOf(document.activeElement as HTMLElement);
+        const next =
+          e.key === 'ArrowDown'
+            ? (i + 1) % items.length
+            : (i - 1 + items.length) % items.length;
+        items[next]?.focus();
+      }
+    };
+    const onScrollOrResize = () => close();
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onScrollOrResize);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+    };
+  }, [open, close]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className={triggerClassName}
+      >
+        {triggerContent}
+      </button>
+      {open &&
+        createPortal(
+          <motion.div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.12 }}
+            // portal events still bubble through React; keep rows from reacting
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width,
+              top: pos?.top ?? 0,
+              left: pos?.left ?? 0,
+              visibility: pos ? 'visible' : 'hidden',
+            }}
+            className={cx(
+              'fixed z-[70] rounded-xl p-1.5 shadow-xl ring-1',
+              dark ? 'bg-slate-900 ring-white/10' : 'bg-white ring-slate-900/10'
+            )}
+          >
+            {children(close)}
+          </motion.div>,
+          document.body
+        )}
+    </>
+  );
+};
+
+const MenuItem: React.FC<{
+  icon: LucideIcon;
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+}> = ({ icon: Icon, label, danger, onClick }) => {
+  const dark = useDark();
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      tabIndex={-1}
+      onClick={onClick}
+      className={cx(
+        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors',
+        danger
+          ? dark
+            ? 'text-rose-300 hover:bg-rose-500/10 focus:bg-rose-500/10'
+            : 'text-rose-600 hover:bg-rose-50 focus:bg-rose-50'
+          : dark
+            ? 'text-slate-200 hover:bg-white/10 focus:bg-white/10'
+            : 'text-slate-700 hover:bg-slate-100 focus:bg-slate-100'
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0 opacity-80" aria-hidden />
+      {label}
+    </button>
+  );
+};
+
+const MenuDivider: React.FC = () => {
+  const dark = useDark();
+  return (
+    <div
+      role="separator"
+      className={cx('my-1 h-px', dark ? 'bg-white/10' : 'bg-slate-100')}
+    />
+  );
+};
+
+/* --------------------------------------------------------------- */
+/* Main screen                                                      */
+/* --------------------------------------------------------------- */
 const UserManagement: React.FC<UserOnboardingProps> = ({
-  apiEndpoint = 'http://127.0.0.1:8000/admin/users',
+  apiEndpoint = `${apiBaseUrl}/admin/users`,
   fullWidth = false,
 }) => {
   const { theme } = useTheme();
+  const dark = theme === 'dark';
+  const t = ui(dark);
   const { addNotification } = useNotifications();
 
   const [users, setUsers] = useState<UserOnboardingData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'username' | 'email_id' | 'last_login'>(
@@ -73,6 +430,8 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
   );
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [exportLoading, setExportLoading] = useState(false);
+  const { user } = useAuth();
+  const { machineInfo } = useLocalMachine();
 
   const [filters, setFilters] = useState<UserOnboardingFilters>({
     search: '',
@@ -88,14 +447,76 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
     total_pages: 0,
   });
 
+  const [editingUser, setEditingUser] = useState<UserOnboardingData | null>(
+    null
+  );
+  const [detailsUser, setDetailsUser] = useState<UserOnboardingData | null>(
+    null
+  );
+  const [confirmAction, setConfirmAction] = useState<UserActionKind | null>(
+    null
+  );
+  const [confirmUser, setConfirmUser] = useState<UserOnboardingData | null>(
+    null
+  );
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [roles, setRoles] = useState<RoleOption[]>([]);
+  const [rolesStatus, setRolesStatus] = useState<RolesStatus>('idle');
+  const rolesLoaded = useRef(false);
+  const rolesInFlight = useRef(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const ensureRoles = useCallback(async (force = false) => {
+    if (rolesInFlight.current || (rolesLoaded.current && !force)) return;
+    rolesInFlight.current = true;
+    setRolesStatus('loading');
+    try {
+      setRoles(await fetchRoles());
+      rolesLoaded.current = true;
+      setRolesStatus('ready');
+    } catch (error) {
+      console.error('Error loading roles:', error);
+      setRolesStatus('error');
+    } finally {
+      rolesInFlight.current = false;
+    }
+  }, []);
+
+  // "/" jumps to search (unless the user is typing or a dialog is open)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) ||
+          el.isContentEditable)
+      )
+        return;
+      if (document.querySelector('[role="dialog"]')) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const [resetSentUser, setResetSentUser] = useState<UserOnboardingData | null>(
+    null
+  );
+
+  /* ---------------------------- data ---------------------------- */
   const processedData = useMemo(() => {
     return [...users]
       .filter((user) => {
-        const matchesSearch =
-          user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          user.email_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          user.full_name.toLowerCase().includes(searchTerm.toLowerCase());
-        return matchesSearch;
+        const q = searchTerm.toLowerCase();
+        return (
+          user.username.toLowerCase().includes(q) ||
+          user.email_id.toLowerCase().includes(q) ||
+          user.full_name.toLowerCase().includes(q)
+        );
       })
       .sort((a, b) => {
         if (sortBy === 'username') {
@@ -106,216 +527,17 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
           return sortOrder === 'desc'
             ? b.email_id.localeCompare(a.email_id)
             : a.email_id.localeCompare(b.email_id);
-        } else {
-          const dateA = a.last_login ? new Date(a.last_login).getTime() : 0;
-          const dateB = b.last_login ? new Date(b.last_login).getTime() : 0;
-          return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
         }
+        const dateA = a.last_login ? new Date(a.last_login).getTime() : 0;
+        const dateB = b.last_login ? new Date(b.last_login).getTime() : 0;
+        return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
       });
   }, [users, searchTerm, sortBy, sortOrder]);
-
-  // useEffect(() => {
-  //   fetchUsers();
-  // }, [
-  //   filters,
-  //   searchTerm,
-  //   sortBy,
-  //   sortOrder,
-  //   pagination.page,
-  //   pagination.page_size,
-  // ]);
-
-  // const fetchUsers = async () => {
-  //   try {
-  //     const queryParams = new URLSearchParams({
-  //       page: pagination.page.toString(),
-  //       page_size: pagination.page_size.toString(),
-  //       search: searchTerm || '',
-  //       user_status: filters.user_status || '',
-  //       account_status: filters.account_status || '',
-  //       sort_by: sortBy,
-  //       sort_order: sortOrder,
-  //     });
-
-  //     const response = await apiClient.get(
-  //       `/admin/users?${queryParams.toString()}`
-  //     );
-  //     setUsers(response.data.data);
-  //     setPagination((prev) => ({
-  //       ...prev,
-  //       total: response.data.total,
-  //       total_pages: response.data.total_pages,
-  //     }));
-  //   } catch (error) {
-  //     console.log(error);
-  //   }
-  // };
-
-  const exportToExcel = useCallback(async () => {
-    try {
-      addNotification('Exporting users to Excel...', 'info');
-      setExportLoading(true);
-
-      // Prepare data for export
-      const exportData = processedData.map((user) => ({
-        'Full Name': user.full_name,
-        Username: user.username,
-        Email: user.email_id,
-        'Email Verified': user.email_verified ? 'Yes' : 'No',
-        Role: user.user_roles,
-        'Account Status': user.account_status,
-        'Active Status': user.active_flag ? 'Active' : 'Inactive',
-        'Account Locked': user.account_locked ? 'Yes' : 'No',
-        'MFA Enabled': user.mfa_enabled ? 'Yes' : 'No',
-        'Last Login': user.last_login
-          ? formatDate(user.last_login).date +
-            ' ' +
-            formatDate(user.last_login).time
-          : 'Never',
-        'Created At': user.created_at
-          ? formatDate(user.created_at).date +
-            ' ' +
-            formatDate(user.created_at).time
-          : 'N/A',
-        'Updated At': user.updated_at
-          ? formatDate(user.updated_at).date +
-            ' ' +
-            formatDate(user.updated_at).time
-          : 'N/A',
-      }));
-
-      // Create workbook and worksheet
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(exportData);
-
-      // Set column widths for better readability
-      const colWidths = [
-        { wch: 20 }, // Full Name
-        { wch: 15 }, // Username
-        { wch: 25 }, // Email
-        { wch: 12 }, // Email Verified
-        { wch: 15 }, // Role
-        { wch: 15 }, // Account Status
-        { wch: 12 }, // Active Status
-        { wch: 12 }, // Account Locked
-        { wch: 12 }, // MFA Enabled
-        { wch: 20 }, // Last Login
-        { wch: 20 }, // Created At
-        { wch: 20 }, // Updated At
-      ];
-      ws['!cols'] = colWidths;
-
-      // Add worksheet to workbook
-      XLSX.utils.book_append_sheet(wb, ws, 'User Report');
-
-      // Generate filename with timestamp
-      const timestamp = new Date().toISOString().split('T')[0];
-      const filename = `User_Report_${timestamp}.xlsx`;
-
-      // Export the file
-      XLSX.writeFile(wb, filename);
-    } catch (error) {
-      console.error('Error exporting to Excel:', error);
-      addNotification('Failed to export users to Excel.', 'error');
-    } finally {
-      setExportLoading(false);
-      addNotification('User export to Excel completed.', 'success');
-    }
-  }, [processedData]);
-
-  const exportAllUsersToExcel = useCallback(async () => {
-    try {
-      setExportLoading(true);
-
-      // Fetch all users for complete export
-      const params = new URLSearchParams({
-        page: '1',
-        page_size: pagination.total.toString(), // Get all users
-        ...(filters.search && { search: filters.search }),
-        ...(filters.account_status && {
-          account_status: filters.account_status,
-        }),
-        ...(filters.user_status && { user_status: filters.user_status }),
-        ...(filters.user_roles && { user_roles: filters.user_roles }),
-      });
-
-      const response = await fetch(`${apiEndpoint}?${params}`);
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch users for export');
-      }
-
-      const data = await response.json();
-      const allUsers = data.data || [];
-
-      const exportData = allUsers.map((user) => ({
-        'Full Name': user.full_name,
-        Username: user.username,
-        Email: user.email_id,
-        'Email Verified': user.email_verified ? 'Yes' : 'No',
-        Role: user.user_roles,
-        'Account Status': user.account_status,
-        'Active Status': user.active_flag ? 'Active' : 'Inactive',
-        'Account Locked': user.account_locked ? 'Yes' : 'No',
-        'MFA Enabled': user.mfa_enabled ? 'Yes' : 'No',
-        'Last Login': user.last_login
-          ? formatDate(user.last_login).date +
-            ' ' +
-            formatDate(user.last_login).time
-          : 'Never',
-        'Created At': user.created_at
-          ? formatDate(user.created_at).date +
-            ' ' +
-            formatDate(user.created_at).time
-          : 'N/A',
-        'Updated At': user.updated_at
-          ? formatDate(user.updated_at).date +
-            ' ' +
-            formatDate(user.updated_at).time
-          : 'N/A',
-      }));
-
-      // Create workbook and worksheet
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(exportData);
-
-      // Set column widths
-      const colWidths = [
-        { wch: 20 },
-        { wch: 15 },
-        { wch: 25 },
-        { wch: 12 },
-        { wch: 15 },
-        { wch: 15 },
-        { wch: 12 },
-        { wch: 12 },
-        { wch: 12 },
-        { wch: 20 },
-        { wch: 20 },
-        { wch: 20 },
-      ];
-      ws['!cols'] = colWidths;
-
-      // Add worksheet to workbook
-      XLSX.utils.book_append_sheet(wb, ws, 'All Users Report');
-
-      // Generate filename
-      const timestamp = new Date().toISOString().split('T')[0];
-      const filename = `All_Users_Report_${timestamp}.xlsx`;
-
-      // Export the file
-      XLSX.writeFile(wb, filename);
-    } catch (error) {
-      console.error('Error exporting all users to Excel:', error);
-      alert('Failed to export complete user report. Please try again.');
-    } finally {
-      setExportLoading(false);
-    }
-  }, [apiEndpoint, filters, pagination.total]);
 
   const loadUsers = useCallback(async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
 
       const params = new URLSearchParams({
         page: pagination.page.toString(),
@@ -331,11 +553,9 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
       });
 
       const response = await fetch(`${apiEndpoint}?${params}`);
-
       if (!response.ok) {
         throw new Error('Failed to fetch user onboarding data');
       }
-
       const data = await response.json();
 
       setUsers(data.data || []);
@@ -349,6 +569,7 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
       }));
     } catch (error) {
       console.error('Error loading users:', error);
+      setLoadError('We couldn’t load users. Check your connection and retry.');
     } finally {
       setIsLoading(false);
     }
@@ -373,1253 +594,1316 @@ const UserManagement: React.FC<UserOnboardingProps> = ({
     return () => clearTimeout(delay);
   }, [filters.search]);
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return { date: 'Never', time: '' };
-
-    const date = new Date(dateString);
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = months[date.getMonth()];
-    const year = date.getFullYear();
-
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const formattedTime = `${hours}:${minutes}`;
-
-    return {
-      date: `${day}-${month}-${year}`,
-      time: formattedTime,
-    };
-  };
-
-  const [editingUser, setEditingUser] = useState(null);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [openDropdown, setOpenDropdown] = useState(null);
-
-  const handleEditUser = (user) => {
-    setEditingUser({ ...user });
-    setShowEditModal(true);
-    setOpenDropdown(null);
-  };
-
-  const updateUserstatus = async (userid, status) => {
+  /* --------------------------- exports -------------------------- */
+  const exportToExcel = useCallback(async () => {
     try {
-      const response = await fetch(`${apiEndpoint}/update/status`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ user_id: userid, new_status: status }),
+      addNotification('Exporting users to Excel...', 'info');
+      setExportLoading(true);
+      writeUsersWorkbook(processedData, 'User Report', 'User_Report');
+      addNotification('User export to Excel completed.', 'success');
+    } catch (error) {
+      console.error('Error exporting to Excel:', error);
+      addNotification('Failed to export users to Excel.', 'error');
+    } finally {
+      setExportLoading(false);
+    }
+  }, [processedData, addNotification]);
+
+  const exportAllUsersToExcel = useCallback(async () => {
+    try {
+      addNotification('Exporting all users to Excel...', 'info');
+      setExportLoading(true);
+
+      const params = new URLSearchParams({
+        page: '1',
+        page_size: pagination.total.toString(),
+        ...(filters.search && { search: filters.search }),
+        ...(filters.account_status && {
+          account_status: filters.account_status,
+        }),
+        ...(filters.user_status && { user_status: filters.user_status }),
+        ...(filters.user_roles && { user_roles: filters.user_roles }),
       });
+
+      const response = await fetch(`${apiBaseUrl}/admin/users?${params}`);
       if (!response.ok) {
-        throw new Error('Failed to update user status');
+        throw new Error('Failed to fetch users for export');
       }
       const data = await response.json();
-      return data;
+      const allUsers: UserOnboardingData[] = data.data || [];
+
+      writeUsersWorkbook(allUsers, 'All Users Report', 'All_Users_Report');
+      addNotification('Full user export completed.', 'success');
     } catch (error) {
-      console.error('Error updating user status:', error);
-    }
-  };
-
-  const handleUserAction = (action, user) => {
-    console.log(`Action: ${action} for user:`, user.username);
-    setOpenDropdown(null);
-
-    // Handle different actions
-    switch (action) {
-      case 'activate':
-        setUsers(
-          users.map((u) => (u.id === user.id ? { ...u, active_flag: true } : u))
-        );
-        updateUserstatus(user.id, 'Active');
-        break;
-      case 'deactivate':
-        setUsers(
-          users.map((u) =>
-            u.id === user.id ? { ...u, active_flag: false } : u
-          )
-        );
-        updateUserstatus(user.id, 'Inactive');
-        break;
-      case 'lock':
-        setUsers(
-          users.map((u) =>
-            u.id === user.id ? { ...u, account_locked: true } : u
-          )
-        );
-        break;
-      case 'unlock':
-        setUsers(
-          users.map((u) =>
-            u.id === user.id ? { ...u, account_locked: false } : u
-          )
-        );
-        break;
-      case 'reset_password':
-        alert(`Password reset email sent to ${user.email_id}`);
-        break;
-      case 'delete':
-        if (confirm(`Are you sure you want to delete ${user.full_name}?`)) {
-          setUsers(users.filter((u) => u.id !== user.id));
-        }
-        break;
-    }
-  };
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (openDropdown && !event.target.closest('.dropdown-container')) {
-        setOpenDropdown(null);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [openDropdown]);
-
-  const getStatusBadge = (user: UserOnboardingData) => {
-    if (user.account_locked) {
-      return (
-        <span
-          className={`px-2 py-1 text-xs font-medium rounded-full ${
-            theme === 'dark'
-              ? 'bg-red-500/20 text-red-300'
-              : 'bg-red-100 text-red-700'
-          }`}
-        >
-          Locked
-        </span>
+      console.error('Error exporting all users to Excel:', error);
+      addNotification(
+        'Failed to export the complete user report. Please try again.',
+        'error'
       );
+    } finally {
+      setExportLoading(false);
     }
-    if (user.active_flag) {
-      return (
-        <span
-          className={`px-2 py-1 text-xs font-medium rounded-full ${
-            theme === 'dark'
-              ? 'bg-green-500/20 text-green-300'
-              : 'bg-green-100 text-green-700'
-          }`}
-        >
-          Active
-        </span>
-      );
-    }
-    return (
-      <span
-        className={`px-2 py-1 text-xs font-medium rounded-full ${
-          theme === 'dark'
-            ? 'bg-gray-500/20 text-gray-300'
-            : 'bg-gray-200 text-gray-700'
-        }`}
-      >
-        Inactive
-      </span>
+  }, [filters, pagination.total, addNotification]);
+
+  /* ---------------------------- actions ------------------------- */
+  const patchUserInList = (
+    userId: string,
+    patch: Partial<UserOnboardingData>
+  ) =>
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, ...patch } : u))
     );
+
+  const handleEditUser = (user: UserOnboardingData) => {
+    setSaveError(null);
+    setEditingUser({ ...user });
+    ensureRoles(); // no-op once the role list has been loaded
   };
+
+  const requestAction = (kind: UserActionKind, user: UserOnboardingData) => {
+    setActionError(null);
+    setConfirmAction(kind);
+    setConfirmUser(user);
+  };
+
+  const copyEmail = async (email: string) => {
+    try {
+      await navigator.clipboard.writeText(email);
+      addNotification('Email copied to clipboard.', 'success');
+    } catch {
+      addNotification('Couldn’t copy the email address.', 'error');
+    }
+  };
+
+  const performAction = async () => {
+    if (!confirmAction || !confirmUser) return;
+    const { id, full_name, email_id } = confirmUser;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      switch (confirmAction) {
+        case 'activate':
+          await setUserStatus(id, 'Active', user?.username || '', machineInfo ?? undefined);
+          patchUserInList(id, { active_flag: true, user_status: 'Active' });
+          addNotification(`${full_name} activated.`, 'success');
+          break;
+        case 'deactivate':
+          await setUserStatus(id, 'Inactive', user?.username || '', machineInfo ?? undefined);
+          patchUserInList(id, { active_flag: false, user_status: 'Inactive' });
+          addNotification(`${full_name} deactivated.`, 'success');
+          break;
+        case 'lock':
+          await lockUser(id);
+          patchUserInList(id, {
+            account_locked: true,
+            account_status: 'Locked',
+          });
+          addNotification(`Account locked for ${full_name}.`, 'success');
+          break;
+        case 'unlock':
+          await unlockUser(id);
+          patchUserInList(id, {
+            account_locked: false,
+            account_status: 'Unlocked',
+            login_attempts: 0,
+          });
+          addNotification(`Account unlocked for ${full_name}.`, 'success');
+          break;
+        case 'reset_password':
+          await resetUserPassword(id);
+          setConfirmAction(null);
+          setConfirmUser(null);
+          setResetSentUser(confirmUser);
+          addNotification(
+            `Password reset email sent to ${email_id}.`,
+            'success'
+          );
+          break;
+        case 'delete':
+          await deleteUser(id);
+          setUsers((prev) => prev.filter((u) => u.id !== id));
+          setPagination((prev) => ({
+            ...prev,
+            total: Math.max(0, prev.total - 1),
+          }));
+          // the drawer would otherwise keep showing a deleted account
+          setDetailsUser((cur) => (cur?.id === id ? null : cur));
+          addNotification(`${full_name} deleted.`, 'success');
+          break;
+        case 'sensitive_enable':
+        case 'sensitive_disable': {
+          const next = confirmAction === 'sensitive_enable';
+          await setSensitiveDataAccess(id, next);
+          patchUserInList(id, { can_view_sensitive: next });
+          addNotification(
+            `Sensitive data access ${next ? 'enabled' : 'disabled'} for ${full_name}.`,
+            'success'
+          );
+          break;
+        }
+      }
+      setConfirmAction(null);
+      setConfirmUser(null);
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : 'The action failed. Please try again.'
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleEditSave = async (
+    user: UserOnboardingData,
+    patch: UserEditPatch
+  ) => {
+    setActionBusy(true);
+    setSaveError(null);
+    try {
+      await updateUser(user.id, patch);
+      patchUserInList(user.id, patch);
+      setEditingUser(null);
+      addNotification(
+        patch.user_roles
+          ? `User details updated. Role changed to ${patch.user_roles}.`
+          : 'User details updated.',
+        'success'
+      );
+    } catch (err) {
+      setSaveError(
+        err instanceof Error
+          ? err.message
+          : 'Could not save changes. Please try again.'
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const detailsUserLive = detailsUser
+    ? (users.find((u) => u.id === detailsUser.id) ?? detailsUser)
+    : null;
+
+  /* ------------------------- filter helpers --------------------- */
+  const clearFilters = () => {
+    setSearchTerm('');
+    setFilters({
+      search: '',
+      account_status: '',
+      user_status: '',
+      user_roles: '',
+    });
+    setSortBy('last_login');
+    setSortOrder('desc');
+    setPagination((prev) => ({ ...prev, page: 1 }));
+  };
+
+  const handleRefresh = () => {
+    clearFilters();
+    loadUsers();
+  };
+
+  const toggleSort = (field: typeof sortBy) => {
+    if (sortBy === field) {
+      setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(field);
+      setSortOrder(field === 'last_login' ? 'desc' : 'asc');
+    }
+    setPagination((prev) => ({ ...prev, page: 1 }));
+  };
+
+  const setFilter = (
+    key: 'account_status' | 'user_status' | 'user_roles',
+    value: string
+  ) => {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+    setPagination((prev) => ({ ...prev, page: 1 }));
+  };
+
+  const activeFilterCount =
+    (filters.account_status ? 1 : 0) +
+    (filters.user_status ? 1 : 0) +
+    (filters.user_roles ? 1 : 0);
+  const hasFilters = !!(
+    searchTerm ||
+    filters.search ||
+    filters.account_status ||
+    filters.user_status ||
+    filters.user_roles
+  );
 
   const stats = useMemo(() => {
-    const totalUsers = users.length;
+    const shown = users.length;
     const activeUsers = users.filter((u) => u.active_flag).length;
     const lockedUsers = users.filter((u) => u.account_locked).length;
-    const verifiedEmails = users.filter((u) => u.email_verified).length;
     const mfaEnabled = users.filter((u) => u.mfa_enabled).length;
-
     return {
-      totalUsers,
+      shown,
       activeUsers,
       lockedUsers,
-      verifiedEmails,
       mfaEnabled,
+      mfaPct: shown ? Math.round((mfaEnabled / shown) * 100) : 0,
     };
   }, [users]);
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: 0.1 }}
-      className={`rounded-2xl border shadow-2xl overflow-hidden ${
-        theme === 'dark'
-          ? 'bg-white/10 border-white/20'
-          : 'bg-white border-gray-200 shadow-card'
-      } backdrop-blur-xl ${fullWidth ? 'col-span-full' : ''}`}
-    >
-      <div
-        className={`flex justify-between items-center p-6 border-b ${
-          theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-        }`}
-      >
-        <div className="flex items-center gap-3">
-          <div className="p-3 bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl shadow-lg">
-            <UserCheck className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <h2
-              className={`text-2xl font-bold ${
-                theme === 'dark' ? 'text-white' : 'text-gray-900'
-              }`}
-            >
-              User Management
-            </h2>
-            <p
-              className={`text-sm ${
-                theme === 'dark' ? 'text-blue-200/70' : 'text-blue-600'
-              }`}
-            >
-              User registration & account management
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <div>
-            <div className="relative">
-              <Search
-                className={`absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 ${
-                  theme === 'dark'
-                    ? ' border-white text-white'
-                    : 'border-gray-400 '
-                }`}
-              />
-              <input
-                type="text"
-                value={filters.search}
-                onChange={(e) => {
-                  setFilters({ ...filters, search: e.target.value });
-                }}
-                placeholder="Search..."
-                className={`w-full pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  theme === 'dark'
-                    ? 'bg-white/80 border-white/40 border background-color:#ccd1d7 text-white/80 placeholder-white'
-                    : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-500'
-                }`}
-              />
-            </div>
-          </div>
+  /* --------------------------- styling -------------------------- */
+  const selectCls = cx(
+    'h-10 w-full appearance-none rounded-lg border pl-3 pr-9 text-sm outline-none focus:ring-2',
+    dark
+      ? 'border-white/15 bg-white/5 text-white focus:border-teal-400 focus:ring-teal-400/30'
+      : 'border-slate-300 bg-white text-slate-900 focus:border-teal-500 focus:ring-teal-500/30'
+  );
+  const iconBtn = cx(
+    'grid h-8 w-8 place-items-center rounded-lg transition-colors',
+    t.muted,
+    dark
+      ? 'hover:bg-white/10 hover:text-white'
+      : 'hover:bg-slate-100 hover:text-slate-900',
+    t.focus
+  );
+  const thBase = cx(
+    'whitespace-nowrap px-4 py-3 text-left text-xs font-medium',
+    t.muted
+  );
 
-          {processedData.length > 0 && (
-            <div
-              className={`p-4 ${
-                theme === 'dark' ? 'border-white/10' : 'border-gray-200'
-              }`}
+  const sortableTh = (label: string, field: typeof sortBy, first = false) => {
+    const active = sortBy === field;
+    return (
+      <th
+        scope="col"
+        aria-sort={
+          active ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'
+        }
+        className={cx(thBase, first && 'pl-6')}
+      >
+        <button
+          type="button"
+          onClick={() => toggleSort(field)}
+          className={cx(
+            'inline-flex items-center gap-1 rounded-md transition-colors',
+            active ? t.strong : '',
+            t.focus
+          )}
+        >
+          {label}
+          <ChevronDown
+            aria-hidden
+            className={cx(
+              'h-3.5 w-3.5 transition-transform',
+              active ? 'opacity-100' : 'opacity-30',
+              active && sortOrder === 'asc' && 'rotate-180'
+            )}
+          />
+        </button>
+      </th>
+    );
+  };
+
+  const statCell = (
+    label: string,
+    value: string | number,
+    hint: string,
+    opts?: { onClick?: () => void; active?: boolean }
+  ) => {
+    const inner = (
+      <>
+        <div className={cx('text-xs', t.muted)}>{label}</div>
+        <div
+          className={cx(
+            'mt-1 text-2xl font-semibold tabular-nums tracking-tight',
+            t.strong
+          )}
+        >
+          {value}
+        </div>
+        <div className={cx('mt-0.5 text-xs', t.muted)}>{hint}</div>
+      </>
+    );
+    const base = cx('block border-b border-r px-6 py-4 text-left', t.hairline);
+    return opts?.onClick ? (
+      <button
+        type="button"
+        onClick={opts.onClick}
+        aria-pressed={!!opts.active}
+        className={cx(
+          base,
+          'transition-colors',
+          t.hover,
+          t.focus,
+          opts.active && (dark ? 'bg-teal-400/10' : 'bg-teal-50')
+        )}
+      >
+        {inner}
+      </button>
+    ) : (
+      <div className={base}>{inner}</div>
+    );
+  };
+
+  const { pages, showLast } = pageWindow(
+    pagination.page,
+    pagination.total_pages
+  );
+  const rangeStart = (pagination.page - 1) * pagination.page_size + 1;
+  const rangeEnd = Math.min(
+    pagination.page * pagination.page_size,
+    pagination.total
+  );
+  const pageBtn = (active: boolean) =>
+    cx(
+      'grid h-8 min-w-[2rem] place-items-center rounded-lg px-2 text-sm tabular-nums transition-colors',
+      t.focus,
+      active
+        ? dark
+          ? 'bg-white text-slate-900'
+          : 'bg-slate-900 text-white'
+        : cx(t.body, t.hover)
+    );
+
+  const showSkeleton = isLoading && users.length === 0;
+  const showEmpty = !isLoading && !loadError && processedData.length === 0;
+
+  /* ----------------------------- UI ----------------------------- */
+  return (
+    <motion.section
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.25 }}
+      aria-labelledby="um-title"
+      className={cx(
+        'overflow-hidden rounded-2xl ring-1 backdrop-blur-xl',
+        dark
+          ? 'bg-slate-900/60 ring-white/10'
+          : 'bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06),0_12px_32px_-16px_rgba(15,23,42,0.16)] ring-slate-900/5',
+        fullWidth && 'col-span-full'
+      )}
+    >
+      {/* Header */}
+      <header
+        className={cx(
+          'flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5',
+          t.hairline
+        )}
+      >
+        <div className="min-w-0">
+          <h2
+            id="um-title"
+            className={cx('text-xl font-semibold tracking-tight', t.strong)}
+          >
+            User management
+          </h2>
+          <p className={cx('mt-1 text-sm', t.muted)}>
+            Review accounts, manage access and keep sign-ins secure.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            aria-label="Reset filters and refresh"
+            title="Reset filters and refresh"
+            className={cx(btnCls(dark, 'secondary'), '!w-10 !px-0')}
+          >
+            <RefreshCw
+              className={cx('h-4 w-4', isLoading && 'animate-spin')}
+              aria-hidden
+            />
+          </button>
+
+          <MenuPopover
+            label="Export users"
+            width={260}
+            disabled={exportLoading || processedData.length === 0}
+            triggerClassName={btnCls(dark, 'primary')}
+            triggerContent={
+              <>
+                {exportLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : (
+                  <FileSpreadsheet className="h-4 w-4" aria-hidden />
+                )}
+                {exportLoading ? 'Exporting…' : 'Export'}
+                <ChevronDown className="h-3.5 w-3.5 opacity-70" aria-hidden />
+              </>
+            }
+          >
+            {(close) => (
+              <>
+                <MenuItem
+                  icon={FileSpreadsheet}
+                  label="Export current view"
+                  onClick={() => {
+                    close();
+                    exportToExcel();
+                  }}
+                />
+                <MenuItem
+                  icon={FileSpreadsheet}
+                  label="Export all matching users"
+                  onClick={() => {
+                    close();
+                    exportAllUsersToExcel();
+                  }}
+                />
+              </>
+            )}
+          </MenuPopover>
+        </div>
+      </header>
+
+      {/* At-a-glance strip (Active / Locked double as quick filters) */}
+      {/* <div className={cx('overflow-hidden border-b', t.hairline)}>
+        <div className="-mb-px -mr-px grid grid-cols-2 lg:grid-cols-4">
+          {statCell(
+            'Total users',
+            pagination.total.toLocaleString(),
+            hasFilters ? 'matching filters' : 'all accounts'
+          )}
+          {statCell(
+            'Active',
+            stats.activeUsers,
+            `of ${stats.shown} on this page`,
+            {
+              onClick: () =>
+                setFilter(
+                  'user_status',
+                  filters.user_status === 'Active' ? '' : 'Active'
+                ),
+              active: filters.user_status === 'Active',
+            }
+          )}
+          {statCell(
+            'Locked',
+            stats.lockedUsers,
+            `of ${stats.shown} on this page`,
+            {
+              onClick: () =>
+                setFilter(
+                  'account_status',
+                  filters.account_status === 'Locked' ? '' : 'Locked'
+                ),
+              active: filters.account_status === 'Locked',
+            }
+          )}
+          {statCell(
+            'MFA coverage',
+            `${stats.mfaPct}%`,
+            `${stats.mfaEnabled} of ${stats.shown} on this page`
+          )}
+        </div>
+      </div> */}
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-3 px-6 py-4">
+        <div className="relative min-w-[220px] flex-1 sm:max-w-sm">
+          <Search
+            aria-hidden
+            className={cx(
+              'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2',
+              t.muted
+            )}
+          />
+          <input
+            ref={searchRef}
+            type="text"
+            aria-label="Search users"
+            value={filters.search}
+            onChange={(e) =>
+              setFilters((prev) => ({ ...prev, search: e.target.value }))
+            }
+            placeholder="Search users"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && filters.search) {
+                setFilters((prev) => ({ ...prev, search: '' }));
+              }
+            }}
+            className={cx(
+              'h-10 w-full rounded-lg border pl-9 pr-9 text-sm outline-none focus:ring-2',
+              dark
+                ? 'border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-teal-400 focus:ring-teal-400/30'
+                : 'border-slate-300 bg-white text-slate-900 placeholder-slate-400 focus:border-teal-500 focus:ring-teal-500/30'
+            )}
+          />
+          {!filters.search && (
+            <kbd
+              aria-hidden
+              className={cx(
+                'pointer-events-none absolute right-2.5 top-1/2 hidden h-5 min-w-[1.25rem] -translate-y-1/2 place-items-center rounded border px-1 font-sans text-xs sm:grid',
+                t.hairline,
+                t.muted
+              )}
             >
-              <div className="flex justify-end">
+              /
+            </kbd>
+          )}
+          {filters.search && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setFilters((prev) => ({ ...prev, search: '' }))}
+              className={cx(
+                'absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md',
+                t.muted,
+                t.hover,
+                t.focus
+              )}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (!showFilters) ensureRoles();
+            setShowFilters((s) => !s);
+          }}
+          aria-expanded={showFilters}
+          aria-controls="um-filters"
+          className={btnCls(dark, showFilters ? 'primary' : 'secondary')}
+        >
+          <SlidersHorizontal className="h-4 w-4" aria-hidden />
+          Filters
+          {activeFilterCount > 0 && (
+            <span
+              className={cx(
+                'grid h-5 min-w-[1.25rem] place-items-center rounded-full px-1 text-xs font-semibold tabular-nums',
+                showFilters
+                  ? dark
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-white text-slate-900'
+                  : dark
+                    ? 'bg-white text-slate-900'
+                    : 'bg-slate-900 text-white'
+              )}
+            >
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
+
+        <div
+          className={cx('ml-auto text-sm tabular-nums', t.muted)}
+          aria-live="polite"
+        >
+          {processedData.length > 0 &&
+            `${processedData.length} of ${pagination.total.toLocaleString()} users`}
+        </div>
+      </div>
+
+      {/* Filter panel */}
+      <AnimatePresence initial={false}>
+        {showFilters && (
+          <motion.div
+            id="um-filters"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div
+              className={cx(
+                'mx-6 mb-4 rounded-xl border p-4',
+                t.hairline,
+                t.subtle
+              )}
+            >
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                {[
+                  {
+                    id: 'um-f-account',
+                    label: 'Account',
+                    value: filters.account_status,
+                    onChange: (v: string) => setFilter('account_status', v),
+                    options: [
+                      ['', 'All accounts'],
+                      ['Locked', 'Locked'],
+                      ['Unlocked', 'Unlocked'],
+                    ],
+                  },
+                  {
+                    id: 'um-f-status',
+                    label: 'User status',
+                    value: filters.user_status,
+                    onChange: (v: string) => setFilter('user_status', v),
+                    options: [
+                      ['', 'All users'],
+                      ['Active', 'Active'],
+                      ['Inactive', 'Inactive'],
+                    ],
+                  },
+                  {
+                    id: 'um-f-role',
+                    label: 'Role',
+                    value: filters.user_roles,
+                    onChange: (v: string) => setFilter('user_roles', v),
+                    options: [
+                      [
+                        '',
+                        rolesStatus === 'loading'
+                          ? 'Loading roles…'
+                          : 'All roles',
+                      ],
+                      ...(filters.user_roles &&
+                      !roles.some((r) => r.value === filters.user_roles)
+                        ? [[filters.user_roles, filters.user_roles]]
+                        : []),
+                      ...roles.map((r) => [r.value, r.label]),
+                    ],
+                  },
+                ].map((f) => (
+                  <div key={f.id}>
+                    <label
+                      htmlFor={f.id}
+                      className={cx(
+                        'mb-1.5 block text-sm font-medium',
+                        t.strong
+                      )}
+                    >
+                      {f.label}
+                    </label>
+                    <div className="relative">
+                      <select
+                        id={f.id}
+                        value={f.value}
+                        onChange={(e) => f.onChange(e.target.value)}
+                        className={selectCls}
+                      >
+                        {f.options.map(([v, l]) => (
+                          <option key={v} value={v}>
+                            {l}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown
+                        aria-hidden
+                        className={cx(
+                          'pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2',
+                          t.muted
+                        )}
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                <div>
+                  <label
+                    htmlFor="um-f-sort"
+                    className={cx('mb-1.5 block text-sm font-medium', t.strong)}
+                  >
+                    Sort by
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="um-f-sort"
+                      value={`${sortBy}-${sortOrder}`}
+                      onChange={(e) => {
+                        const [newSortBy, newSortOrder] = e.target.value.split(
+                          '-'
+                        ) as [typeof sortBy, 'asc' | 'desc'];
+                        setSortBy(newSortBy);
+                        setSortOrder(newSortOrder);
+                      }}
+                      className={selectCls}
+                    >
+                      <option value="last_login-desc">
+                        Last login: recent first
+                      </option>
+                      <option value="last_login-asc">
+                        Last login: oldest first
+                      </option>
+                      <option value="username-asc">Username: A to Z</option>
+                      <option value="username-desc">Username: Z to A</option>
+                      <option value="email_id-asc">Email: A to Z</option>
+                      <option value="email_id-desc">Email: Z to A</option>
+                    </select>
+                    <ChevronDown
+                      aria-hidden
+                      className={cx(
+                        'pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2',
+                        t.muted
+                      )}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex justify-end">
                 <button
-                  onClick={exportToExcel}
-                  disabled={exportLoading || processedData.length === 0}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                    exportLoading || processedData.length === 0
-                      ? theme === 'dark'
-                        ? 'bg-gray-500/30 text-gray-400 cursor-not-allowed'
-                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                      : theme === 'dark'
-                      ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'
-                      : 'bg-green-100 hover:bg-green-200 text-green-800 border border-green-300'
-                  }`}
+                  type="button"
+                  onClick={clearFilters}
+                  className={btnCls(dark, 'ghost', 'sm')}
                 >
-                  {exportLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <FileSpreadsheet className="w-4 h-4" />
-                  )}
-                  {exportLoading ? 'Exporting...' : 'Export'}
+                  Reset filters
                 </button>
               </div>
             </div>
-          )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
+      {/* Applied filters */}
+      {(filters.account_status ||
+        filters.user_status ||
+        filters.user_roles) && (
+        <div className="flex flex-wrap items-center gap-2 px-6 pb-4">
+          <span className={cx('text-xs', t.muted)}>Filtered by</span>
+          {filters.user_status && (
+            <button
+              type="button"
+              onClick={() => setFilter('user_status', '')}
+              className={cx(btnCls(dark, 'secondary', 'sm'), '!h-7 gap-1.5')}
+            >
+              {filters.user_status}
+              <X className="h-3 w-3" aria-label="Remove user status filter" />
+            </button>
+          )}
+          {filters.user_roles && (
+            <button
+              type="button"
+              onClick={() => setFilter('user_roles', '')}
+              className={cx(btnCls(dark, 'secondary', 'sm'), '!h-7 gap-1.5')}
+            >
+              Role:{' '}
+              {roles.find((r) => r.value === filters.user_roles)?.label ??
+                filters.user_roles}
+              <X className="h-3 w-3" aria-label="Remove role filter" />
+            </button>
+          )}
+          {filters.account_status && (
+            <button
+              type="button"
+              onClick={() => setFilter('account_status', '')}
+              className={cx(btnCls(dark, 'secondary', 'sm'), '!h-7 gap-1.5')}
+            >
+              {filters.account_status}
+              <X className="h-3 w-3" aria-label="Remove account filter" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Load error */}
+      {loadError && (
+        <div
+          role="alert"
+          className={cx(
+            'mx-6 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3 text-sm ring-1 ring-inset',
+            dark
+              ? 'bg-rose-400/10 text-rose-200 ring-rose-400/25'
+              : 'bg-rose-50 text-rose-800 ring-rose-200'
+          )}
+        >
+          <span className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
+            {loadError}
+          </span>
           <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
-              showFilters
-                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                : theme === 'dark'
-                ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
-            }`}
+            type="button"
+            onClick={loadUsers}
+            className={btnCls(dark, 'secondary', 'sm')}
           >
-            <Filter className="w-4 h-4" />
-            <span>Filters</span>
-          </button>
-          <button
-            onClick={() => {
-              setFilters({
-                search: '',
-                account_status: '',
-                user_status: '',
-                user_roles: '',
-              });
-              setSortBy('last_login');
-              setSortOrder('desc');
-              setPagination((prev) => ({ ...prev, page: 1 }));
-              loadUsers();
-            }}
-            disabled={isLoading}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
-              theme === 'dark'
-                ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
-            }`}
-          >
-            <RefreshCw
-              className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`}
-            />
+            Retry
           </button>
         </div>
-      </div>
+      )}
 
-      <div className="p-6">
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center h-[350px] space-y-4">
-            <Loader2 className="w-12 h-12 text-blue-400 animate-spin" />
-            <div className="text-center">
-              <div
-                className={`font-medium ${
-                  theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}
-              >
-                Loading user onboarding data...
-              </div>
-              <div
-                className={`text-sm mt-1 ${
-                  theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                }`}
-              >
-                Please wait while we fetch the users
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <AnimatePresence>
-              {showFilters && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className={`rounded-xl border p-4 mb-6 overflow-hidden ${
-                    theme === 'dark'
-                      ? 'bg-white/5 border-white/20'
-                      : 'bg-gray-50 border-gray-200'
-                  }`}
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h3
-                      className={`font-semibold flex items-center gap-2 ${
-                        theme === 'dark' ? 'text-white' : 'text-gray-900'
-                      }`}
-                    >
-                      <SlidersHorizontal className="w-4 h-4 text-blue-400" />
-                      Advanced Filters
-                    </h3>
-                    <button
-                      onClick={() => setShowFilters(false)}
-                      className={`p-1.5 rounded-lg ${
-                        theme === 'dark'
-                          ? 'hover:bg-white/10 text-white/60'
-                          : 'hover:bg-gray-200 text-gray-500'
-                      }`}
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div>
-                      <label
-                        className={`block text-sm font-medium mb-2 ${
-                          theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                        }`}
-                      >
-                        Account Status
-                      </label>
-                      <select
-                        value={filters.account_status}
-                        onChange={(e) =>
-                          setFilters((prev) => ({
-                            ...prev,
-                            account_status: e.target.value,
-                          }))
-                        }
-                        className={`w-full px-3 py-2 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          theme === 'dark'
-                            ? 'bg-white/10 border border-white/20 text-white'
-                            : 'bg-white border border-gray-300 text-gray-900'
-                        }`}
-                      >
-                        <option value="">All Status</option>
-                        <option value="Locked">Locked</option>
-                        <option value="Unlocked">Unlocked</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label
-                        className={`block text-sm font-medium mb-2 ${
-                          theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                        }`}
-                      >
-                        User Status
-                      </label>
-                      <select
-                        value={filters.user_status}
-                        onChange={(e) => {
-                          setFilters({
-                            ...filters,
-                            user_status: e.target.value,
-                          });
-                          setPagination((prev) => ({ ...prev, page: 1 }));
-                        }}
-                        className={`w-full px-3 py-2 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          theme === 'dark'
-                            ? 'bg-white/10 border border-white/20 text-white'
-                            : 'bg-white border border-gray-300 text-gray-900'
-                        }`}
-                      >
-                        <option value="">All Users</option>
-                        <option value="Active">Active</option>
-                        <option value="Inactive">Inactive</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label
-                        className={`block text-sm font-medium mb-2 ${
-                          theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                        }`}
-                      >
-                        Sort By
-                      </label>
-                      <div className="relative">
-                        <select
-                          value={`${sortBy}-${sortOrder}`}
-                          onChange={(e) => {
-                            const [newSortBy, newSortOrder] =
-                              e.target.value.split('-') as [
-                                typeof sortBy,
-                                'asc' | 'desc'
-                              ];
-                            setSortBy(newSortBy);
-                            setSortOrder(newSortOrder);
-                          }}
-                          className={`w-full px-3 py-2 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                            theme === 'dark'
-                              ? 'bg-white/10 border border-white/20 text-white'
-                              : 'bg-white border border-gray-300 text-gray-900'
-                          }`}
-                        >
-                          <option value="last_login-desc">
-                            Last Login: Recent First
-                          </option>
-                          <option value="last_login-asc">
-                            Last Login: Oldest First
-                          </option>
-                          <option value="username-asc">Username: A to Z</option>
-                          <option value="username-desc">
-                            Username: Z to A
-                          </option>
-                          <option value="email_id-asc">Email: A to Z</option>
-                          <option value="email_id-desc">Email: Z to A</option>
-                        </select>
-                        <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end mt-4">
-                    <button
-                      onClick={() => {
-                        setSearchTerm('');
-                        setFilters({
-                          search: '',
-                          account_status: '',
-                          user_status: '',
-                          user_roles: '',
-                        });
-                        setSortBy('last_login');
-                        setSortOrder('desc');
-                        setPagination((prev) => ({ ...prev, page: 1 }));
-                      }}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                        theme === 'dark'
-                          ? 'bg-white/10 hover:bg-white/20 text-white'
-                          : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                      }`}
-                    >
-                      <Filter className="w-4 h-4" />
-                      Reset Filters
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-              <div
-                className={`p-4 rounded-xl border ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-blue-500/20 to-cyan-500/20 border-blue-500/30'
-                    : 'bg-gradient-to-br from-blue-100 to-cyan-100 border-blue-300'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <User className="w-4 h-4 text-blue-400" />
-                  <span
-                    className={`text-sm font-medium ${
-                      theme === 'dark' ? 'text-blue-300' : 'text-blue-700'
-                    }`}
-                  >
-                    Total Users
-                  </span>
-                </div>
-                <div
-                  className={`text-2xl font-bold ${
-                    theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
-                >
-                  {stats.totalUsers}
-                </div>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl border ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-green-500/20 to-emerald-500/20 border-green-500/30'
-                    : 'bg-gradient-to-br from-green-100 to-emerald-100 border-green-300'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle className="w-4 h-4 text-green-400" />
-                  <span
-                    className={`text-sm font-medium ${
-                      theme === 'dark' ? 'text-green-300' : 'text-green-700'
-                    }`}
-                  >
-                    Active Users
-                  </span>
-                </div>
-                <div
-                  className={`text-2xl font-bold ${
-                    theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
-                >
-                  {stats.activeUsers}
-                </div>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl border ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-red-500/20 to-orange-500/20 border-red-500/30'
-                    : 'bg-gradient-to-br from-red-100 to-orange-100 border-red-300'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <AlertTriangle className="w-4 h-4 text-red-400" />
-                  <span
-                    className={`text-sm font-medium ${
-                      theme === 'dark' ? 'text-red-300' : 'text-red-700'
-                    }`}
-                  >
-                    Locked Accounts
-                  </span>
-                </div>
-                <div
-                  className={`text-2xl font-bold ${
-                    theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
-                >
-                  {stats.lockedUsers}
-                </div>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl border ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-yellow-500/20 to-amber-500/20 border-yellow-500/30'
-                    : 'bg-gradient-to-br from-yellow-100 to-amber-100 border-yellow-300'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <Mail className="w-4 h-4 text-yellow-400" />
-                  <span
-                    className={`text-sm font-medium ${
-                      theme === 'dark' ? 'text-yellow-300' : 'text-yellow-700'
-                    }`}
-                  >
-                    Verified Emails
-                  </span>
-                </div>
-                <div
-                  className={`text-2xl font-bold ${
-                    theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
-                >
-                  {stats.verifiedEmails}
-                </div>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl border ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-br from-purple-500/20 to-pink-500/20 border-purple-500/30'
-                    : 'bg-gradient-to-br from-purple-100 to-pink-100 border-purple-300'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <Shield className="w-4 h-4 text-purple-400" />
-                  <span
-                    className={`text-sm font-medium ${
-                      theme === 'dark' ? 'text-purple-300' : 'text-purple-700'
-                    }`}
-                  >
-                    MFA Enabled
-                  </span>
-                </div>
-                <div
-                  className={`text-2xl font-bold ${
-                    theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
-                >
-                  {stats.mfaEnabled}
-                </div>
-              </div>
-            </div> */}
-
-            <div
-              className={`rounded-xl border overflow-hidden ${
-                theme === 'dark'
-                  ? 'bg-white/5 border-white/10'
-                  : 'bg-white border-gray-200'
-              }`}
+      {/* Table / empty state */}
+      {showEmpty ? (
+        <div className={cx('border-t px-6 py-16 text-center', t.hairline)}>
+          <span
+            className={cx(
+              'mx-auto grid h-12 w-12 place-items-center rounded-full',
+              dark ? 'bg-white/5' : 'bg-slate-100'
+            )}
+          >
+            <Search className={cx('h-5 w-5', t.muted)} aria-hidden />
+          </span>
+          <h3 className={cx('mt-4 text-base font-semibold', t.strong)}>
+            {hasFilters ? 'No users match these filters' : 'No users found'}
+          </h3>
+          <p className={cx('mx-auto mt-1 max-w-sm text-sm', t.muted)}>
+            {hasFilters
+              ? 'Try a different search term or clear the filters to see everyone.'
+              : 'Users will appear here once they have been onboarded.'}
+          </p>
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className={cx(btnCls(dark, 'secondary'), 'mt-5')}
             >
-              <div
-                className={`p-4 border-b ${
-                  theme === 'dark' ? 'border-white/10' : 'border-gray-200'
-                }`}
-              >
-                <div className="flex justify-between items-center">
-                  <h3
-                    className={`font-semibold ${
-                      theme === 'dark' ? 'text-white' : 'text-gray-900'
-                    }`}
-                  >
-                    User List
-                  </h3>
+              Clear filters
+            </button>
+          )}
+        </div>
+      ) : (
+        <div
+          className={cx('relative border-t', t.hairline)}
+          aria-busy={isLoading}
+        >
+          {isLoading && !showSkeleton && (
+            <div className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden">
+              <motion.div
+                className="h-full w-1/3 bg-teal-500"
+                animate={{ x: ['-100%', '300%'] }}
+                transition={{ repeat: Infinity, duration: 1.1, ease: 'linear' }}
+              />
+            </div>
+          )}
 
-                  {processedData.length > 0 && (
-                    <div
-                      className={`text-xs ${
-                        theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                      }`}
-                    >
-                      {searchTerm ||
-                      filters.account_status ||
-                      filters.user_status
-                        ? 'Filtered results'
-                        : 'All users'}
-                    </div>
-                  )}
-                </div>
-              </div>
+          <div className="overflow-x-auto">
+            <table
+              className={cx(
+                'w-full min-w-[1080px] text-sm transition-opacity',
+                isLoading && !showSkeleton && 'opacity-60'
+              )}
+            >
+              <caption className="sr-only">
+                Users and their account status
+              </caption>
+              <thead className={t.subtle}>
+                <tr className={cx('border-b', t.hairline)}>
+                  {sortableTh('User', 'username', true)}
+                  {sortableTh('Email', 'email_id')}
+                  <th scope="col" className={thBase}>
+                    Role
+                  </th>
+                  <th scope="col" className={thBase}>
+                    Status
+                  </th>
+                  <th scope="col" className={thBase}>
+                    Failed logins
+                  </th>
+                  <th scope="col" className={thBase}>
+                    Account
+                  </th>
+                  {sortableTh('Last login', 'last_login')}
+                  <th scope="col" className={thBase}>
+                    Sensitive data
+                  </th>
+                  <th scope="col" className={cx(thBase, 'pr-6 text-right')}>
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
 
-              <div className="overflow-x-auto relative">
-                <table className="w-full">
-                  <thead
-                    className={`${
-                      theme === 'dark'
-                        ? 'bg-white/5 border-b border-white'
-                        : 'bg-gray-50 border-b border-black'
-                    }`}
-                  >
-                    <tr>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark'
-                            ? 'text-white/70 border-b border-white'
-                            : 'text-gray-700 border-b border-black'
-                        }`}
-                      >
-                        User
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        Email
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        Role
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        Status
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        Failed Count
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        Account
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        Last Login
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        MFA
-                      </th>
-                      <th
-                        className={`px-4 py-3 text-left text-xs font-semibold ${
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-700'
-                        }`}
-                      >
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <AnimatePresence>
-                    <tbody>
-                      {processedData.length === 0 ? (
-                        <tr>
-                          <td colSpan={8} className="px-4 py-8 text-center">
-                            <AlertCircle
-                              className={`w-8 h-8 mx-auto mb-2 ${
-                                theme === 'dark'
-                                  ? 'text-white/40'
-                                  : 'text-gray-400'
-                              }`}
+              <tbody className={cx('divide-y', t.divide)}>
+                {showSkeleton
+                  ? Array.from({ length: 6 }).map((_, i) => (
+                      <tr key={i} aria-hidden>
+                        {Array.from({ length: 9 }).map((__, j) => (
+                          <td
+                            key={j}
+                            className={cx('px-4 py-4', j === 0 && 'pl-6')}
+                          >
+                            <div
+                              className={cx(
+                                'h-4 animate-pulse rounded motion-reduce:animate-none',
+                                dark ? 'bg-white/10' : 'bg-slate-100',
+                                j === 0 ? 'w-40' : j === 1 ? 'w-44' : 'w-16'
+                              )}
                             />
-                            <p
-                              className={`${
-                                theme === 'dark'
-                                  ? 'text-white/60'
-                                  : 'text-gray-600'
-                              }`}
-                            >
-                              No users found
-                            </p>
-                            {(searchTerm ||
-                              filters.account_status ||
-                              filters.user_status) && (
-                              <button
-                                onClick={() => {
-                                  setSearchTerm('');
-                                  setFilters({
-                                    search: '',
-                                    account_status: '',
-                                    user_status: '',
-                                    user_roles: '',
-                                  });
-                                }}
-                                className={`mt-2 text-sm ${
-                                  theme === 'dark'
-                                    ? 'text-blue-400 hover:text-blue-300'
-                                    : 'text-blue-600 hover:text-blue-700'
-                                }`}
-                              >
-                                Clear filters
-                              </button>
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  : processedData.map((user) => {
+                      const status = getStatus(user);
+                      const locked =
+                        user.account_status.toLowerCase() === 'locked';
+                      const last = formatDate(user.last_login);
+                      const attempts = user.login_attempts ?? 0;
+
+                      return (
+                        <tr
+                          key={user.id}
+                          tabIndex={0}
+                          onClick={() => setDetailsUser({ ...user })}
+                          onKeyDown={(e) => {
+                            if (
+                              e.target === e.currentTarget &&
+                              e.key === 'Enter'
+                            )
+                              setDetailsUser({ ...user });
+                          }}
+                          className={cx(
+                            'cursor-pointer transition-colors',
+                            t.hover,
+                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/70'
+                          )}
+                        >
+                          <td className="py-3 pl-6 pr-4">
+                            <div className="flex items-center gap-3">
+                              <Avatar name={user.full_name} />
+                              <div className="min-w-0">
+                                <div
+                                  className={cx(
+                                    'truncate font-medium',
+                                    t.strong
+                                  )}
+                                >
+                                  {user.full_name}
+                                </div>
+                                <div
+                                  className={cx('truncate text-xs', t.muted)}
+                                >
+                                  {user.username}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className={t.body}>{user.email_id}</span>
+                              {user.email_verified ? (
+                                <CheckCircle2
+                                  className="h-4 w-4 shrink-0 text-emerald-500"
+                                  aria-label="Email verified"
+                                />
+                              ) : (
+                                <AlertTriangle
+                                  className="h-4 w-4 shrink-0 text-amber-500"
+                                  aria-label="Email not verified"
+                                />
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <Pill>{user.user_roles}</Pill>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <Pill tone={status.tone} dot>
+                              {status.label}
+                            </Pill>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {attempts > 0 ? (
+                              <Pill tone="warning">{attempts}</Pill>
+                            ) : (
+                              <span className={cx('tabular-nums', t.muted)}>
+                                0
+                              </span>
                             )}
                           </td>
-                        </tr>
-                      ) : (
-                        processedData.map((user, index) => {
-                          const uniqueKey = `${user.id}-${index}-${pagination.page}`;
 
-                          return (
-                            <tr
-                              key={uniqueKey}
-                              className={`border-b ${
-                                theme === 'dark'
-                                  ? 'border-white/10'
-                                  : 'border-gray-100'
-                              } hover:bg-blue-500/5 transition-colors`}
+                          <td className="px-4 py-3">
+                            <Pill
+                              tone={locked ? 'danger' : 'neutral'}
+                              icon={locked ? Lock : Unlock}
                             >
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-3">
-                                  <div
-                                    className={`p-2 rounded-lg ${
-                                      theme === 'dark'
-                                        ? 'bg-white/10'
-                                        : 'bg-gray-100'
-                                    }`}
-                                  >
-                                    <User className="w-4 h-4 text-blue-400" />
-                                  </div>
-                                  <div>
-                                    <div
-                                      className={`font-medium ${
-                                        theme === 'dark'
-                                          ? 'text-white'
-                                          : 'text-gray-900'
-                                      }`}
-                                    >
-                                      {user.full_name}
-                                    </div>
-                                    <div
-                                      className={`text-xs ${
-                                        theme === 'dark'
-                                          ? 'text-white/50'
-                                          : 'text-gray-500'
-                                      }`}
-                                    >
-                                      {user.username}
-                                    </div>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className={`text-sm ${
-                                      theme === 'dark'
-                                        ? 'text-white/80'
-                                        : 'text-gray-700'
-                                    }`}
-                                  >
-                                    {user.email_id}
-                                  </span>
-                                  {user.email_verified ? (
-                                    <CheckCircle className="w-4 h-4 text-green-500" />
-                                  ) : (
-                                    <AlertTriangle className="w-4 h-4 text-yellow-500" />
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <span
-                                  className={`px-2 py-1 text-xs font-medium rounded-full ${
-                                    theme === 'dark'
-                                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                                      : 'bg-purple-100 text-purple-700 border border-purple-300'
-                                  }`}
-                                >
-                                  {user.user_roles}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3">
-                                {getStatusBadge(user)}
-                              </td>
-                              <td className="flex px-4 py-3 items-center">
-                                {user.login_attempts > 0 ? (
-                                  <span className="bg-red-600 text-white"></span>
-                                ) : (
-                                  <span className="bg-green-800 text-white"></span>
+                              {user.account_status}
+                            </Pill>
+                            {locked && user.account_locked_until && (
+                              <div
+                                className={cx(
+                                  'mt-1 text-xs tabular-nums',
+                                  t.muted
                                 )}
-                                {user.login_attempts}
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  {user.account_status.toLowerCase() ===
-                                  'locked' ? (
-                                    <span
-                                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
-                                        theme === 'dark'
-                                          ? 'bg-red-600 text-white'
-                                          : 'bg-gray-500/20  text-red-500'
-                                      }`}
-                                    >
-                                      <Lock className="w-3 h-3" />
-                                      {user.account_status}
-                                    </span>
-                                  ) : (
-                                    <span
-                                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
-                                        theme === 'dark'
-                                          ? 'bg-green-600 text-white'
-                                          : 'bg-gray-500/20 text-green-600'
-                                      } `}
-                                    >
-                                      <Unlock className="w-3 h-3" />
-                                      {user.account_status}
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div
-                                  className={`flex items-start gap-2 ${
-                                    theme === 'dark'
-                                      ? 'text-white/80'
-                                      : 'text-gray-700'
-                                  }`}
-                                >
-                                  <Clock className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                                  <div className="flex flex-col">
-                                    <span className="font-medium text-sm">
-                                      {formatDate(user.last_login).date}
-                                    </span>
-                                    {formatDate(user.last_login).time && (
-                                      <span
-                                        className={`text-xs ${
-                                          theme === 'dark'
-                                            ? 'text-white/50'
-                                            : 'text-gray-500'
-                                        } mt-0.5`}
-                                      >
-                                        {formatDate(user.last_login).time}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                {user.mfa_enabled ? (
-                                  <CheckCircle className="w-5 h-5 text-green-400" />
-                                ) : (
-                                  <AlertTriangle className="w-5 h-5 text-yellow-400" />
-                                )}
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex gap-2">
-                                  <button
-                                    className={`p-1.5 rounded-lg ${
-                                      theme === 'dark'
-                                        ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
-                                        : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
-                                    }`}
-                                    title="View Details"
-                                  >
-                                    <Eye className="w-4 h-4" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleEditUser(user)}
-                                    className={`p-1.5 rounded-lg ${
-                                      theme === 'dark'
-                                        ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
-                                        : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
-                                    }`}
-                                    title="Edit"
-                                  >
-                                    <Edit className="w-4 h-4" />
-                                  </button>
-                                  <div className="relative dropdown-container">
-                                    <button
-                                      onClick={() =>
-                                        setOpenDropdown(
-                                          openDropdown === user.id
-                                            ? null
-                                            : user.id
-                                        )
-                                      }
-                                      className={`p-1.5 rounded-lg ${
-                                        theme === 'dark'
-                                          ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
-                                          : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
-                                      }`}
-                                      title="More"
-                                    >
-                                      <MoreVertical className="w-4 h-4" />
-                                    </button>
+                              >
+                                Until {stamp(user.account_locked_until, '')}
+                              </div>
+                            )}
+                          </td>
 
-                                    {openDropdown === user.id && (
-                                      <div
-                                        className={`${
-                                          index >= processedData.length - 4
-                                            ? ' fixed'
-                                            : 'absolute'
-                                        } right-0 top-full mt-1 w-56 bg-white rounded-lg shadow-2xl border border-gray-200 py-1 z-50 transform translate-y-2`}
-                                        style={{
-                                          top: '100%',
-                                          transform:
-                                            index >= processedData.length - 4
-                                              ? 'translateY(calc(-100% - 40px))'
-                                              : 'translateY(0)',
-                                        }}
-                                      >
-                                        {user.active_flag ? (
-                                          <button
-                                            onClick={() =>
-                                              handleUserAction(
-                                                'deactivate',
-                                                user
-                                              )
-                                            }
-                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                          >
-                                            <UserX className="w-4 h-4" />
-                                            Deactivate User
-                                          </button>
-                                        ) : (
-                                          <button
-                                            onClick={() =>
-                                              handleUserAction('activate', user)
-                                            }
-                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                          >
-                                            <UserCheck className="w-4 h-4 text-green-600" />
-                                            Activate User
-                                          </button>
-                                        )}
+                          <td className="px-4 py-3">
+                            <div
+                              className={cx('font-medium tabular-nums', t.body)}
+                            >
+                              {last.date}
+                            </div>
+                            {last.time && (
+                              <div
+                                className={cx('text-xs tabular-nums', t.muted)}
+                              >
+                                {last.time}
+                              </div>
+                            )}
+                          </td>
 
-                                        {user.account_locked ? (
-                                          <button
-                                            onClick={() =>
-                                              handleUserAction('unlock', user)
-                                            }
-                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                          >
-                                            <Unlock className="w-4 h-4 text-green-600" />
-                                            Unlock Account
-                                          </button>
-                                        ) : (
-                                          <button
-                                            onClick={() =>
-                                              handleUserAction('lock', user)
-                                            }
-                                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                          >
-                                            <Lock className="w-4 h-4" />
-                                            Lock Account
-                                          </button>
-                                        )}
+                          <td className="px-4 py-3">
+                            <span
+                              className={cx(
+                                'inline-flex items-center gap-1.5 text-xs font-medium',
+                                user.can_view_sensitive
+                                  ? dark
+                                    ? 'text-emerald-300'
+                                    : 'text-emerald-700'
+                                  : dark
+                                    ? 'text-amber-300'
+                                    : 'text-amber-700'
+                              )}
+                            >
+                              {user.can_view_sensitive ? (
+                                <ShieldCheck className="h-4 w-4" aria-hidden />
+                              ) : (
+                                <ShieldAlert className="h-4 w-4" aria-hidden />
+                              )}
+                              {user.can_view_sensitive ? 'Allowed' : 'Blocked'}
+                            </span>
+                          </td>
 
-                                        <button
-                                          onClick={() =>
-                                            handleUserAction(
-                                              'reset_password',
-                                              user
-                                            )
-                                          }
-                                          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                        >
-                                          <Key className="w-4 h-4" />
-                                          Reset Password
-                                        </button>
-
-                                        <button
-                                          onClick={() =>
-                                            handleUserAction('send_email', user)
-                                          }
-                                          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                        >
-                                          <Send className="w-4 h-4" />
-                                          Send Email
-                                        </button>
-
-                                        <button
-                                          onClick={() => {
-                                            navigator.clipboard.writeText(
-                                              user.email_id
-                                            );
-                                            alert('Email copied to clipboard!');
-                                            setOpenDropdown(null);
-                                          }}
-                                          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                        >
-                                          <Copy className="w-4 h-4" />
-                                          Copy Email
-                                        </button>
-
-                                        <div className="border-t border-gray-200 my-1"></div>
-
-                                        <button
-                                          onClick={() =>
-                                            handleUserAction('delete', user)
-                                          }
-                                          className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                                        >
-                                          <Trash2 className="w-4 h-4" />
-                                          Delete User
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </AnimatePresence>
-                </table>
-              </div>
-
-              {pagination.total_pages > 1 && (
-                <div
-                  className={`p-4 border-t ${
-                    theme === 'dark' ? 'border-white/10' : 'border-gray-200'
-                  }`}
-                >
-                  <div className="flex justify-between items-center">
-                    <div
-                      className={`text-sm ${
-                        theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                      }`}
-                    >
-                      Showing {(pagination.page - 1) * pagination.page_size + 1}{' '}
-                      to{' '}
-                      {Math.min(
-                        pagination.page * pagination.page_size,
-                        pagination.total
-                      )}{' '}
-                      of {pagination.total} users
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() =>
-                          setPagination((prev) => ({
-                            ...prev,
-                            page: Math.max(1, prev.page - 1),
-                          }))
-                        }
-                        disabled={pagination.page === 1}
-                        className={`p-2 rounded-lg transition-colors ${
-                          pagination.page === 1
-                            ? theme === 'dark'
-                              ? 'bg-white/5 text-white/30 cursor-not-allowed'
-                              : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            : theme === 'dark'
-                            ? 'bg-white/10 hover:bg-white/20 text-white'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                        }`}
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                      </button>
-
-                      <div className="flex items-center gap-1">
-                        {Array.from(
-                          { length: Math.min(5, pagination.total_pages) },
-                          (_, i) => {
-                            let pageToShow;
-                            if (pagination.total_pages <= 5) {
-                              pageToShow = i + 1;
-                            } else if (pagination.page <= 3) {
-                              pageToShow = i + 1;
-                            } else if (
-                              pagination.page >=
-                              pagination.total_pages - 2
-                            ) {
-                              pageToShow = pagination.total_pages - 4 + i;
-                            } else {
-                              pageToShow = pagination.page - 2 + i;
-                            }
-
-                            return (
+                          <td className="py-3 pl-4 pr-6">
+                            <div className="flex items-center justify-end gap-0.5">
                               <button
-                                key={pageToShow}
-                                onClick={() =>
-                                  setPagination((prev) => ({
-                                    ...prev,
-                                    page: pageToShow,
-                                  }))
-                                }
-                                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm transition-colors ${
-                                  pagination.page === pageToShow
-                                    ? theme === 'dark'
-                                      ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
-                                      : 'bg-blue-100 text-blue-700 border border-blue-300'
-                                    : theme === 'dark'
-                                    ? 'bg-white/10 hover:bg-white/20 text-white'
-                                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                                }`}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDetailsUser({ ...user });
+                                }}
+                                className={iconBtn}
+                                aria-label={`View details for ${user.full_name}`}
+                                title="View details"
                               >
-                                {pageToShow}
+                                <Eye className="h-4 w-4" />
                               </button>
-                            );
-                          }
-                        )}
-
-                        {pagination.total_pages > 5 &&
-                          pagination.page < pagination.total_pages - 2 && (
-                            <>
-                              <span
-                                className={
-                                  theme === 'dark'
-                                    ? 'text-white/50'
-                                    : 'text-gray-500'
-                                }
-                              >
-                                ...
-                              </span>
                               <button
-                                onClick={() =>
-                                  setPagination((prev) => ({
-                                    ...prev,
-                                    page: pagination.total_pages,
-                                  }))
-                                }
-                                className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm ${
-                                  theme === 'dark'
-                                    ? 'bg-white/10 hover:bg-white/20 text-white'
-                                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                                }`}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditUser(user);
+                                }}
+                                className={iconBtn}
+                                aria-label={`Edit ${user.full_name}`}
+                                title="Edit"
                               >
-                                {pagination.total_pages}
+                                <Pencil className="h-4 w-4" />
                               </button>
-                            </>
-                          )}
-                      </div>
 
-                      <button
-                        onClick={() =>
-                          setPagination((prev) => ({
-                            ...prev,
-                            page: Math.min(
-                              pagination.total_pages,
-                              prev.page + 1
-                            ),
-                          }))
-                        }
-                        disabled={pagination.page === pagination.total_pages}
-                        className={`p-2 rounded-lg transition-colors ${
-                          pagination.page === pagination.total_pages
-                            ? theme === 'dark'
-                              ? 'bg-white/5 text-white/30 cursor-not-allowed'
-                              : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            : theme === 'dark'
-                            ? 'bg-white/10 hover:bg-white/20 text-white'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                        }`}
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+                              <MenuPopover
+                                label={`More actions for ${user.full_name}`}
+                                triggerClassName={iconBtn}
+                                triggerContent={
+                                  <MoreVertical className="h-4 w-4" />
+                                }
+                              >
+                                {(close) => {
+                                  const run = (fn: () => void) => () => {
+                                    close();
+                                    fn();
+                                  };
+                                  const act = (kind: UserActionKind) => (
+                                    <MenuItem
+                                      icon={ACTION_META[kind].icon}
+                                      label={ACTION_META[kind].label}
+                                      danger={kind === 'delete'}
+                                      onClick={run(() =>
+                                        requestAction(kind, user)
+                                      )}
+                                    />
+                                  );
+                                  return (
+                                    <>
+                                      {act(
+                                        user.active_flag
+                                          ? 'deactivate'
+                                          : 'activate'
+                                      )}
+                                      {act(
+                                        user.account_locked ? 'unlock' : 'lock'
+                                      )}
+                                      <MenuDivider />
+                                      {act('reset_password')}
+                                      {act(
+                                        user.can_view_sensitive
+                                          ? 'sensitive_disable'
+                                          : 'sensitive_enable'
+                                      )}
+                                      <MenuDivider />
+                                      <MenuItem
+                                        icon={Copy}
+                                        label="Copy email"
+                                        onClick={run(() =>
+                                          copyEmail(user.email_id)
+                                        )}
+                                      />
+                                      <MenuDivider />
+                                      {act('delete')}
+                                    </>
+                                  );
+                                }}
+                              </MenuPopover>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+              </tbody>
+            </table>
           </div>
-        )}
-      </div>
-    </motion.div>
+        </div>
+      )}
+
+      {/* Footer / pagination */}
+      {pagination.total > 0 && !showEmpty && (
+        <footer
+          className={cx(
+            'flex flex-wrap items-center justify-between gap-3 border-t px-6 py-3',
+            t.hairline
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <div className={cx('text-sm tabular-nums', t.muted)}>
+              Showing {rangeStart}–{rangeEnd} of{' '}
+              {pagination.total.toLocaleString()} users
+            </div>
+            <label className={cx('flex items-center gap-2 text-sm', t.muted)}>
+              Rows
+              <span className="relative">
+                <select
+                  value={pagination.page_size}
+                  onChange={(e) =>
+                    setPagination((prev) => ({
+                      ...prev,
+                      page_size: Number(e.target.value),
+                      page: 1,
+                    }))
+                  }
+                  className={cx(
+                    selectCls,
+                    '!h-8 !w-auto !pl-2.5 !pr-8 text-xs tabular-nums'
+                  )}
+                >
+                  {Array.from(new Set([10, 20, 50, pagination.page_size]))
+                    .sort((a, b) => a - b)
+                    .map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                />
+              </span>
+            </label>
+          </div>
+
+          {pagination.total_pages > 1 && (
+            <nav aria-label="Pagination" className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Previous page"
+                onClick={() =>
+                  setPagination((prev) => ({
+                    ...prev,
+                    page: Math.max(1, prev.page - 1),
+                  }))
+                }
+                disabled={pagination.page === 1}
+                className={cx(pageBtn(false), 'disabled:opacity-40')}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+
+              {pages.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  aria-label={`Page ${p}`}
+                  aria-current={pagination.page === p ? 'page' : undefined}
+                  onClick={() =>
+                    setPagination((prev) => ({ ...prev, page: p }))
+                  }
+                  className={pageBtn(pagination.page === p)}
+                >
+                  {p}
+                </button>
+              ))}
+
+              {showLast && (
+                <>
+                  <span className={cx('px-1', t.muted)} aria-hidden>
+                    …
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Page ${pagination.total_pages}`}
+                    onClick={() =>
+                      setPagination((prev) => ({
+                        ...prev,
+                        page: pagination.total_pages,
+                      }))
+                    }
+                    className={pageBtn(false)}
+                  >
+                    {pagination.total_pages}
+                  </button>
+                </>
+              )}
+
+              <button
+                type="button"
+                aria-label="Next page"
+                onClick={() =>
+                  setPagination((prev) => ({
+                    ...prev,
+                    page: Math.min(pagination.total_pages, prev.page + 1),
+                  }))
+                }
+                disabled={pagination.page === pagination.total_pages}
+                className={cx(pageBtn(false), 'disabled:opacity-40')}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </nav>
+          )}
+        </footer>
+      )}
+
+      {/* Layered flows: drawer → confirm sits above it, edit replaces it */}
+      <UserDetailsDrawer
+        user={detailsUserLive}
+        canViewSensitive={detailsUserLive?.can_view_sensitive ?? false}
+        onClose={() => setDetailsUser(null)}
+        onEdit={(u) => {
+          setDetailsUser(null);
+          handleEditUser(u);
+        }}
+        onAction={(kind, u) => requestAction(kind, u)}
+        loadEventLogs={fetchUserEventLogs}
+      />
+
+      <EditUserModal
+        user={editingUser}
+        saving={actionBusy}
+        error={saveError}
+        roles={roles}
+        rolesStatus={rolesStatus}
+        onRetryRoles={() => ensureRoles(true)}
+        onClose={() => setEditingUser(null)}
+        onSave={handleEditSave}
+      />
+
+      <ConfirmUserActionModal
+        action={confirmAction}
+        user={confirmUser}
+        busy={actionBusy}
+        error={actionError}
+        onClose={() => {
+          setConfirmAction(null);
+          setConfirmUser(null);
+        }}
+        onConfirm={performAction}
+      />
+
+      <ResetPasswordSentModal
+        user={resetSentUser}
+        onClose={() => setResetSentUser(null)}
+      />
+    </motion.section>
   );
 };
 

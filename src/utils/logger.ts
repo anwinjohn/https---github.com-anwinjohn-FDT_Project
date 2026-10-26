@@ -1,4 +1,4 @@
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import apiClient from './apiClient';
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug' | 'security';
