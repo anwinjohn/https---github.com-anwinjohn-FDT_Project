@@ -124,25 +124,27 @@ class SecureApiClient {
       (response) => {
         try {
           const isEncrypted =
-            response.config?.headers?.['X-Encrypted'] === 'true' ||
-            response.config?.headers?.['x-encrypted'] === 'true';
+            response.headers?.['x-encrypted'] === 'true' ||
+            response.headers?.['X-Encrypted'] === 'true';
 
           if (config.logging.console_enabled) {
+            console.log('Response Header: ', response.headers);
             console.log('Raw response:', response.data);
             console.log('response.data', response.data);
             console.log('tyepeof response.data', typeof response.data);
             console.log('response.data.data', response.data.data);
           }
+          console.log('isEncrypted : ', isEncrypted);
           if (
             isEncrypted &&
-            response.data &&
-            typeof response.data == 'string'
+            response.data.data &&
+            typeof response.data.data == 'string'
           ) {
             if (config.logging.console_enabled) {
               console.log('data: ', response.data);
-              console.log('DECY data', this.decryptResponse(response.data));
+              console.log('DECY data', this.decryptResponse(response.data.data));
             }
-            const decrypted = this.decryptResponse(response.data);
+            const decrypted = this.decryptResponse(response.data.data);
             response.data = decrypted;
           }
         } catch (error) {

@@ -17,8 +17,17 @@ import {
   Lightbulb,
   ChevronsLeft,
   ChevronsRight,
+  ChevronsUp,
+  ChevronsDown,
+  Lock,
+  Eye,
+  EyeOff,
+  Timer,
 } from 'lucide-react';
 import { appConfig as config } from '../config/runtime-config';
+import apiClient from '../utils/apiClient';
+import { useAuth } from '../context/AuthContext';
+
 /* -------------------------------------------------------------------------- */
 /*  Types & config                                                            */
 /* -------------------------------------------------------------------------- */
@@ -28,19 +37,26 @@ interface FaceIdLoginProps {
   onBack: () => void;
   username: string;
   /**
-   * Returns a short-lived (<= 5 min) enrollment grant minted by your trusted
-   * identity/onboarding BACKEND for exactly this user (sub === username,
-   * scope "face-enrollment"). The browser never mints, derives or stores it.
-   * It is requested on every enrollment attempt and kept only in a local
-   * variable. If omitted, the component calls ENROLLMENT_TOKEN_URL (below).
+   * Returns a short-lived (<= 5 min) enrollment grant. Requested only AFTER the
+   * user's password has been verified, used immediately, and never stored.
+   * If omitted, the component calls ENROLLMENT_TOKEN_URL (below).
    */
   getEnrollmentToken?: (userId: string) => Promise<string | EnrollmentGrant>;
+  /**
+   * Verifies the account password before a face is enrolled. Return a boolean
+   * or { verified, message?, action?, retryable? }. If omitted, the component
+   * calls PASSWORD_VERIFY_URL (below).
+   */
+  verifyPassword?: (
+    userId: string,
+    password: string
+  ) => Promise<boolean | PasswordCheck>;
   /** Start in enrollment mode (e.g. when rendered inside the onboarding flow). */
   initialMode?: 'verify' | 'enroll';
 }
 
 interface ChallengeData {
-  challenge: string; // "BLINK" | "TURN_LEFT" | "TURN_RIGHT"
+  challenge: string; // e.g. "BLINK" | "TURN_LEFT" | "TURN_RIGHT" | "SMILE" ...
   challenge_id: string;
   expires_in?: number;
   // capture settings returned by GET /auth/challenge (field names are read
@@ -61,6 +77,7 @@ interface ApiResponse {
   action?: string;
   retryable?: boolean;
   enrolled?: boolean;
+  token?: string;
 }
 
 interface Failure {
@@ -78,13 +95,25 @@ interface CaptureSettings {
   maxFrames: number;
 }
 
-type RetryHintKey = 'single-face' | 'perform-action' | 'steady';
-
 interface EnrollmentGrant {
   token: string; // the issuer's `access_token`
   expiresIn?: number; // seconds, from the issuer's `expires_in`
 }
 
+interface PasswordCheck {
+  verified: boolean;
+  message?: string;
+  action?: string;
+  retryable?: boolean;
+}
+
+interface PendingEnrollment {
+  frames: File[];
+  challengeId: string;
+  expiresAt: number; // when the one-time challenge lapses
+}
+
+type RetryHintKey = 'single-face' | 'perform-action' | 'steady';
 type Mode = 'verify' | 'enroll';
 
 type Phase =
@@ -94,41 +123,36 @@ type Phase =
   | 'preparing' // fetching challenge
   | 'get-ready' // 3-2-1 with animated guide
   | 'capturing'
+  | 'password' // enrollment only: confirm identity before enrolling
   | 'processing'
   | 'success'
   | 'error';
 
 const API_BASE = config.api.EfrvBaseUrl; // Update to your FastAPI backend
+
 // /auth/challenge sends min/max frames and a recommended fps (5), but no
-// duration. /auth/verify now validates the action INSIDE the frames, so the
-// window must be long enough to contain: look straight -> do the action ->
-// settle. 4s @ 5fps = 20 frames (inside the API's 8-30 range). Tune if needed.
+// duration. /auth/verify validates the action INSIDE the frames, so the window
+// must contain: look straight -> do the action -> settle.
+// 4s @ 5fps = 20 frames (inside the API's 8-30 range). Tune if needed.
 const DEFAULT_FPS = 5;
 const DEFAULT_DURATION_S = 4;
+const DEFAULT_MIN_FRAMES = 8;
+const DEFAULT_MAX_FRAMES = 30;
 
 // Set to true if the backend's TURN_LEFT / TURN_RIGHT refers to the direction
 // as seen in the camera image rather than the user's own left/right. Only the
 // on-screen instruction and animation are swapped; the API payload is unchanged.
 const FLIP_TURN_DIRECTION = false;
-const displayChallenge = (c: string): string => {
-  if (!FLIP_TURN_DIRECTION) return c;
-  if (c === 'TURN_LEFT') return 'TURN_RIGHT';
-  if (c === 'TURN_RIGHT') return 'TURN_LEFT';
-  return c;
-};
-const DEFAULT_MIN_FRAMES = 8;
-const DEFAULT_MAX_FRAMES = 30;
+
+// SECURITY: this key is visible to anyone who opens DevTools. It should live
+// only on a server-side proxy that adds the header (see enrollment_token_proxy.py).
 const ISSUER_KEY =
   'bHI_xYyuhl9xt8m3VVYYPUixEptz2fjijSu4g5Y0_v8yppK5EZ6-IMtcUobRl3UO'; // must match
-// Default token provider. Point this at YOUR backend's session-authenticated
-// endpoint (see enrollment_token_proxy.py), NOT directly at the issuer.
-// The issuer requires the secret `x-onboarding-issuer-key` header; that key
-// must live only on the server, so the browser never sends or contains it.
-// Expected response: { success, access_token, expires_in, token_type: "Bearer" }
+
+// Default token provider. Expected response:
+// { success, access_token, expires_in, token_type: "Bearer" }
 const ENROLLMENT_TOKEN_URL = `${API_BASE}/onboarding/enrollment-token`;
 // false = same CORS behavior as your other API calls (no cookies sent).
-// Set true ONLY if the token endpoint authenticates via a session cookie; the
-// server must then allow your exact origin + Access-Control-Allow-Credentials: true.
 const ENROLLMENT_TOKEN_WITH_CREDENTIALS = false;
 const defaultEnrollmentTokenProvider = async (
   userId: string
@@ -150,29 +174,201 @@ const defaultEnrollmentTokenProvider = async (
   }
   return { token, expiresIn: Number(data?.expires_in) || undefined };
 };
+
+// Default password verifier.
+// ASSUMPTION - confirm with your backend: POST { user_id, password } and a
+// response containing a boolean `verified` (also accepts valid / authenticated /
+// success). Wrong credentials should come back as HTTP 400/401/403/422 or
+// `verified: false`.
+// const PASSWORD_VERIFY_URL = `${API_BASE}/user/authenticate`;
+// const defaultPasswordVerifier = async (
+//   userId: string,
+//   password: string
+// ): Promise<PasswordCheck> => {
+//   const { data } = await axios.post(
+//     PASSWORD_VERIFY_URL,
+//     { user_id: userId, password },
+//     { timeout: 15000 }
+//   );
+//   return {
+//     verified: Boolean(
+//       data?.verified ?? data?.valid ?? data?.authenticated ?? data?.success
+//     ),
+//     message: typeof data?.message === 'string' ? data.message : undefined,
+//     action: typeof data?.action === 'string' ? data.action : undefined,
+//     retryable:
+//       typeof data?.retryable === 'boolean' ? data.retryable : undefined,
+//   };
+// };
+
+const defaultPasswordVerifier = async (
+  userId: string,
+  password: string
+): Promise<PasswordCheck> => {
+  const response = await apiClient.post<{
+    status_code: number;
+    verified?: boolean;
+    valid?: boolean;
+    authenticated?: boolean;
+    success?: boolean;
+    message?: string;
+    detail?: string;
+    action?: string;
+    retryable?: boolean;
+  }>('/user/authenticate', {
+    user_id: userId,
+    password,
+  });
+
+  if (response.data?.status_code != 200) {
+    return {
+      verified: false,
+      message: response.data?.detail ?? response.error,
+      retryable: response.data?.status_code == 404 ? false : true,
+    };
+  }
+  // if (!response.success) {
+  //   return {
+  //     verified: false,
+  //     message: response.message ?? response.error,
+  //     retryable: true,
+  //   };
+  // }
+
+  const result = response.data;
+  return {
+    verified: Boolean(
+      result?.verified ??
+      result?.valid ??
+      result?.authenticated ??
+      result?.success
+    ),
+    message: typeof result?.message === 'string' ? result.message : undefined,
+    action: typeof result?.action === 'string' ? result.action : undefined,
+    retryable:
+      typeof result?.retryable === 'boolean' ? result.retryable : undefined,
+  };
+};
+
+const MAX_PASSWORD_TRIES = 3;
 const COUNTDOWN_FROM = 3;
 const COUNTDOWN_STEP = 800; // ms per countdown number
 const MAX_ATTEMPTS_BEFORE_HINT = 3;
 
-const CHALLENGES: Record<string, { title: string; hint: string }> = {
-  BLINK: { title: 'Blink your eyes', hint: 'Blink naturally, twice' },
-  TURN_LEFT: {
-    title: 'Turn your head left',
-    hint: 'Slowly, then back to center',
-  },
-  TURN_RIGHT: {
-    title: 'Turn your head right',
-    hint: 'Slowly, then back to center',
-  },
-};
+/* ------------------------- challenge catalogue ---------------------------- */
 
-const getChallengeMeta = (c?: string | null) =>
-  (c && CHALLENGES[c]) || {
-    title: 'Follow the instruction',
-    hint: c ?? 'Look at the camera',
+type GuideKind =
+  | 'blink'
+  | 'turn-left'
+  | 'turn-right'
+  | 'smile'
+  | 'mouth'
+  | 'nod-up'
+  | 'nod-down'
+  | 'nod'
+  | 'closer'
+  | 'back'
+  | 'unknown';
+
+const GUIDES: Record<GuideKind, { title: string; hint: string; cue: string }> =
+  {
+    blink: {
+      title: 'Blink your eyes',
+      hint: 'Blink naturally, twice',
+      cue: 'BLINK NOW',
+    },
+    'turn-left': {
+      title: 'Turn your head left',
+      hint: 'Slowly, then back to center',
+      cue: 'TURN LEFT NOW',
+    },
+    'turn-right': {
+      title: 'Turn your head right',
+      hint: 'Slowly, then back to center',
+      cue: 'TURN RIGHT NOW',
+    },
+    smile: {
+      title: 'Smile and show your teeth',
+      hint: 'A big, natural smile, then relax',
+      cue: 'SMILE NOW',
+    },
+    mouth: {
+      title: 'Open and close your mouth',
+      hint: 'Like a slow yawn, then close',
+      cue: 'OPEN & CLOSE',
+    },
+    'nod-up': {
+      title: 'Tilt your head up',
+      hint: 'Chin up, then back to center',
+      cue: 'NOD UP NOW',
+    },
+    'nod-down': {
+      title: 'Nod your head down',
+      hint: 'Chin down, then back to center',
+      cue: 'NOD DOWN NOW',
+    },
+    nod: {
+      title: 'Nod your head',
+      hint: 'Up, then down, then center',
+      cue: 'NOD NOW',
+    },
+    closer: {
+      title: 'Move closer to the camera',
+      hint: 'Lean in slowly, then sit back',
+      cue: 'MOVE CLOSER',
+    },
+    back: {
+      title: 'Lean back from the camera',
+      hint: 'Move back slowly, then return',
+      cue: 'LEAN BACK',
+    },
+    unknown: {
+      title: 'Follow the instruction',
+      hint: 'Look at the camera',
+      cue: 'DO IT NOW',
+    },
   };
 
+/** Maps whatever the API sends (BLINK, TURN_LEFT, SMILE, NOD_UP, ...) to a guide. */
+const parseGuideKind = (raw?: string | null): GuideKind => {
+  const c = (raw ?? '').toUpperCase().replace(/[^A-Z]+/g, '_');
+  if (/BLINK/.test(c)) return 'blink';
+  if (/SMILE|TEETH/.test(c)) return 'smile';
+  if (/MOUTH|YAWN/.test(c)) return 'mouth';
+  if (/NOD|LOOK_(UP|DOWN)|HEAD_(UP|DOWN)/.test(c)) {
+    if (/UP/.test(c)) return 'nod-up';
+    if (/DOWN/.test(c)) return 'nod-down';
+    return 'nod';
+  }
+  if (/CLOSER|FORWARD|LEAN_IN|APPROACH|NEAR/.test(c)) return 'closer';
+  if (/BACK|AWAY|FARTHER|FURTHER|LEAN_OUT/.test(c)) return 'back';
+  if (/LEFT/.test(c)) return 'turn-left';
+  if (/RIGHT/.test(c)) return 'turn-right';
+  return 'unknown';
+};
+
+const resolveGuideKind = (raw?: string | null): GuideKind => {
+  const k = parseGuideKind(raw);
+  if (!FLIP_TURN_DIRECTION) return k;
+  if (k === 'turn-left') return 'turn-right';
+  if (k === 'turn-right') return 'turn-left';
+  return k;
+};
+
+/* ------------------------------- helpers ---------------------------------- */
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const buzz = (pattern: number | number[]) => {
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    /* not supported - ignore */
+  }
+};
+
+const fmtTime = (s: number) =>
+  `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
 /** Reads capture settings from the challenge response (flat or nested). */
 const parseCaptureSettings = (ch: ChallengeData): CaptureSettings => {
@@ -292,87 +488,180 @@ const extractError = (e: unknown): Failure => {
 /*  Drawn from the USER's point of view, matching the mirrored camera preview */
 /* -------------------------------------------------------------------------- */
 
-const FaceGuide: React.FC<{ type: string }> = ({ type }) => {
+const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
   const reduce = useReducedMotion();
-  const turn = type === 'TURN_LEFT' ? -1 : type === 'TURN_RIGHT' ? 1 : 0;
-  const loop = { duration: 2.4, repeat: Infinity, ease: 'easeInOut' as const };
+  const move = !reduce;
+  const times = [0, 0.35, 0.7, 1];
+  const loop = {
+    duration: 2.4,
+    repeat: Infinity,
+    ease: 'easeInOut' as const,
+    times,
+  };
   const fillBox = {
     transformBox: 'fill-box' as const,
     transformOrigin: 'center',
   };
 
+  const turn = kind === 'turn-left' ? -1 : kind === 'turn-right' ? 1 : 0;
+  const nod =
+    kind === 'nod-up'
+      ? [0, -9, -9, 0]
+      : kind === 'nod-down'
+        ? [0, 9, 9, 0]
+        : kind === 'nod'
+          ? [0, -9, 8, 0]
+          : null;
+  const scale =
+    kind === 'closer'
+      ? [1, 1.3, 1.3, 1]
+      : kind === 'back'
+        ? [1, 0.72, 0.72, 1]
+        : null;
+
+  const SMILE_CLOSED = 'M42 69 Q50 72 58 69 Z';
+  const SMILE_OPEN = 'M36 65 Q50 84 64 65 Z';
+
   return (
     <svg viewBox="0 0 100 100" className="w-full h-full" aria-hidden="true">
-      {/* head outline (moves a little) */}
-      <motion.ellipse
-        cx={50}
-        cy={50}
-        rx={25}
-        ry={33}
-        fill="rgba(255,255,255,0.08)"
-        stroke="rgba(255,255,255,0.75)"
-        strokeWidth={2}
-        animate={
-          turn && !reduce ? { x: [0, turn * 4, turn * 4, 0] } : undefined
-        }
-        transition={{ ...loop, times: [0, 0.35, 0.7, 1] }}
-      />
+      {/* target frame for "move closer" / "lean back" */}
+      {(kind === 'closer' || kind === 'back') && (
+        <ellipse
+          cx={50}
+          cy={50}
+          rx={kind === 'closer' ? 36 : 19}
+          ry={kind === 'closer' ? 45 : 25}
+          fill="none"
+          stroke="#fb923c"
+          strokeWidth={2}
+          strokeDasharray="4 4"
+        />
+      )}
 
-      {/* facial features (move more -> parallax = head turn illusion) */}
       <motion.g
         style={fillBox}
-        animate={
-          turn && !reduce
-            ? { x: [0, turn * 11, turn * 11, 0], scaleX: [1, 0.88, 0.88, 1] }
-            : undefined
-        }
-        transition={{ ...loop, times: [0, 0.35, 0.7, 1] }}
+        animate={move && scale ? { scale } : undefined}
+        transition={loop}
       >
-        {[40, 60].map((cx) => (
-          <motion.ellipse
-            key={cx}
-            cx={cx}
-            cy={44}
-            rx={3.6}
-            ry={4.6}
-            fill="#fff"
-            style={fillBox}
-            animate={
-              type === 'BLINK' && !reduce
-                ? { scaleY: [1, 0.1, 1, 1, 0.1, 1, 1] }
-                : undefined
-            }
-            transition={{
-              duration: 2.4,
-              repeat: Infinity,
-              times: [0, 0.1, 0.2, 0.5, 0.6, 0.7, 1],
-            }}
+        {/* head outline (moves a little) */}
+        <motion.ellipse
+          cx={50}
+          cy={50}
+          rx={25}
+          ry={33}
+          fill="rgba(255,255,255,0.08)"
+          stroke="rgba(255,255,255,0.75)"
+          strokeWidth={2}
+          animate={
+            move
+              ? turn
+                ? { x: [0, turn * 4, turn * 4, 0] }
+                : nod
+                  ? { y: nod.map((v) => v * 0.4) }
+                  : undefined
+              : undefined
+          }
+          transition={loop}
+        />
+
+        {/* facial features (move more -> parallax = head turn / nod illusion) */}
+        <motion.g
+          style={fillBox}
+          animate={
+            move
+              ? turn
+                ? {
+                    x: [0, turn * 11, turn * 11, 0],
+                    scaleX: [1, 0.88, 0.88, 1],
+                  }
+                : nod
+                  ? { y: nod }
+                  : undefined
+              : undefined
+          }
+          transition={loop}
+        >
+          {[40, 60].map((cx) => (
+            <motion.ellipse
+              key={cx}
+              cx={cx}
+              cy={44}
+              rx={3.6}
+              ry={4.6}
+              fill="#fff"
+              style={fillBox}
+              animate={
+                kind === 'blink' && move
+                  ? { scaleY: [1, 0.1, 1, 1, 0.1, 1, 1] }
+                  : undefined
+              }
+              transition={{
+                duration: 2.4,
+                repeat: Infinity,
+                times: [0, 0.1, 0.2, 0.5, 0.6, 0.7, 1],
+              }}
+            />
+          ))}
+          <path
+            d="M50 48 L47 58 L52 58"
+            fill="none"
+            stroke="rgba(255,255,255,0.7)"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
           />
-        ))}
-        <path
-          d="M50 48 L47 58 L52 58"
-          fill="none"
-          stroke="rgba(255,255,255,0.7)"
-          strokeWidth={1.8}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M42 69 Q50 74 58 69"
-          fill="none"
-          stroke="rgba(255,255,255,0.7)"
-          strokeWidth={1.8}
-          strokeLinecap="round"
-        />
+
+          {/* mouth */}
+          {kind === 'smile' ? (
+            <motion.path
+              d={move ? SMILE_CLOSED : SMILE_OPEN}
+              fill="#fff"
+              fillOpacity={move ? 0 : 1}
+              stroke="rgba(255,255,255,0.85)"
+              strokeWidth={1.8}
+              strokeLinejoin="round"
+              animate={
+                move
+                  ? {
+                      d: [SMILE_CLOSED, SMILE_OPEN, SMILE_OPEN, SMILE_CLOSED],
+                      fillOpacity: [0, 1, 1, 0],
+                    }
+                  : undefined
+              }
+              transition={loop}
+            />
+          ) : kind === 'mouth' ? (
+            <motion.ellipse
+              cx={50}
+              cy={70}
+              rx={7}
+              ry={8}
+              fill="rgba(0,0,0,0.55)"
+              stroke="rgba(255,255,255,0.85)"
+              strokeWidth={1.8}
+              style={fillBox}
+              animate={move ? { scaleY: [0.12, 1, 1, 0.12] } : undefined}
+              transition={loop}
+            />
+          ) : (
+            <path
+              d="M42 69 Q50 74 58 69"
+              fill="none"
+              stroke="rgba(255,255,255,0.7)"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+            />
+          )}
+        </motion.g>
       </motion.g>
 
-      {/* direction chevrons */}
+      {/* horizontal chevrons (turns) */}
       {turn !== 0 && (
         <motion.g
           animate={
-            reduce
-              ? { opacity: 1 }
-              : { opacity: [0, 1, 0], x: [0, turn * 5, turn * 9] }
+            move
+              ? { opacity: [0, 1, 0], x: [0, turn * 5, turn * 9] }
+              : { opacity: 1 }
           }
           transition={{ duration: 1.2, repeat: Infinity, ease: 'easeOut' }}
         >
@@ -387,8 +676,42 @@ const FaceGuide: React.FC<{ type: string }> = ({ type }) => {
         </motion.g>
       )}
 
+      {/* vertical chevrons (nods) */}
+      {nod && (kind === 'nod-up' || kind === 'nod') && (
+        <motion.g
+          animate={
+            move ? { opacity: [0, 1, 0], y: [0, -4, -8] } : { opacity: 1 }
+          }
+          transition={{ duration: 1.2, repeat: Infinity, ease: 'easeOut' }}
+        >
+          <polyline
+            points="41,17 50,8 59,17"
+            fill="none"
+            stroke="#fb923c"
+            strokeWidth={4}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </motion.g>
+      )}
+      {nod && (kind === 'nod-down' || kind === 'nod') && (
+        <motion.g
+          animate={move ? { opacity: [0, 1, 0], y: [0, 4, 8] } : { opacity: 1 }}
+          transition={{ duration: 1.2, repeat: Infinity, ease: 'easeOut' }}
+        >
+          <polyline
+            points="41,83 50,92 59,83"
+            fill="none"
+            stroke="#fb923c"
+            strokeWidth={4}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </motion.g>
+      )}
+
       {/* blink sparkle */}
-      {type === 'BLINK' && !reduce && (
+      {kind === 'blink' && move && (
         <motion.g
           animate={{ opacity: [0, 1, 0, 0, 1, 0, 0] }}
           transition={{
@@ -406,6 +729,39 @@ const FaceGuide: React.FC<{ type: string }> = ({ type }) => {
 };
 
 /* -------------------------------------------------------------------------- */
+/*  Enrollment step indicator                                                 */
+/* -------------------------------------------------------------------------- */
+
+const EnrollSteps: React.FC<{ active: number }> = ({ active }) => (
+  <ol
+    className="flex items-center justify-center gap-2 mb-5 text-[11px]"
+    aria-label="Enrollment progress"
+  >
+    {['Scan', 'Confirm', 'Done'].map((label, i) => (
+      <React.Fragment key={label}>
+        <li className="flex items-center gap-1.5">
+          <span
+            className={`w-5 h-5 rounded-full flex items-center justify-center font-semibold ${
+              i < active
+                ? 'bg-green-500 text-white'
+                : i === active
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-white/10 text-white/50'
+            }`}
+          >
+            {i < active ? '✓' : i + 1}
+          </span>
+          <span className={i === active ? 'text-white' : 'text-white/50'}>
+            {label}
+          </span>
+        </li>
+        {i < 2 && <span className="w-6 h-px bg-white/20" aria-hidden="true" />}
+      </React.Fragment>
+    ))}
+  </ol>
+);
+
+/* -------------------------------------------------------------------------- */
 /*  Progress ring                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -420,6 +776,7 @@ const ringColor: Record<Phase, string> = {
   preparing: '#a78bfa',
   'get-ready': '#fb923c',
   capturing: '#fb923c',
+  password: '#60a5fa',
   processing: '#a78bfa',
   success: '#4ade80',
   error: '#f87171',
@@ -434,18 +791,23 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
   onBack,
   username,
   getEnrollmentToken,
+  verifyPassword,
   initialMode = 'verify',
 }) => {
+  const { loginWithFaceVerification } = useAuth();
   const reduce = useReducedMotion();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
   const mounted = useRef(true);
   const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // frames + one-time challenge held in memory while the password is entered
+  const pending = useRef<PendingEnrollment | null>(null);
+  const passwordTries = useRef(0);
 
-  // login is the default; enrollment only when a trusted token provider exists
   const [mode, setMode] = useState<Mode>(
     initialMode === 'enroll' ? 'enroll' : 'verify'
   );
@@ -462,6 +824,15 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
   const [captureTotal, setCaptureTotal] = useState(0);
   const [retryHint, setRetryHint] = useState<RetryHintKey | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
+  const [lighting, setLighting] = useState<'ok' | 'dark' | 'bright'>('ok');
+
+  // password step
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [sessionTotal, setSessionTotal] = useState(0);
 
   /* ------------------------------- camera -------------------------------- */
 
@@ -503,10 +874,34 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     startCamera();
     return () => {
       mounted.current = false;
+      pending.current = null;
       if (successTimer.current) clearTimeout(successTimer.current);
       stopCamera();
     };
   }, [startCamera, stopCamera]);
+
+  // Lightweight lighting check while the user is lining up (idle only).
+  useEffect(() => {
+    if (phase !== 'idle') return;
+    const c = document.createElement('canvas');
+    c.width = 32;
+    c.height = 24;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (!v || v.readyState < 2) return;
+      ctx.drawImage(v, 0, 0, 32, 24);
+      const d = ctx.getImageData(0, 0, 32, 24).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      }
+      const avg = sum / (d.length / 4);
+      setLighting(avg < 50 ? 'dark' : avg > 205 ? 'bright' : 'ok');
+    }, 1000);
+    return () => clearInterval(id);
+  }, [phase]);
 
   /* ------------------------------ capture -------------------------------- */
 
@@ -545,9 +940,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                   ? new File(
                       [blob],
                       `frame_${String(index).padStart(3, '0')}.jpg`,
-                      {
-                        type: 'image/jpeg',
-                      }
+                      { type: 'image/jpeg' }
                     )
                   : null
               ),
@@ -579,6 +972,82 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     setMessage(msg);
     setAttempts((a) => a + 1);
     setPhase('error');
+    buzz([60, 40, 60]);
+  };
+
+  /* ------------------------- submit to /auth/* --------------------------- */
+
+  const submitToApi = async (
+    frames: File[],
+    challengeId: string,
+    headers?: Record<string, string>
+  ) => {
+    setPhase('processing');
+    const form = new FormData();
+    form.append('user_id', userId);
+    form.append('challenge_id', challengeId);
+    frames.forEach((f) => form.append('files', f));
+
+    const { data } = await axios.post<ApiResponse>(
+      `${API_BASE}/auth/${mode === 'enroll' ? 'enroll' : 'verify'}`,
+      form,
+      { timeout: 60000, headers }
+    );
+    if (!mounted.current) return;
+    setResult(data);
+
+    const ok =
+      data.success &&
+      (mode === 'enroll' ? data.enrolled !== false : !!data.authenticated);
+    if (ok) {
+      setAttempts(0);
+      buzz(30);
+      stopCamera(); // release the camera (and its LED) as soon as we're done
+      if (mode === 'verify') {
+        const signedIn = await loginWithFaceVerification(userId, data.token ?? '');
+        if (!mounted.current) return;
+        if (!signedIn) {
+          fail('Face verification passed, but sign in could not be completed. Please try again.');
+          return;
+        }
+        setPhase('success');
+        successTimer.current = setTimeout(onSuccess, 1400);
+      } else {
+        setPhase('success');
+      }
+    } else {
+      const f = toFailure(
+        data,
+        mode === 'enroll' ? 'Enrollment failed' : 'Face not recognized'
+      );
+      fail(f.message, f.hintSource, f);
+    }
+  };
+
+  // Fetches a fresh grant from the onboarding backend. Called only after the
+  // password is verified, and used immediately (never stored).
+  const acquireEnrollHeaders = async (): Promise<Record<
+    string,
+    string
+  > | null> => {
+    let grant: EnrollmentGrant | undefined;
+    try {
+      const g = await (getEnrollmentToken ?? defaultEnrollmentTokenProvider)(
+        userId
+      );
+      grant = typeof g === 'string' ? { token: g } : g;
+    } catch {
+      grant = undefined;
+    }
+    if (!grant?.token) {
+      fail('You are not authorized to enroll this account.', '', {
+        code: 'ENROLLMENT_AUTH_REQUIRED',
+        action: 'Sign in through the trusted onboarding flow and retry.',
+        retryable: false,
+      });
+      return null;
+    }
+    return { Authorization: `Bearer ${grant.token}` };
   };
 
   /* ------------------------------ main flow ------------------------------ */
@@ -586,6 +1055,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
   const runScan = async () => {
     if (busy.current) return;
     busy.current = true;
+    pending.current = null;
     setResult(null);
     setMessage('');
     setProgress(0);
@@ -593,57 +1063,33 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     setRetryHint(null);
     setFailure(null);
     setChallenge(null);
+    setPassword('');
+    setPasswordError('');
+    setShowPassword(false);
 
     try {
       // guard: nothing can start without a username from the login form
       if (!userId) {
-        fail('Enter your username first.', undefined, {
+        fail('Enter your username first.', '', {
           action: 'Go back, type your username, then open Face ID again.',
           retryable: false,
         });
         return;
       }
-
-      // 0. enrollment only: get a fresh grant from the trusted onboarding backend.
-      //    Requested per attempt (grants live <= 5 min), held in a local variable
-      //    only - never in state, storage, logs or the URL.
-      let enrollHeaders: Record<string, string> | undefined;
-      let enrollExpiresAt = 0;
-
-      // Fetches a grant and records when it expires (issuer `expires_in`, 300s).
-      // Returns false (after showing the error) if no token could be obtained.
-      const loadToken = async (): Promise<boolean> => {
-        let grant: EnrollmentGrant | undefined;
-        try {
-          const g = await (
-            getEnrollmentToken ?? defaultEnrollmentTokenProvider
-          )(userId);
-          grant = typeof g === 'string' ? { token: g } : g;
-        } catch {
-          grant = undefined;
-        }
-        if (!grant?.token) {
-          fail('You are not authorized to enroll this account.', undefined, {
-            code: 'ENROLLMENT_AUTH_REQUIRED',
-            action: 'Sign in through the trusted onboarding flow and retry.',
-            retryable: false,
-          });
-          return false;
-        }
-        enrollHeaders = { Authorization: `Bearer ${grant.token}` };
-        enrollExpiresAt = Date.now() + (grant.expiresIn ?? 300) * 1000;
-        return true;
-      };
-
-      if (mode === 'enroll' && !(await loadToken())) return;
+      if (mode === 'enroll' && passwordTries.current >= MAX_PASSWORD_TRIES) {
+        fail('Too many incorrect passwords.', '', {
+          code: 'PASSWORD_ATTEMPTS_EXCEEDED',
+          action: 'For your security, sign in again to set up Face ID.',
+          retryable: false,
+        });
+        return;
+      }
 
       // 1. challenge (always a fresh one per attempt)
       setPhase('preparing');
       const { data: ch } = await axios.get<ChallengeData>(
         `${API_BASE}/auth/challenge`,
-        {
-          timeout: 20000,
-        }
+        { timeout: 20000 }
       );
       if (!mounted.current) return;
       setChallenge(ch);
@@ -674,46 +1120,18 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
         return;
       }
 
-      // 4. submit
-      setPhase('processing');
-      const form = new FormData();
-      form.append('user_id', userId);
-      form.append('challenge_id', ch.challenge_id);
-      frames.forEach((f) => form.append('files', f));
-
-      // the grant must be used within `expires_in`; refresh if it is about to lapse
-      if (
-        mode === 'enroll' &&
-        Date.now() > enrollExpiresAt - 5000 &&
-        !(await loadToken())
-      ) {
+      // 4a. enrollment: confirm the person's password BEFORE calling /auth/enroll
+      if (mode === 'enroll') {
+        pending.current = { frames, challengeId: ch.challenge_id, expiresAt };
+        const ttl = Math.max(1, Math.round((expiresAt - Date.now()) / 1000));
+        setSessionTotal(ttl);
+        setSecondsLeft(ttl);
+        setPhase('password');
         return;
       }
 
-      const { data } = await axios.post<ApiResponse>(
-        `${API_BASE}/auth/${mode === 'enroll' ? 'enroll' : 'verify'}`,
-        form,
-        { timeout: 60000, headers: enrollHeaders }
-      );
-      if (!mounted.current) return;
-      setResult(data);
-
-      const ok =
-        data.success &&
-        (mode === 'enroll' ? data.enrolled !== false : !!data.authenticated);
-      if (ok) {
-        setPhase('success');
-        setAttempts(0);
-        if (mode === 'verify') {
-          successTimer.current = setTimeout(onSuccess, 1400);
-        }
-      } else {
-        const f = toFailure(
-          data,
-          mode === 'enroll' ? 'Enrollment failed' : 'Face not recognized'
-        );
-        fail(f.message, f.hintSource, f);
-      }
+      // 4b. login: submit straight away
+      await submitToApi(frames, ch.challenge_id);
     } catch (e) {
       if (mounted.current) {
         const f = extractError(e);
@@ -721,12 +1139,150 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       }
     } finally {
       busy.current = false;
-      setChallenge((c) => (mounted.current ? c : null));
     }
   };
 
+  /* -------------------- enrollment: password confirmation ---------------- */
+
+  const cancelPassword = () => {
+    if (passwordBusy) return;
+    pending.current = null;
+    setPassword('');
+    setPasswordError('');
+    setShowPassword(false);
+    setChallenge(null);
+    setProgress(0);
+    setPhase('idle');
+  };
+
+  const handlePasswordSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const p = pending.current;
+    if (!p || busy.current || passwordBusy || !password) return;
+
+    if (Date.now() > p.expiresAt - 2000) {
+      pending.current = null;
+      setPassword('');
+      fail('Your scan expired before the password was confirmed.', '', {
+        action: 'Scan again. Each scan is only valid for a short time.',
+      });
+      return;
+    }
+
+    busy.current = true;
+    setPasswordBusy(true);
+    setPasswordError('');
+    const entered = password;
+    setPassword(''); // never keep the password in state longer than needed
+
+    try {
+      // 1. verify the password with the backend
+      let check: PasswordCheck;
+      try {
+        const r = await (verifyPassword ?? defaultPasswordVerifier)(
+          userId,
+          entered
+        );
+        check = typeof r === 'boolean' ? { verified: r } : r;
+      } catch (err) {
+        const status = axios.isAxiosError(err)
+          ? err.response?.status
+          : undefined;
+        const f = extractError(err);
+        if (status && [400, 401, 403, 422].includes(status)) {
+          check = {
+            verified: false,
+            message: f.message,
+            retryable: f.retryable,
+          };
+        } else {
+          // network / server problem: not the user's fault, don't count a try
+          setPasswordError(`${f.message} Please try again.`);
+          return;
+        }
+      }
+      if (!mounted.current) return;
+
+      if (!check.verified) {
+        passwordTries.current += 1;
+        const left = MAX_PASSWORD_TRIES - passwordTries.current;
+        if (check.retryable === false || left <= 0) {
+          pending.current = null;
+          fail(
+            left <= 0
+              ? 'Too many incorrect passwords.'
+              : (check.message ?? 'Password verification failed.'),
+            '',
+            {
+              code: 'PASSWORD_ATTEMPTS_EXCEEDED',
+              action:
+                check.action ??
+                'For your security, sign in again to set up Face ID.',
+              retryable: false,
+            }
+          );
+          return;
+        }
+        setPasswordError(
+          `${check.message ?? 'Incorrect password.'} ${left} attempt${
+            left === 1 ? '' : 's'
+          } left.`
+        );
+        passwordRef.current?.focus();
+        buzz([60, 40, 60]);
+        return;
+      }
+
+      // 2. verified -> get a fresh grant, then call /auth/enroll
+      passwordTries.current = 0;
+      setShowPassword(false);
+      setPhase('processing');
+      const headers = await acquireEnrollHeaders();
+      if (!headers) return;
+      pending.current = null;
+      await submitToApi(p.frames, p.challengeId, headers);
+    } catch (err) {
+      if (mounted.current) {
+        const f = extractError(err);
+        fail(f.message, f.hintSource, f);
+      }
+    } finally {
+      busy.current = false;
+      if (mounted.current) setPasswordBusy(false);
+    }
+  };
+
+  // Countdown for the one-time challenge while the password prompt is open.
+  useEffect(() => {
+    if (phase !== 'password') return;
+    const tick = () => {
+      const p = pending.current;
+      if (!p) return;
+      const left = Math.max(0, Math.ceil((p.expiresAt - Date.now()) / 1000));
+      setSecondsLeft(left);
+      if (left <= 0 && !busy.current) {
+        pending.current = null;
+        setPassword('');
+        fail('Time ran out before your password was confirmed.', '', {
+          action: 'Scan again. Each scan is only valid for a short time.',
+        });
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase === 'password') passwordRef.current?.focus();
+  }, [phase]);
+
+  /* ------------------------------ mode switch ---------------------------- */
+
   const switchMode = (m: Mode) => {
     if (busy.current) return;
+    pending.current = null;
     setMode(m);
     setResult(null);
     setMessage('');
@@ -735,24 +1291,41 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     setProgress(0);
     setRetryHint(null);
     setFailure(null);
-    if (phase !== 'camera-error') setPhase('idle');
+    setPassword('');
+    setPasswordError('');
+    if (!streamRef.current) {
+      startCamera(); // camera was released after success
+    } else if (phase !== 'camera-error') {
+      setPhase('idle');
+    }
   };
 
   /* ------------------------------ derived UI ----------------------------- */
 
-  const shownType = challenge
-    ? displayChallenge(challenge.challenge)
-    : undefined;
-  const meta = getChallengeMeta(shownType);
+  const kind: GuideKind = challenge
+    ? resolveGuideKind(challenge.challenge)
+    : 'unknown';
+  const guide = GUIDES[kind];
+  const guideHint =
+    kind === 'unknown' && challenge?.challenge
+      ? `Instruction: ${challenge.challenge}`
+      : guide.hint;
 
   // Capture timeline (by frame progress): face the camera -> act on cue -> settle.
-  // Frames are recorded continuously through all three stages, so the action
-  // is always inside the frames that /auth/verify validates.
   const stage: 'straight' | 'action' | 'settle' =
     progress < 20 ? 'straight' : progress < 88 ? 'action' : 'settle';
   const showGuide = !!challenge && ['get-ready', 'capturing'].includes(phase);
   const canSwitch =
     phase === 'idle' || phase === 'error' || phase === 'camera-error';
+  const enrollStep =
+    phase === 'success'
+      ? 3
+      : phase === 'processing'
+        ? 2
+        : phase === 'password'
+          ? 1
+          : 0;
+  const lowTime = phase === 'password' && secondsLeft <= 10;
 
   const copy: Record<Phase, { title: string; subtitle: string }> = {
     'camera-init': {
@@ -777,7 +1350,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       subtitle: 'Requesting a one-time challenge',
     },
     'get-ready': {
-      title: meta.title,
+      title: guide.title,
       subtitle: 'Face the camera. Do this when the scan starts',
     },
     capturing:
@@ -787,8 +1360,12 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
             subtitle: 'Face the camera, your cue is coming',
           }
         : stage === 'action'
-          ? { title: `${meta.title} now`, subtitle: meta.hint }
+          ? { title: `${guide.title} now`, subtitle: guideHint }
           : { title: 'Hold still', subtitle: 'Almost done…' },
+    password: {
+      title: 'Confirm it’s you',
+      subtitle: 'Enter your password to finish setting up Face ID',
+    },
     processing:
       mode === 'verify'
         ? {
@@ -819,12 +1396,19 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
         ? progress / 100
         : phase === 'get-ready'
           ? (COUNTDOWN_FROM - countdown + 1) / COUNTDOWN_FROM
-          : 0;
+          : phase === 'password'
+            ? sessionTotal
+              ? secondsLeft / sessionTotal
+              : 1
+            : 0;
+  const ringStroke = lowTime ? '#fb923c' : ringColor[phase];
 
   const similarity =
     phase === 'success' && mode === 'verify' && result?.similarity != null
       ? Math.round(result.similarity * 100)
       : null;
+
+  const backDisabled = phase === 'processing' || passwordBusy;
 
   /* -------------------------------- render ------------------------------- */
 
@@ -846,10 +1430,11 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
           <div className="flex items-center justify-between mb-6">
             <motion.button
               onClick={onBack}
+              disabled={backDisabled}
               aria-label="Go back"
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className="p-2 bg-white/10 rounded-xl text-white/70 hover:text-white hover:bg-white/20 transition-all"
+              whileHover={backDisabled ? undefined : { scale: 1.05 }}
+              whileTap={backDisabled ? undefined : { scale: 0.95 }}
+              className="p-2 bg-white/10 rounded-xl text-white/70 hover:text-white hover:bg-white/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <ArrowLeft className="w-5 h-5" />
             </motion.button>
@@ -869,10 +1454,15 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
             </div>
           </div>
 
+          {mode === 'enroll' &&
+            !['camera-init', 'camera-error'].includes(phase) && (
+              <EnrollSteps active={enrollStep} />
+            )}
+
           {/* Camera ring */}
           <div className="flex justify-center mb-6">
             <div className="relative w-[min(24rem,82vw)] aspect-square">
-              {/* ring */}
+              {/* progress ring (static SVG: the only thing that animates is the dash offset) */}
               <svg
                 viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
                 className="absolute inset-0 w-full h-full -rotate-90"
@@ -886,46 +1476,69 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                   stroke="rgba(255,255,255,0.12)"
                   strokeWidth={6}
                 />
-                {phase === 'processing' ? (
-                  <motion.circle
-                    cx={RING_SIZE / 2}
-                    cy={RING_SIZE / 2}
-                    r={RING_R}
-                    fill="none"
-                    stroke={ringColor.processing}
-                    strokeWidth={6}
-                    strokeLinecap="round"
-                    strokeDasharray={`${RING_C * 0.28} ${RING_C}`}
-                    style={{
-                      transformBox: 'fill-box',
-                      transformOrigin: 'center',
-                    }}
-                    animate={{ rotate: 360 }}
-                    transition={{
-                      repeat: Infinity,
-                      duration: 1.1,
-                      ease: 'linear',
-                    }}
-                  />
-                ) : (
-                  <motion.circle
-                    cx={RING_SIZE / 2}
-                    cy={RING_SIZE / 2}
-                    r={RING_R}
-                    fill="none"
-                    stroke={ringColor[phase]}
-                    strokeWidth={6}
-                    strokeLinecap="round"
-                    strokeDasharray={RING_C}
-                    initial={false}
-                    animate={{ strokeDashoffset: RING_C * (1 - ringProgress) }}
-                    transition={{ duration: phase === 'capturing' ? 0.2 : 0.5 }}
-                  />
-                )}
+                <motion.circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_R}
+                  fill="none"
+                  stroke={ringStroke}
+                  strokeWidth={6}
+                  strokeLinecap="round"
+                  strokeDasharray={RING_C}
+                  initial={false}
+                  animate={{
+                    strokeDashoffset: RING_C * (1 - ringProgress),
+                    opacity:
+                      phase === 'processing' || ringProgress <= 0 ? 0 : 1,
+                  }}
+                  transition={{
+                    duration:
+                      phase === 'capturing'
+                        ? 0.2
+                        : phase === 'password'
+                          ? 0.9
+                          : 0.5,
+                    ease: phase === 'password' ? 'linear' : 'easeOut',
+                  }}
+                />
               </svg>
 
-              {/* video (always mounted so the stream survives every state) */}
-              <div className="absolute inset-[14px] rounded-full overflow-hidden bg-black/30 border border-white/20">
+              {/* processing spinner: an HTML wrapper rotates around its own centre,
+                  so the arc can never drift off the ring */}
+              {phase === 'processing' && (
+                <motion.div
+                  className="absolute inset-0"
+                  style={{ willChange: 'transform' }}
+                  initial={{ rotate: 0 }}
+                  animate={{ rotate: 360 }}
+                  transition={{
+                    repeat: Infinity,
+                    duration: 1.1,
+                    ease: 'linear',
+                  }}
+                >
+                  <svg
+                    viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+                    className="w-full h-full"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      cx={RING_SIZE / 2}
+                      cy={RING_SIZE / 2}
+                      r={RING_R}
+                      fill="none"
+                      stroke={ringColor.processing}
+                      strokeWidth={6}
+                      strokeLinecap="round"
+                      strokeDasharray={`${RING_C * 0.28} ${RING_C}`}
+                    />
+                  </svg>
+                </motion.div>
+              )}
+
+              {/* video (always mounted so the stream survives every state).
+                  Inset is a % so it always keeps the same gap to the ring. */}
+              <div className="absolute inset-[5.5%] rounded-full overflow-hidden bg-black/30 border border-white/20">
                 <video
                   ref={videoRef}
                   autoPlay
@@ -934,11 +1547,13 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                   className={`w-full h-full object-cover transition-all duration-500 ${
                     phase === 'camera-init' || phase === 'camera-error'
                       ? 'opacity-0'
-                      : phase === 'processing' ||
-                          phase === 'success' ||
-                          phase === 'error'
-                        ? 'opacity-50 blur-[2px]'
-                        : 'opacity-100'
+                      : phase === 'password'
+                        ? 'opacity-40 blur-sm'
+                        : phase === 'processing' ||
+                            phase === 'success' ||
+                            phase === 'error'
+                          ? 'opacity-50 blur-[2px]'
+                          : 'opacity-100'
                   }`}
                   style={{ transform: 'scaleX(-1)' }}
                 />
@@ -1028,43 +1643,79 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                               : 'border-green-400'
                         }`}
                       />
-                      <span className="absolute top-8 left-1/2 -translate-x-1/2 text-[10px] font-semibold tracking-widest text-white bg-orange-500/90 px-2 py-0.5 rounded-full">
+
+                      {/* target frame for move closer / lean back */}
+                      {stage === 'action' &&
+                        (kind === 'closer' || kind === 'back') && (
+                          <div
+                            className={`absolute rounded-[50%] border-2 border-dashed border-orange-300 ${
+                              kind === 'closer'
+                                ? 'w-[86%] h-[94%]'
+                                : 'w-[40%] h-[52%]'
+                            }`}
+                          />
+                        )}
+
+                      <span className="absolute top-[9%] left-1/2 -translate-x-1/2 text-[10px] font-semibold tracking-widest text-white bg-orange-500/90 px-2 py-0.5 rounded-full">
                         REC {frameCount}/{captureTotal}
                       </span>
 
                       {/* direction cue during the action stage */}
                       {stage === 'action' &&
-                        (shownType === 'TURN_LEFT' ||
-                          shownType === 'TURN_RIGHT') && (
+                        (kind === 'turn-left' || kind === 'turn-right') && (
                           <motion.div
                             className={`absolute top-1/2 -translate-y-1/2 text-orange-300 ${
-                              shownType === 'TURN_LEFT' ? 'left-3' : 'right-3'
+                              kind === 'turn-left' ? 'left-3' : 'right-3'
                             }`}
                             animate={
                               reduce
                                 ? undefined
                                 : {
-                                    x: [
-                                      0,
-                                      shownType === 'TURN_LEFT' ? -8 : 8,
-                                      0,
-                                    ],
+                                    x: [0, kind === 'turn-left' ? -8 : 8, 0],
                                     opacity: [0.6, 1, 0.6],
                                   }
                             }
                             transition={{ duration: 0.8, repeat: Infinity }}
                           >
-                            {shownType === 'TURN_LEFT' ? (
+                            {kind === 'turn-left' ? (
                               <ChevronsLeft className="w-10 h-10" />
                             ) : (
                               <ChevronsRight className="w-10 h-10" />
                             )}
                           </motion.div>
                         )}
+                      {stage === 'action' &&
+                        (kind === 'nod-up' || kind === 'nod') && (
+                          <motion.div
+                            className="absolute top-[17%] left-1/2 -translate-x-1/2 text-orange-300"
+                            animate={
+                              reduce
+                                ? undefined
+                                : { y: [0, -8, 0], opacity: [0.6, 1, 0.6] }
+                            }
+                            transition={{ duration: 0.8, repeat: Infinity }}
+                          >
+                            <ChevronsUp className="w-10 h-10" />
+                          </motion.div>
+                        )}
+                      {stage === 'action' &&
+                        (kind === 'nod-down' || kind === 'nod') && (
+                          <motion.div
+                            className="absolute bottom-[24%] left-1/2 -translate-x-1/2 text-orange-300"
+                            animate={
+                              reduce
+                                ? undefined
+                                : { y: [0, 8, 0], opacity: [0.6, 1, 0.6] }
+                            }
+                            transition={{ duration: 0.8, repeat: Infinity }}
+                          >
+                            <ChevronsDown className="w-10 h-10" />
+                          </motion.div>
+                        )}
 
                       {/* stage cue pill */}
                       <span
-                        className={`absolute bottom-10 left-1/2 -translate-x-1/2 whitespace-nowrap text-sm font-bold tracking-wide text-white px-4 py-1.5 rounded-full shadow-lg ${
+                        className={`absolute bottom-[12%] left-1/2 -translate-x-1/2 whitespace-nowrap text-sm font-bold tracking-wide text-white px-4 py-1.5 rounded-full shadow-lg ${
                           stage === 'action'
                             ? 'bg-orange-500'
                             : stage === 'settle'
@@ -1075,15 +1726,23 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                         {stage === 'straight'
                           ? 'LOOK STRAIGHT'
                           : stage === 'action'
-                            ? shownType === 'BLINK'
-                              ? 'BLINK NOW'
-                              : shownType === 'TURN_LEFT'
-                                ? 'TURN LEFT NOW'
-                                : shownType === 'TURN_RIGHT'
-                                  ? 'TURN RIGHT NOW'
-                                  : 'DO IT NOW'
+                            ? guide.cue
                             : 'HOLD STILL'}
                       </span>
+                    </motion.div>
+                  )}
+
+                  {phase === 'password' && (
+                    <motion.div
+                      key="pw"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 flex items-center justify-center"
+                    >
+                      <div className="w-20 h-20 rounded-full bg-blue-500/30 border border-blue-300/50 flex items-center justify-center">
+                        <Lock className="w-9 h-9 text-white" />
+                      </div>
                     </motion.div>
                   )}
 
@@ -1141,7 +1800,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
 
               {/* LIVE badge */}
               {['idle', 'get-ready', 'capturing'].includes(phase) && (
-                <div className="absolute top-3 right-6 flex items-center gap-1 bg-black/40 backdrop-blur px-2 py-1 rounded-full">
+                <div className="absolute top-[3%] right-[12%] flex items-center gap-1 bg-black/40 backdrop-blur px-2 py-1 rounded-full">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                   <span className="text-[10px] font-semibold text-white">
                     LIVE
@@ -1150,6 +1809,24 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
               )}
             </div>
           </div>
+
+          {/* Lighting warning (idle only) */}
+          <AnimatePresence>
+            {phase === 'idle' && lighting !== 'ok' && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mb-4 flex items-center justify-center gap-2 text-xs text-amber-200 bg-amber-500/10 border border-amber-400/30 rounded-full px-3 py-1.5 w-fit mx-auto"
+                role="status"
+              >
+                <Lightbulb className="w-4 h-4" />
+                {lighting === 'dark'
+                  ? 'Too dark. Move somewhere brighter.'
+                  : 'Too bright. Avoid strong light behind you.'}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Title & subtitle */}
           <div className="text-center mb-5 min-h-[4.25rem]" aria-live="polite">
@@ -1203,36 +1880,49 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
               >
                 <div className="mb-5 flex items-center gap-4 p-3 rounded-2xl bg-gradient-to-r from-orange-600/20 to-amber-600/10 border border-orange-400/30">
                   <div className="w-20 h-20 shrink-0 rounded-xl bg-white/5 border border-white/10">
-                    <FaceGuide type={displayChallenge(challenge.challenge)} />
+                    <FaceGuide kind={kind} />
                   </div>
                   <div className="text-left">
                     <div className="flex items-center gap-1.5 text-orange-300 text-[11px] font-semibold uppercase tracking-wide mb-0.5">
                       <Sparkles className="w-3.5 h-3.5" />
                       Liveness check
                     </div>
-                    <div className="text-white font-semibold">{meta.title}</div>
-                    <div className="text-white/60 text-xs">{meta.hint}</div>
+                    <div className="text-white font-semibold">
+                      {guide.title}
+                    </div>
+                    <div className="text-white/60 text-xs">{guideHint}</div>
                   </div>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Idle tip */}
-          {phase === 'idle' && (
-            <div className="flex flex-wrap justify-center gap-2 mb-5">
-              {[
-                'Only your face in view',
-                'Look straight first',
-                'Act when the cue appears',
-              ].map((t) => (
-                <span
-                  key={t}
-                  className="text-[11px] text-white/70 bg-white/5 border border-white/10 rounded-full px-3 py-1"
-                >
-                  {t}
-                </span>
-              ))}
+          {/* Idle: how it works */}
+          {phase === 'idle' && !!userId && (
+            <div className="mb-5">
+              <ol className="grid grid-cols-3 gap-2 text-center">
+                {[
+                  ['1', 'Look straight'],
+                  ['2', 'Act on the cue'],
+                  ['3', 'Hold still'],
+                ].map(([n, t]) => (
+                  <li
+                    key={n}
+                    className="flex flex-col items-center gap-1.5 rounded-xl bg-white/5 border border-white/10 py-2.5 px-1"
+                  >
+                    <span className="w-5 h-5 rounded-full bg-blue-500/30 text-blue-200 text-[11px] font-semibold flex items-center justify-center">
+                      {n}
+                    </span>
+                    <span className="text-[11px] text-white/70 leading-tight">
+                      {t}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              <p className="text-center text-[11px] text-white/45 mt-2.5">
+                Only your face in view · You may be asked to blink, turn, smile,
+                nod, open your mouth, or move closer or back
+              </p>
             </div>
           )}
 
@@ -1248,7 +1938,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
               >
                 {retryHint === 'perform-action' && challenge ? (
                   <div className="w-16 h-16 shrink-0 rounded-xl bg-white/5 border border-white/10">
-                    <FaceGuide type={displayChallenge(challenge.challenge)} />
+                    <FaceGuide kind={kind} />
                   </div>
                 ) : (
                   <Lightbulb className="w-5 h-5 mt-0.5 text-amber-300 shrink-0" />
@@ -1264,6 +1954,113 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Password confirmation (enrollment only) */}
+          {phase === 'password' && (
+            <motion.form
+              onSubmit={handlePasswordSubmit}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-3 mb-1"
+              noValidate
+            >
+              {/* lets password managers pair the password with the account */}
+              <input
+                type="text"
+                name="username"
+                autoComplete="username"
+                value={userId}
+                readOnly
+                tabIndex={-1}
+                aria-hidden="true"
+                className="sr-only"
+              />
+              <label htmlFor="face-enroll-password" className="sr-only">
+                Password
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/50 pointer-events-none" />
+                <input
+                  id="face-enroll-password"
+                  ref={passwordRef}
+                  type={showPassword ? 'text' : 'password'}
+                  name="password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (passwordError) setPasswordError('');
+                  }}
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
+                  disabled={passwordBusy}
+                  aria-invalid={!!passwordError}
+                  aria-describedby={
+                    passwordError ? 'face-enroll-password-error' : undefined
+                  }
+                  className="w-full pl-11 pr-12 py-3.5 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-blue-400/60 focus:border-blue-400/50 disabled:opacity-60 transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((s) => !s)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 text-white/60 hover:text-white transition-colors"
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-5 h-5" />
+                  ) : (
+                    <Eye className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+
+              {passwordError && (
+                <p
+                  id="face-enroll-password-error"
+                  role="alert"
+                  className="text-xs text-red-300 text-left"
+                >
+                  {passwordError}
+                </p>
+              )}
+
+              <div
+                className={`flex items-center justify-center gap-1.5 text-xs ${
+                  lowTime ? 'text-orange-300' : 'text-white/60'
+                }`}
+              >
+                <Timer className="w-3.5 h-3.5" />
+                Scan valid for {fmtTime(secondsLeft)}
+              </div>
+
+              <motion.button
+                type="submit"
+                disabled={!password || passwordBusy}
+                whileHover={
+                  !password || passwordBusy ? undefined : { scale: 1.02 }
+                }
+                whileTap={
+                  !password || passwordBusy ? undefined : { scale: 0.98 }
+                }
+                className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-semibold rounded-xl transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {passwordBusy ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <ShieldCheck className="w-5 h-5" />
+                )}
+                {passwordBusy ? 'Checking…' : 'Confirm & save Face ID'}
+              </motion.button>
+
+              <button
+                type="button"
+                onClick={cancelPassword}
+                disabled={passwordBusy}
+                className="block mx-auto text-sm text-white/60 hover:text-white transition-colors disabled:opacity-40"
+              >
+                Cancel and start over
+              </button>
+            </motion.form>
+          )}
 
           {/* Primary action */}
           <div className="space-y-3">

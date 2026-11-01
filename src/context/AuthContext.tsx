@@ -7,11 +7,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Clock, RefreshCw } from 'lucide-react';
 import { add } from 'date-fns';
 import type { LocalMachineInfo } from '../utils/machineInfoStore';
+import apiClient from '../utils/apiClient';
+import { jwtDecode } from 'jwt-decode';
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: UserInfo | null;
   login: (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo) => Promise<boolean>;
+  loginWithFaceVerification: (username: string, verificationToken: string) => Promise<boolean>;
   logout: () => void;
   loading: boolean;
   resetSessionTimer: () => void;
@@ -26,6 +29,23 @@ interface UserInfo {
   mfa_enabled: boolean;
   request_username: string;
   canViewSensitive?: boolean;
+}
+
+interface FaceVerificationToken {
+  sub?: string;
+  iss?: string;
+  jti?: string;
+  scope?: string;
+  exp?: number;
+}
+
+interface FaceLoginResponse {
+  status_code?: number;
+  access_token?: string;
+  user?: Omit<UserInfo, 'request_username'> & {
+    request_username?: string;
+    sessionId?: string;
+  };
 }
 
 // Mock admin user for development
@@ -263,7 +283,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const resetSessionTimer = () => {
-    if (!isAuthenticated || isLoggingOutRef.current) return;
+    if (isLoggingOutRef.current) return;
 
     clearTimers();
     lastActivityRef.current = Date.now();
@@ -452,6 +472,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const establishAuthenticatedSession = (
+    accessToken: string,
+    authenticatedUser: UserInfo
+  ) => {
+    localStorage.setItem('authToken', accessToken);
+    localStorage.setItem('userData', JSON.stringify(authenticatedUser));
+    localStorage.setItem('lastActivity', Date.now().toString());
+    setUser(authenticatedUser);
+    setIsAuthenticated(true);
+    resetSessionTimer();
+  };
+
   const login = async (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo): Promise<boolean> => {
     try {
       // Clear any existing session data
@@ -493,14 +525,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error('Login Response validation failed, session does not match.');
           return false;
         }
-        // Store token and user data
-        localStorage.setItem('authToken', decryptedResponse.access_token);
-        localStorage.setItem('userData', JSON.stringify(decryptedResponse.user));
-        localStorage.setItem('lastActivity', Date.now().toString());
-
-        setUser(decryptedResponse.user);
-        setIsAuthenticated(true);
-        resetSessionTimer();
+        establishAuthenticatedSession(
+          decryptedResponse.access_token,
+          decryptedResponse.user
+        );
         return true;
       }
       else {
@@ -515,6 +543,70 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Exchange the short-lived biometric verification token for the same
+  // application session used by password login, then update context and storage
+  // together so route guards, timers, and role based menus see one auth state.
+  const loginWithFaceVerification = async (
+    username: string,
+    verificationToken: string
+  ): Promise<boolean> => {
+    try {
+      const claims = jwtDecode<FaceVerificationToken>(verificationToken);
+      const requestedUsername = username.trim();
+      const tokenUsername = claims.sub?.trim();
+      if (
+        claims.scope !== 'face-verification' ||
+        !claims.iss ||
+        !claims.jti ||
+        !claims.exp ||
+        claims.exp <= Math.floor(Date.now() / 1000) ||
+        !tokenUsername ||
+        tokenUsername.toLowerCase() !== requestedUsername.toLowerCase()
+      ) {
+        throw new Error('Face verification token is invalid or expired. Please try again.');
+      }
+
+      clearTimers();
+      localStorage.removeItem('sessionWarningShown');
+      warningShownRef.current = false;
+      isLoggingOutRef.current = false;
+
+      const sessionId = `${claims.iss}-${claims.jti}`;
+      const response = await apiClient.post<FaceLoginResponse>('/user/efr-login', {
+        userId: tokenUsername,
+        sessionId,
+      });
+      const result = response.data;
+      if (
+        !response.success ||
+        result?.status_code !== 200 ||
+        !result.access_token ||
+        !result.user ||
+        result.user.sessionId !== sessionId ||
+        !result.user.id ||
+        !result.user.username ||
+        !result.user.role_id
+      ) {
+        throw new Error(response.error || 'Face ID sign in could not be completed. Please try again.');
+      }
+
+      establishAuthenticatedSession(result.access_token, {
+        ...result.user,
+        request_username: result.user.request_username ?? result.user.username,
+      });
+      return true;
+    } catch (error) {
+      console.error('Face ID login error:', error);
+      addNotification(
+        error instanceof Error ? error.message : 'Face ID sign in failed. Please try again.',
+        'error',
+        5000,
+        'Login Error'
+      );
+      return false;
+    }
+  };
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -523,7 +615,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, user, login, logout, loading, resetSessionTimer }}>
+    <AuthContext.Provider value={{ isAuthenticated, user, login, loginWithFaceVerification, logout, loading, resetSessionTimer }}>
       {children}
       <SessionTimeoutModal
         isOpen={showTimeoutModal}

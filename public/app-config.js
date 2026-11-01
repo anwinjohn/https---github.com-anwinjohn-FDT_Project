@@ -4,7 +4,7 @@ window.__APP_CONFIG__ = {
     authBaseUrl: 'http://127.0.0.1:8000',
     userInfo: 'http://localhost:5050/users',
     aisuggestions: 'http://0.0.0.0:8002',
-    EfrvBaseUrl: 'http://127.0.0.1:8000',
+    EfrvBaseUrl: 'http://127.0.0.1:8001',
     timeout: 30000,
   },
   auth: {
@@ -36,7 +36,7 @@ window.__APP_CONFIG__ = {
   environment: 'development',
   logging: {
     console_enabled: false,
-    api_enabled: true,
+    api_enabled: false,
     level: 'info',
     maxEntries: 1000,
   },
