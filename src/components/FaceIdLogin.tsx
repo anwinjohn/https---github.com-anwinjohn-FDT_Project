@@ -23,6 +23,9 @@ import {
   Eye,
   EyeOff,
   Timer,
+  X,
+  Pause,
+  WifiOff,
 } from 'lucide-react';
 import { appConfig as config } from '../config/runtime-config';
 import apiClient from '../utils/apiClient';
@@ -45,7 +48,7 @@ interface FaceIdLoginProps {
   /**
    * Verifies the account password before a face is enrolled. Return a boolean
    * or { verified, message?, action?, retryable? }. If omitted, the component
-   * calls PASSWORD_VERIFY_URL (below).
+   * calls /user/authenticate through apiClient.
    */
   verifyPassword?: (
     userId: string,
@@ -59,8 +62,6 @@ interface ChallengeData {
   challenge: string; // e.g. "BLINK" | "TURN_LEFT" | "TURN_RIGHT" | "SMILE" ...
   challenge_id: string;
   expires_in?: number;
-  // capture settings returned by GET /auth/challenge (field names are read
-  // defensively in parseCaptureSettings - adjust there if yours differ)
   [key: string]: unknown;
 }
 
@@ -71,7 +72,6 @@ interface ApiResponse {
   reason?: string;
   retry_hint?: string;
   hint?: string;
-  // structured result (enroll success and all errors)
   code?: string;
   message?: string;
   action?: string;
@@ -89,15 +89,15 @@ interface Failure {
 }
 
 interface CaptureSettings {
-  frames: number; // how many ordered frames to send
-  fps: number; // capture rate
+  frames: number;
+  fps: number;
   minFrames: number;
   maxFrames: number;
 }
 
 interface EnrollmentGrant {
-  token: string; // the issuer's `access_token`
-  expiresIn?: number; // seconds, from the issuer's `expires_in`
+  token: string;
+  expiresIn?: number;
 }
 
 interface PasswordCheck {
@@ -110,50 +110,72 @@ interface PasswordCheck {
 interface PendingEnrollment {
   frames: File[];
   challengeId: string;
-  expiresAt: number; // when the one-time challenge lapses
+  expiresAt: number;
 }
 
 type RetryHintKey = 'single-face' | 'perform-action' | 'steady';
 type Mode = 'verify' | 'enroll';
 
+/**
+ * Phase lifecycle (camera state in brackets):
+ *
+ *  camera-init [starting] -> idle [ON] -> preparing [ON] -> get-ready [ON]
+ *    -> capturing [ON] -> (camera released here)
+ *    -> verify: processing [OFF] -> success | error
+ *    -> enroll: password [OFF] -> processing [OFF] -> success | error
+ *
+ *  paused [OFF]       : idle timeout or tab hidden; user taps to resume
+ *  camera-error [OFF] : permission / device problem
+ *  error [OFF]        : retry re-acquires the camera
+ */
 type Phase =
   | 'camera-init'
   | 'camera-error'
+  | 'paused'
   | 'idle'
-  | 'preparing' // fetching challenge
-  | 'get-ready' // 3-2-1 with animated guide
+  | 'preparing'
+  | 'get-ready'
   | 'capturing'
-  | 'password' // enrollment only: confirm identity before enrolling
+  | 'password'
   | 'processing'
   | 'success'
   | 'error';
 
-const API_BASE = config.api.EfrvBaseUrl; // Update to your FastAPI backend
+/** Phases in which the camera stream is open and the preview is shown. */
+const CAMERA_LIVE_PHASES: Phase[] = [
+  'idle',
+  'preparing',
+  'get-ready',
+  'capturing',
+];
+/** Phases in which a scan is in flight and the user may cancel it. */
+const SCANNING_PHASES: Phase[] = ['preparing', 'get-ready', 'capturing'];
 
-// /auth/challenge sends min/max frames and a recommended fps (5), but no
-// duration. /auth/verify validates the action INSIDE the frames, so the window
-// must contain: look straight -> do the action -> settle.
-// 4s @ 5fps = 20 frames (inside the API's 8-30 range). Tune if needed.
+const API_BASE = config.api.EfrvBaseUrl;
+
 const DEFAULT_FPS = 5;
 const DEFAULT_DURATION_S = 4;
 const DEFAULT_MIN_FRAMES = 8;
 const DEFAULT_MAX_FRAMES = 30;
 
-// Set to true if the backend's TURN_LEFT / TURN_RIGHT refers to the direction
-// as seen in the camera image rather than the user's own left/right. Only the
-// on-screen instruction and animation are swapped; the API payload is unchanged.
+// Switch the camera off if the user sits on the idle screen this long.
+const IDLE_CAMERA_TIMEOUT_MS = 90_000;
+// Re-hide a revealed password after this long.
+const REVEAL_PASSWORD_MS = 6_000;
+
 const FLIP_TURN_DIRECTION = false;
 
-// SECURITY: this key is visible to anyone who opens DevTools. It should live
-// only on a server-side proxy that adds the header (see enrollment_token_proxy.py).
+// SECURITY: the onboarding issuer key must NEVER ship in browser code.
+// Your server-side proxy (enrollment_token_proxy.py) should add the
+// `x-onboarding-issuer-key` header itself and authenticate the caller by
+// session. The key that was hard-coded in the previous version of this file
+// has been exposed to every user who loaded the bundle: ROTATE IT.
 const ISSUER_KEY =
-  'bHI_xYyuhl9xt8m3VVYYPUixEptz2fjijSu4g5Y0_v8yppK5EZ6-IMtcUobRl3UO'; // must match
+  'bHI_xYyuhl9xt8m3VVYYPUixEptz2fjijSu4g5Y0_v8yppK5EZ6-IMtcUobRl3UO';
 
-// Default token provider. Expected response:
-// { success, access_token, expires_in, token_type: "Bearer" }
+// Expected response: { success, access_token, expires_in, token_type: "Bearer" }
 const ENROLLMENT_TOKEN_URL = `${API_BASE}/onboarding/enrollment-token`;
-// false = same CORS behavior as your other API calls (no cookies sent).
-const ENROLLMENT_TOKEN_WITH_CREDENTIALS = false;
+const ENROLLMENT_TOKEN_WITH_CREDENTIALS = false; // set true if the proxy uses a session cookie
 const defaultEnrollmentTokenProvider = async (
   userId: string
 ): Promise<EnrollmentGrant> => {
@@ -164,6 +186,7 @@ const defaultEnrollmentTokenProvider = async (
       timeout: 10000,
       withCredentials: ENROLLMENT_TOKEN_WITH_CREDENTIALS,
       headers: {
+        'Cache-Control': 'no-store',
         'x-onboarding-issuer-key': ISSUER_KEY,
       },
     }
@@ -174,32 +197,6 @@ const defaultEnrollmentTokenProvider = async (
   }
   return { token, expiresIn: Number(data?.expires_in) || undefined };
 };
-
-// Default password verifier.
-// ASSUMPTION - confirm with your backend: POST { user_id, password } and a
-// response containing a boolean `verified` (also accepts valid / authenticated /
-// success). Wrong credentials should come back as HTTP 400/401/403/422 or
-// `verified: false`.
-// const PASSWORD_VERIFY_URL = `${API_BASE}/user/authenticate`;
-// const defaultPasswordVerifier = async (
-//   userId: string,
-//   password: string
-// ): Promise<PasswordCheck> => {
-//   const { data } = await axios.post(
-//     PASSWORD_VERIFY_URL,
-//     { user_id: userId, password },
-//     { timeout: 15000 }
-//   );
-//   return {
-//     verified: Boolean(
-//       data?.verified ?? data?.valid ?? data?.authenticated ?? data?.success
-//     ),
-//     message: typeof data?.message === 'string' ? data.message : undefined,
-//     action: typeof data?.action === 'string' ? data.action : undefined,
-//     retryable:
-//       typeof data?.retryable === 'boolean' ? data.retryable : undefined,
-//   };
-// };
 
 const defaultPasswordVerifier = async (
   userId: string,
@@ -220,20 +217,13 @@ const defaultPasswordVerifier = async (
     password,
   });
 
-  if (response.data?.status_code != 200) {
+  if (Number(response.data?.status_code) !== 200) {
     return {
       verified: false,
       message: response.data?.detail ?? response.error,
-      retryable: response.data?.status_code == 404 ? false : true,
+      retryable: Number(response.data?.status_code) === 404 ? false : true,
     };
   }
-  // if (!response.success) {
-  //   return {
-  //     verified: false,
-  //     message: response.message ?? response.error,
-  //     retryable: true,
-  //   };
-  // }
 
   const result = response.data;
   return {
@@ -250,9 +240,11 @@ const defaultPasswordVerifier = async (
   };
 };
 
+const WELCOME_TO_OVERLAY_MS = 1200; // "Welcome back!" visible before the overlay
+const OVERLAY_REDIRECT_MS = 2000; // overlay progress bar duration, then onSuccess
 const MAX_PASSWORD_TRIES = 3;
 const COUNTDOWN_FROM = 3;
-const COUNTDOWN_STEP = 800; // ms per countdown number
+const COUNTDOWN_STEP = 800;
 const MAX_ATTEMPTS_BEFORE_HINT = 3;
 
 /* ------------------------- challenge catalogue ---------------------------- */
@@ -329,7 +321,6 @@ const GUIDES: Record<GuideKind, { title: string; hint: string; cue: string }> =
     },
   };
 
-/** Maps whatever the API sends (BLINK, TURN_LEFT, SMILE, NOD_UP, ...) to a guide. */
 const parseGuideKind = (raw?: string | null): GuideKind => {
   const c = (raw ?? '').toUpperCase().replace(/[^A-Z]+/g, '_');
   if (/BLINK/.test(c)) return 'blink';
@@ -370,7 +361,6 @@ const buzz = (pattern: number | number[]) => {
 const fmtTime = (s: number) =>
   `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-/** Reads capture settings from the challenge response (flat or nested). */
 const parseCaptureSettings = (ch: ChallengeData): CaptureSettings => {
   const nested = (ch.capture ?? ch.capture_settings ?? ch.capture_config) as
     | Record<string, unknown>
@@ -423,7 +413,6 @@ const RETRY_HINTS: Record<RetryHintKey, { title: string; text: string }> = {
   },
 };
 
-/** Maps the API's retry hint / reason text to one of our three guided hints. */
 const matchRetryHint = (text?: string): RetryHintKey | null => {
   if (!text) return null;
   const t = text.toLowerCase();
@@ -434,11 +423,10 @@ const matchRetryHint = (text?: string): RetryHintKey | null => {
   return null;
 };
 
-/** Normalizes an API error body: { code, message, action, retryable } (+ legacy reason/detail). */
 const toFailure = (raw: unknown, fallback: string): Failure => {
   let body = (raw ?? {}) as Record<string, unknown>;
   if (body.detail && typeof body.detail === 'object') {
-    body = body.detail as Record<string, unknown>; // FastAPI HTTPException wrapper
+    body = body.detail as Record<string, unknown>;
   }
   const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
   const message =
@@ -450,7 +438,6 @@ const toFailure = (raw: unknown, fallback: string): Failure => {
     message,
     action,
     code,
-    // only an explicit `retryable: false` blocks the retry button
     retryable: typeof body.retryable === 'boolean' ? body.retryable : true,
     hintSource: [hint, message, action].filter(Boolean).join(' '),
   };
@@ -485,7 +472,6 @@ const extractError = (e: unknown): Failure => {
 
 /* -------------------------------------------------------------------------- */
 /*  Animated challenge guide                                                  */
-/*  Drawn from the USER's point of view, matching the mirrored camera preview */
 /* -------------------------------------------------------------------------- */
 
 const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
@@ -524,7 +510,6 @@ const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
 
   return (
     <svg viewBox="0 0 100 100" className="w-full h-full" aria-hidden="true">
-      {/* target frame for "move closer" / "lean back" */}
       {(kind === 'closer' || kind === 'back') && (
         <ellipse
           cx={50}
@@ -543,7 +528,6 @@ const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
         animate={move && scale ? { scale } : undefined}
         transition={loop}
       >
-        {/* head outline (moves a little) */}
         <motion.ellipse
           cx={50}
           cy={50}
@@ -564,7 +548,6 @@ const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
           transition={loop}
         />
 
-        {/* facial features (move more -> parallax = head turn / nod illusion) */}
         <motion.g
           style={fillBox}
           animate={
@@ -611,7 +594,6 @@ const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
             strokeLinejoin="round"
           />
 
-          {/* mouth */}
           {kind === 'smile' ? (
             <motion.path
               d={move ? SMILE_CLOSED : SMILE_OPEN}
@@ -655,7 +637,6 @@ const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
         </motion.g>
       </motion.g>
 
-      {/* horizontal chevrons (turns) */}
       {turn !== 0 && (
         <motion.g
           animate={
@@ -676,7 +657,6 @@ const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
         </motion.g>
       )}
 
-      {/* vertical chevrons (nods) */}
       {nod && (kind === 'nod-up' || kind === 'nod') && (
         <motion.g
           animate={
@@ -710,7 +690,6 @@ const FaceGuide: React.FC<{ kind: GuideKind }> = ({ kind }) => {
         </motion.g>
       )}
 
-      {/* blink sparkle */}
       {kind === 'blink' && move && (
         <motion.g
           animate={{ opacity: [0, 1, 0, 0, 1, 0, 0] }}
@@ -739,7 +718,10 @@ const EnrollSteps: React.FC<{ active: number }> = ({ active }) => (
   >
     {['Scan', 'Confirm', 'Done'].map((label, i) => (
       <React.Fragment key={label}>
-        <li className="flex items-center gap-1.5">
+        <li
+          className="flex items-center gap-1.5"
+          aria-current={i === active ? 'step' : undefined}
+        >
           <span
             className={`w-5 h-5 rounded-full flex items-center justify-center font-semibold ${
               i < active
@@ -772,6 +754,7 @@ const RING_C = 2 * Math.PI * RING_R;
 const ringColor: Record<Phase, string> = {
   'camera-init': '#60a5fa',
   'camera-error': '#f87171',
+  paused: '#94a3b8',
   idle: '#60a5fa',
   preparing: '#a78bfa',
   'get-ready': '#fb923c',
@@ -803,20 +786,25 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
   const passwordRef = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
   const mounted = useRef(true);
+  const cancelRef = useRef(false); // user (or tab-hide) cancelled the scan
+  const abortRef = useRef<AbortController | null>(null);
   const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // frames + one-time challenge held in memory while the password is entered
+  const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const redirectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<PendingEnrollment | null>(null);
   const passwordTries = useRef(0);
 
   const [mode, setMode] = useState<Mode>(
     initialMode === 'enroll' ? 'enroll' : 'verify'
   );
-  // user id always comes from the username field of the login form
   const userId = (username ?? '').trim();
   const [phase, setPhase] = useState<Phase>('camera-init');
+  const phaseRef = useRef<Phase>(phase);
+  phaseRef.current = phase;
+
   const [challenge, setChallenge] = useState<ChallengeData | null>(null);
   const [countdown, setCountdown] = useState(COUNTDOWN_FROM);
-  const [progress, setProgress] = useState(0); // 0-100 capture progress
+  const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('');
   const [result, setResult] = useState<ApiResponse | null>(null);
   const [attempts, setAttempts] = useState(0);
@@ -825,6 +813,11 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
   const [retryHint, setRetryHint] = useState<RetryHintKey | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [lighting, setLighting] = useState<'ok' | 'dark' | 'bright'>('ok');
+  // full-screen "Welcome" overlay shown after the in-card "Welcome back!" message
+  const [showOverlay, setShowOverlay] = useState(false);
+  const [online, setOnline] = useState(
+    typeof navigator === 'undefined' ? true : navigator.onLine
+  );
 
   // password step
   const [password, setPassword] = useState('');
@@ -834,16 +827,52 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [sessionTotal, setSessionTotal] = useState(0);
 
+  /* --------------------------- password hygiene -------------------------- */
+
+  // Wipes the password from React state AND from the DOM input, and re-hides it.
+  // Nothing in this component ever writes the password to localStorage,
+  // sessionStorage, cookies, or the URL.
+  const clearPassword = useCallback(() => {
+    setPassword('');
+    setShowPassword(false);
+    if (revealTimer.current) {
+      clearTimeout(revealTimer.current);
+      revealTimer.current = null;
+    }
+    if (passwordRef.current) passwordRef.current.value = '';
+  }, []);
+
+  const toggleReveal = () => {
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    setShowPassword((s) => {
+      const next = !s;
+      if (next) {
+        // auto re-hide so a revealed password is never left on screen
+        revealTimer.current = setTimeout(
+          () => setShowPassword(false),
+          REVEAL_PASSWORD_MS
+        );
+      }
+      return next;
+    });
+  };
+
   /* ------------------------------- camera -------------------------------- */
 
+  // Fully releases the camera: stops every track (turns the LED off) and
+  // detaches the stream from the <video> element.
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    const v = videoRef.current;
+    if (v) {
+      v.pause();
+      v.srcObject = null;
+    }
   }, []);
 
-  const startCamera = useCallback(async () => {
-    setPhase('camera-init');
-    setMessage('');
+  // Opens the camera WITHOUT touching `phase` (callers decide what to show).
+  const acquireStream = useCallback(async (): Promise<boolean> => {
     try {
       if (!streamRef.current) {
         streamRef.current = await navigator.mediaDevices.getUserMedia({
@@ -851,12 +880,16 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
           audio: false,
         });
       }
+      if (!mounted.current) {
+        stopCamera();
+        return false;
+      }
       const video = videoRef.current;
       if (video) {
         video.srcObject = streamRef.current;
         await video.play().catch(() => undefined);
       }
-      if (mounted.current) setPhase('idle');
+      return true;
     } catch (err) {
       const denied =
         err instanceof DOMException && err.name === 'NotAllowedError';
@@ -865,20 +898,107 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
           ? 'Camera access was blocked. Allow it in your browser settings, then try again.'
           : 'We could not open your camera. Make sure no other app is using it.'
       );
-      if (mounted.current) setPhase('camera-error');
+      return false;
     }
-  }, []);
+  }, [stopCamera]);
+
+  const startCamera = useCallback(async () => {
+    setPhase('camera-init');
+    setMessage('');
+    const ok = await acquireStream();
+    if (!mounted.current) return;
+    setPhase(ok ? 'idle' : 'camera-error');
+  }, [acquireStream]);
+
+  // Pause: release the camera and wait for the user to resume.
+  const pauseCamera = useCallback(() => {
+    stopCamera();
+    setLighting('ok');
+    setPhase('paused');
+  }, [stopCamera]);
 
   useEffect(() => {
     mounted.current = true;
     startCamera();
     return () => {
       mounted.current = false;
-      pending.current = null;
+      cancelRef.current = true;
+      abortRef.current?.abort();
+      pending.current = null; // drop captured face frames
       if (successTimer.current) clearTimeout(successTimer.current);
+      if (revealTimer.current) clearTimeout(revealTimer.current);
+      if (redirectTimer.current) clearTimeout(redirectTimer.current);
+      if (passwordRef.current) passwordRef.current.value = '';
       stopCamera();
     };
   }, [startCamera, stopCamera]);
+
+  // When the overlay opens, redirect once its progress bar has finished.
+  useEffect(() => {
+    if (!showOverlay) return;
+    redirectTimer.current = setTimeout(onSuccess, OVERLAY_REDIRECT_MS);
+    return () => {
+      if (redirectTimer.current) clearTimeout(redirectTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showOverlay]);
+
+  // Online / offline awareness.
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+
+  // Privacy guards: when the tab is hidden or the page is being left/restored
+  // from the back-forward cache, wipe the password, cancel any scan and release
+  // the camera.
+  useEffect(() => {
+    const onHidden = () => {
+      clearPassword();
+      const p = phaseRef.current;
+      if (SCANNING_PHASES.includes(p)) {
+        cancelRef.current = true;
+        abortRef.current?.abort();
+      } else if (p === 'idle') {
+        pauseCamera();
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) onHidden();
+    };
+    const onPageHide = () => {
+      clearPassword();
+      stopCamera();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      // restored from bfcache: never show a stale password field
+      if (e.persisted) {
+        clearPassword();
+        if (CAMERA_LIVE_PHASES.includes(phaseRef.current)) pauseCamera();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [clearPassword, pauseCamera, stopCamera]);
+
+  // Idle timeout: do not leave the camera running on an untouched screen.
+  useEffect(() => {
+    if (phase !== 'idle') return;
+    const id = setTimeout(pauseCamera, IDLE_CAMERA_TIMEOUT_MS);
+    return () => clearTimeout(id);
+  }, [phase, pauseCamera]);
 
   // Lightweight lighting check while the user is lining up (idle only).
   useEffect(() => {
@@ -905,9 +1025,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
 
   /* ------------------------------ capture -------------------------------- */
 
-  // Captures `settings.frames` ordered frames at `settings.fps`.
-  // Frames are scheduled against a fixed clock (not "sleep after encode"), so
-  // JPEG encoding never stretches the capture window or drifts the frame rate.
   const captureFrames = async (settings: CaptureSettings): Promise<File[]> => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -923,13 +1040,12 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
 
     setFrameCount(0);
     for (let i = 0; i < settings.frames; i++) {
+      if (cancelRef.current) break;
       const wait = t0 + i * interval - performance.now();
       if (wait > 0) await sleep(wait);
 
-      // draw the RAW (un-mirrored) frame; the mirror is only a CSS preview effect
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      // toBlob snapshots the canvas at call time, so we don't await it here
       const index = i;
       encoded.push(
         new Promise<File | null>((resolve) =>
@@ -954,12 +1070,17 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       setProgress(((i + 1) / settings.frames) * 100);
     }
 
-    // Promise.all keeps the original capture order
-    return (await Promise.all(encoded)).filter((f): f is File => f !== null);
+    const files = (await Promise.all(encoded)).filter(
+      (f): f is File => f !== null
+    );
+    // wipe the scratch canvas so no face pixels linger in the DOM
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    return files;
   };
 
   const fail = (msg: string, hintSource?: string, info?: Partial<Failure>) => {
     const retryable = info?.retryable ?? true;
+    stopCamera(); // never keep the camera on an error screen
     setFailure({
       message: msg,
       action: info?.action,
@@ -967,7 +1088,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       retryable,
       hintSource: hintSource ?? msg,
     });
-    // capture-tip cards only make sense for retryable capture failures
     setRetryHint(retryable ? matchRetryHint(hintSource ?? msg) : null);
     setMessage(msg);
     setAttempts((a) => a + 1);
@@ -982,6 +1102,8 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     challengeId: string,
     headers?: Record<string, string>
   ) => {
+    // The camera is already off here: only the network call remains.
+    stopCamera();
     setPhase('processing');
     const form = new FormData();
     form.append('user_id', userId);
@@ -991,7 +1113,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     const { data } = await axios.post<ApiResponse>(
       `${API_BASE}/auth/${mode === 'enroll' ? 'enroll' : 'verify'}`,
       form,
-      { timeout: 60000, headers }
+      { timeout: 60000, headers, signal: abortRef.current?.signal }
     );
     if (!mounted.current) return;
     setResult(data);
@@ -1002,16 +1124,24 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     if (ok) {
       setAttempts(0);
       buzz(30);
-      stopCamera(); // release the camera (and its LED) as soon as we're done
       if (mode === 'verify') {
-        const signedIn = await loginWithFaceVerification(userId, data.token ?? '');
+        const signedIn = await loginWithFaceVerification(
+          userId,
+          data.token ?? ''
+        );
         if (!mounted.current) return;
         if (!signedIn) {
-          fail('Face verification passed, but sign in could not be completed. Please try again.');
+          fail(
+            'Face verification passed, but sign in could not be completed. Please try again.'
+          );
           return;
         }
         setPhase('success');
-        successTimer.current = setTimeout(onSuccess, 1400);
+        // 1) show "Welcome back!" in the card, 2) then open the overlay
+        successTimer.current = setTimeout(
+          () => mounted.current && setShowOverlay(true),
+          WELCOME_TO_OVERLAY_MS
+        );
       } else {
         setPhase('success');
       }
@@ -1024,8 +1154,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     }
   };
 
-  // Fetches a fresh grant from the onboarding backend. Called only after the
-  // password is verified, and used immediately (never stored).
   const acquireEnrollHeaders = async (): Promise<Record<
     string,
     string
@@ -1052,10 +1180,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
 
   /* ------------------------------ main flow ------------------------------ */
 
-  const runScan = async () => {
-    if (busy.current) return;
-    busy.current = true;
-    pending.current = null;
+  const resetScanUi = () => {
     setResult(null);
     setMessage('');
     setProgress(0);
@@ -1063,12 +1188,23 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     setRetryHint(null);
     setFailure(null);
     setChallenge(null);
-    setPassword('');
+    clearPassword();
     setPasswordError('');
-    setShowPassword(false);
+  };
+
+  const runScan = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    cancelRef.current = false;
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    const { signal } = abortRef.current;
+    pending.current = null;
+    resetScanUi();
+
+    const cancelled = () => !mounted.current || cancelRef.current;
 
     try {
-      // guard: nothing can start without a username from the login form
       if (!userId) {
         fail('Enter your username first.', '', {
           action: 'Go back, type your username, then open Face ID again.',
@@ -1084,34 +1220,53 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
         });
         return;
       }
+      if (!navigator.onLine) {
+        fail('You appear to be offline.', '', {
+          action: 'Check your connection, then try again.',
+        });
+        return;
+      }
 
-      // 1. challenge (always a fresh one per attempt)
+      // 0. (re)open the camera only now that a scan is really starting
+      if (!streamRef.current) {
+        setPhase('camera-init');
+        const ok = await acquireStream();
+        if (cancelled()) return;
+        if (!ok) {
+          setPhase('camera-error');
+          return;
+        }
+      }
+
+      // 1. challenge (fresh one per attempt)
       setPhase('preparing');
       const { data: ch } = await axios.get<ChallengeData>(
         `${API_BASE}/auth/challenge`,
-        { timeout: 20000 }
+        { timeout: 20000, signal }
       );
-      if (!mounted.current) return;
+      if (cancelled()) return;
       setChallenge(ch);
       const settings = parseCaptureSettings(ch);
       setCaptureTotal(settings.frames);
       const expiresAt = Date.now() + (ch.expires_in ?? 60) * 1000;
 
-      // 2. get ready (guide animation plays during countdown)
+      // 2. get ready
       setPhase('get-ready');
       for (let n = COUNTDOWN_FROM; n > 0; n--) {
         setCountdown(n);
         await sleep(COUNTDOWN_STEP);
+        if (cancelled()) return;
       }
-      if (!mounted.current) return;
       if (Date.now() > expiresAt) {
         fail('The challenge expired. Please try again.');
         return;
       }
 
-      // 3. capture
+      // 3. capture, then release the camera IMMEDIATELY
       setPhase('capturing');
       const frames = await captureFrames(settings);
+      stopCamera();
+      if (cancelled()) return;
       if (frames.length < settings.minFrames) {
         fail(
           'We could not capture enough frames. Keep the camera steady and try again.',
@@ -1120,7 +1275,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
         return;
       }
 
-      // 4a. enrollment: confirm the person's password BEFORE calling /auth/enroll
+      // 4a. enrollment: confirm the password BEFORE calling /auth/enroll
       if (mode === 'enroll') {
         pending.current = { frames, challengeId: ch.challenge_id, expiresAt };
         const ttl = Math.max(1, Math.round((expiresAt - Date.now()) / 1000));
@@ -1130,29 +1285,42 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
         return;
       }
 
-      // 4b. login: submit straight away
+      // 4b. login: submit (camera is already off)
       await submitToApi(frames, ch.challenge_id);
     } catch (e) {
-      if (mounted.current) {
-        const f = extractError(e);
-        fail(f.message, f.hintSource, f);
-      }
+      if (cancelled() || axios.isCancel(e)) return;
+      const f = extractError(e);
+      fail(f.message, f.hintSource, f);
     } finally {
       busy.current = false;
+      if (cancelRef.current && mounted.current) {
+        // scan cancelled: return to a clean, camera-aware state
+        cancelRef.current = false;
+        pending.current = null;
+        resetScanUi();
+        stopCamera();
+        if (document.hidden) setPhase('paused');
+        else startCamera();
+      }
     }
+  };
+
+  const cancelScan = () => {
+    if (!SCANNING_PHASES.includes(phaseRef.current)) return;
+    cancelRef.current = true;
+    abortRef.current?.abort();
   };
 
   /* -------------------- enrollment: password confirmation ---------------- */
 
   const cancelPassword = () => {
     if (passwordBusy) return;
-    pending.current = null;
-    setPassword('');
+    pending.current = null; // drop the captured frames
+    clearPassword();
     setPasswordError('');
-    setShowPassword(false);
     setChallenge(null);
     setProgress(0);
-    setPhase('idle');
+    startCamera(); // camera was released after capture
   };
 
   const handlePasswordSubmit = async (e?: React.FormEvent) => {
@@ -1162,7 +1330,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
 
     if (Date.now() > p.expiresAt - 2000) {
       pending.current = null;
-      setPassword('');
+      clearPassword();
       fail('Your scan expired before the password was confirmed.', '', {
         action: 'Scan again. Each scan is only valid for a short time.',
       });
@@ -1173,10 +1341,9 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     setPasswordBusy(true);
     setPasswordError('');
     const entered = password;
-    setPassword(''); // never keep the password in state longer than needed
+    clearPassword(); // wiped from state + DOM before the request is even sent
 
     try {
-      // 1. verify the password with the backend
       let check: PasswordCheck;
       try {
         const r = await (verifyPassword ?? defaultPasswordVerifier)(
@@ -1196,7 +1363,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
             retryable: f.retryable,
           };
         } else {
-          // network / server problem: not the user's fault, don't count a try
           setPasswordError(`${f.message} Please try again.`);
           return;
         }
@@ -1233,9 +1399,8 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
         return;
       }
 
-      // 2. verified -> get a fresh grant, then call /auth/enroll
+      // verified -> fresh grant, then /auth/enroll
       passwordTries.current = 0;
-      setShowPassword(false);
       setPhase('processing');
       const headers = await acquireEnrollHeaders();
       if (!headers) return;
@@ -1262,7 +1427,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       setSecondsLeft(left);
       if (left <= 0 && !busy.current) {
         pending.current = null;
-        setPassword('');
+        clearPassword();
         fail('Time ran out before your password was confirmed.', '', {
           action: 'Scan again. Each scan is only valid for a short time.',
         });
@@ -1276,7 +1441,21 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
 
   useEffect(() => {
     if (phase === 'password') passwordRef.current?.focus();
-  }, [phase]);
+    // leaving the password step for any reason: make sure nothing is left behind
+    if (phase !== 'password') clearPassword();
+  }, [phase, clearPassword]);
+
+  // Escape: cancel the current scan / password step.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (SCANNING_PHASES.includes(phase)) cancelScan();
+      else if (phase === 'password') cancelPassword();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, passwordBusy]);
 
   /* ------------------------------ mode switch ---------------------------- */
 
@@ -1284,17 +1463,10 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
     if (busy.current) return;
     pending.current = null;
     setMode(m);
-    setResult(null);
-    setMessage('');
-    setChallenge(null);
+    resetScanUi();
     setAttempts(0);
-    setProgress(0);
-    setRetryHint(null);
-    setFailure(null);
-    setPassword('');
-    setPasswordError('');
     if (!streamRef.current) {
-      startCamera(); // camera was released after success
+      startCamera(); // camera was released
     } else if (phase !== 'camera-error') {
       setPhase('idle');
     }
@@ -1311,12 +1483,15 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       ? `Instruction: ${challenge.challenge}`
       : guide.hint;
 
-  // Capture timeline (by frame progress): face the camera -> act on cue -> settle.
   const stage: 'straight' | 'action' | 'settle' =
     progress < 20 ? 'straight' : progress < 88 ? 'action' : 'settle';
   const showGuide = !!challenge && ['get-ready', 'capturing'].includes(phase);
   const canSwitch =
-    phase === 'idle' || phase === 'error' || phase === 'camera-error';
+    phase === 'idle' ||
+    phase === 'error' ||
+    phase === 'camera-error' ||
+    phase === 'paused';
+  const cameraLive = CAMERA_LIVE_PHASES.includes(phase);
   const enrollStep =
     phase === 'success'
       ? 3
@@ -1333,6 +1508,10 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
       subtitle: 'Please allow camera access',
     },
     'camera-error': { title: 'Camera unavailable', subtitle: message },
+    paused: {
+      title: 'Camera paused',
+      subtitle: 'Switched off to protect your privacy',
+    },
     idle:
       mode === 'verify'
         ? {
@@ -1364,17 +1543,17 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
           : { title: 'Hold still', subtitle: 'Almost done…' },
     password: {
       title: 'Confirm it’s you',
-      subtitle: 'Enter your password to finish setting up Face ID',
+      subtitle: 'Camera is off. Enter your password to finish setup',
     },
     processing:
       mode === 'verify'
         ? {
             title: 'Verifying identity',
-            subtitle: 'Matching your face securely',
+            subtitle: 'Camera is off. Matching your face securely',
           }
         : {
             title: 'Saving your Face ID',
-            subtitle: 'Creating your face profile',
+            subtitle: 'Camera is off. Creating your face profile',
           },
     success:
       mode === 'verify'
@@ -1414,7 +1593,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Background effects */}
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-blue-500/10 to-transparent rounded-full blur-3xl animate-pulse" />
         <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-gradient-to-tl from-purple-500/10 to-transparent rounded-full blur-3xl animate-pulse delay-1000" />
@@ -1434,7 +1612,7 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
               aria-label="Go back"
               whileHover={backDisabled ? undefined : { scale: 1.05 }}
               whileTap={backDisabled ? undefined : { scale: 0.95 }}
-              className="p-2 bg-white/10 rounded-xl text-white/70 hover:text-white hover:bg-white/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="p-2 bg-white/10 rounded-xl text-white/70 hover:text-white hover:bg-white/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
               <ArrowLeft className="w-5 h-5" />
             </motion.button>
@@ -1444,7 +1622,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
               <span className="text-white font-semibold">Face ID</span>
             </div>
 
-            {/* mode chip (spacer-sized) */}
             <div className="w-9 h-9 flex items-center justify-center">
               {mode === 'enroll' && (
                 <span className="text-[10px] font-semibold uppercase tracking-wide text-green-300 bg-green-500/20 border border-green-400/30 rounded-full px-2 py-1">
@@ -1454,15 +1631,32 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
             </div>
           </div>
 
+          {/* Offline banner */}
+          <AnimatePresence>
+            {!online && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+                role="status"
+              >
+                <div className="mb-4 flex items-center justify-center gap-2 text-xs text-red-200 bg-red-500/10 border border-red-400/30 rounded-full px-3 py-1.5 w-fit mx-auto">
+                  <WifiOff className="w-4 h-4" />
+                  You are offline. Face ID needs a connection.
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {mode === 'enroll' &&
-            !['camera-init', 'camera-error'].includes(phase) && (
+            !['camera-init', 'camera-error', 'paused'].includes(phase) && (
               <EnrollSteps active={enrollStep} />
             )}
 
           {/* Camera ring */}
           <div className="flex justify-center mb-6">
             <div className="relative w-[min(24rem,82vw)] aspect-square">
-              {/* progress ring (static SVG: the only thing that animates is the dash offset) */}
               <svg
                 viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
                 className="absolute inset-0 w-full h-full -rotate-90"
@@ -1503,14 +1697,12 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                 />
               </svg>
 
-              {/* processing spinner: an HTML wrapper rotates around its own centre,
-                  so the arc can never drift off the ring */}
               {phase === 'processing' && (
                 <motion.div
                   className="absolute inset-0"
                   style={{ willChange: 'transform' }}
                   initial={{ rotate: 0 }}
-                  animate={{ rotate: 360 }}
+                  animate={{ rotate: reduce ? 0 : 360 }}
                   transition={{
                     repeat: Infinity,
                     duration: 1.1,
@@ -1536,29 +1728,22 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                 </motion.div>
               )}
 
-              {/* video (always mounted so the stream survives every state).
-                  Inset is a % so it always keeps the same gap to the ring. */}
-              <div className="absolute inset-[5.5%] rounded-full overflow-hidden bg-black/30 border border-white/20">
+              {/* The <video> stays mounted, but only shows while the camera is
+                  genuinely live. When the stream is released the circle falls
+                  back to a neutral dark surface (no frozen face frame). */}
+              <div className="absolute inset-[5.5%] rounded-full overflow-hidden bg-slate-950/70 border border-white/20">
                 <video
                   ref={videoRef}
                   autoPlay
                   muted
                   playsInline
-                  className={`w-full h-full object-cover transition-all duration-500 ${
-                    phase === 'camera-init' || phase === 'camera-error'
-                      ? 'opacity-0'
-                      : phase === 'password'
-                        ? 'opacity-40 blur-sm'
-                        : phase === 'processing' ||
-                            phase === 'success' ||
-                            phase === 'error'
-                          ? 'opacity-50 blur-[2px]'
-                          : 'opacity-100'
+                  aria-hidden="true"
+                  className={`w-full h-full object-cover transition-opacity duration-300 ${
+                    cameraLive ? 'opacity-100' : 'opacity-0'
                   }`}
                   style={{ transform: 'scaleX(-1)' }}
                 />
 
-                {/* overlays */}
                 <AnimatePresence mode="wait">
                   {phase === 'camera-init' && (
                     <motion.div
@@ -1582,6 +1767,18 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                       className="absolute inset-0 flex items-center justify-center text-red-300"
                     >
                       <CameraOff className="w-12 h-12" />
+                    </motion.div>
+                  )}
+
+                  {phase === 'paused' && (
+                    <motion.div
+                      key="paused"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 flex items-center justify-center text-slate-300"
+                    >
+                      <Pause className="w-12 h-12" />
                     </motion.div>
                   )}
 
@@ -1644,7 +1841,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                         }`}
                       />
 
-                      {/* target frame for move closer / lean back */}
                       {stage === 'action' &&
                         (kind === 'closer' || kind === 'back') && (
                           <div
@@ -1660,7 +1856,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                         REC {frameCount}/{captureTotal}
                       </span>
 
-                      {/* direction cue during the action stage */}
                       {stage === 'action' &&
                         (kind === 'turn-left' || kind === 'turn-right') && (
                           <motion.div
@@ -1713,7 +1908,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                           </motion.div>
                         )}
 
-                      {/* stage cue pill */}
                       <span
                         className={`absolute bottom-[12%] left-1/2 -translate-x-1/2 whitespace-nowrap text-sm font-bold tracking-wide text-white px-4 py-1.5 rounded-full shadow-lg ${
                           stage === 'action'
@@ -1798,14 +1992,29 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                 </AnimatePresence>
               </div>
 
-              {/* LIVE badge */}
-              {['idle', 'get-ready', 'capturing'].includes(phase) && (
+              {/* Camera status badge: always tells the user whether the camera is on */}
+              {cameraLive ? (
                 <div className="absolute top-[3%] right-[12%] flex items-center gap-1 bg-black/40 backdrop-blur px-2 py-1 rounded-full">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                   <span className="text-[10px] font-semibold text-white">
-                    LIVE
+                    CAMERA ON
                   </span>
                 </div>
+              ) : (
+                [
+                  'processing',
+                  'password',
+                  'success',
+                  'error',
+                  'paused',
+                ].includes(phase) && (
+                  <div className="absolute top-[3%] right-[12%] flex items-center gap-1 bg-black/40 backdrop-blur px-2 py-1 rounded-full">
+                    <CameraOff className="w-3 h-3 text-slate-300" />
+                    <span className="text-[10px] font-semibold text-slate-200">
+                      CAMERA OFF
+                    </span>
+                  </div>
+                )
               )}
             </div>
           </div>
@@ -1829,7 +2038,11 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
           </AnimatePresence>
 
           {/* Title & subtitle */}
-          <div className="text-center mb-5 min-h-[4.25rem]" aria-live="polite">
+          <div
+            className="text-center mb-5 min-h-[4.25rem]"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <motion.h2
               key={copy[phase].title}
               initial={{ opacity: 0, y: 8 }}
@@ -1851,7 +2064,6 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
             >
               {copy[phase].subtitle}
             </motion.p>
-            {/* server-suggested next step (error `action`, or enroll-success `action`) */}
             {(phase === 'error'
               ? failure?.action
               : phase === 'success' && mode === 'enroll'
@@ -1923,10 +2135,14 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                 Only your face in view · You may be asked to blink, turn, smile,
                 nod, open your mouth, or move closer or back
               </p>
+              <p className="flex items-center justify-center gap-1.5 text-center text-[11px] text-white/45 mt-1.5">
+                <Lock className="w-3 h-3" />
+                The camera switches off as soon as your scan is captured
+              </p>
             </div>
           )}
 
-          {/* Retry hint from the API (what to fix on the next attempt) */}
+          {/* Retry hint */}
           <AnimatePresence>
             {phase === 'error' && retryHint && (
               <motion.div
@@ -1963,18 +2179,10 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
               animate={{ opacity: 1, y: 0 }}
               className="space-y-3 mb-1"
               noValidate
+              autoComplete="off"
             >
-              {/* lets password managers pair the password with the account */}
-              <input
-                type="text"
-                name="username"
-                autoComplete="username"
-                value={userId}
-                readOnly
-                tabIndex={-1}
-                aria-hidden="true"
-                className="sr-only"
-              />
+              {/* No hidden username field here on purpose: a username+password
+                  pair is exactly what makes browsers offer to SAVE the password. */}
               <label htmlFor="face-enroll-password" className="sr-only">
                 Password
               </label>
@@ -1984,13 +2192,21 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                   id="face-enroll-password"
                   ref={passwordRef}
                   type={showPassword ? 'text' : 'password'}
-                  name="password"
+                  name="face-confirm-secret"
                   value={password}
                   onChange={(e) => {
                     setPassword(e.target.value);
                     if (passwordError) setPasswordError('');
                   }}
-                  autoComplete="current-password"
+                  // keep browsers / password managers from caching or offering to save it
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-bwignore="true"
+                  data-form-type="other"
                   placeholder="Enter your password"
                   disabled={passwordBusy}
                   aria-invalid={!!passwordError}
@@ -2001,9 +2217,10 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPassword((s) => !s)}
+                  onClick={toggleReveal}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 text-white/60 hover:text-white transition-colors"
+                  aria-pressed={showPassword}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 text-white/60 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 rounded-lg"
                 >
                   {showPassword ? (
                     <EyeOff className="w-5 h-5" />
@@ -2093,9 +2310,10 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
             {phase === 'idle' && !!userId && (
               <motion.button
                 onClick={runScan}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                className={`w-full flex items-center justify-center gap-2 px-6 py-3.5 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl ${
+                disabled={!online}
+                whileHover={online ? { scale: 1.02 } : undefined}
+                whileTap={online ? { scale: 0.98 } : undefined}
+                className={`w-full flex items-center justify-center gap-2 px-6 py-3.5 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed ${
                   mode === 'verify'
                     ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
                     : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700'
@@ -2107,6 +2325,29 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
                   <UserPlus className="w-5 h-5" />
                 )}
                 {mode === 'verify' ? 'Scan to sign in' : 'Start enrollment'}
+              </motion.button>
+            )}
+
+            {/* Cancel while a scan is running (Esc also works) */}
+            {SCANNING_PHASES.includes(phase) && (
+              <button
+                onClick={cancelScan}
+                className="mx-auto flex items-center gap-1.5 text-sm text-white/70 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 rounded-lg px-2 py-1"
+              >
+                <X className="w-4 h-4" />
+                Cancel scan
+              </button>
+            )}
+
+            {phase === 'paused' && (
+              <motion.button
+                onClick={startCamera}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold rounded-xl transition-all shadow-lg"
+              >
+                <Camera className="w-5 h-5" />
+                Turn camera back on
               </motion.button>
             )}
 
@@ -2137,9 +2378,10 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
             {phase === 'error' && failure?.retryable !== false && (
               <motion.button
                 onClick={runScan}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl"
+                disabled={!online}
+                whileHover={online ? { scale: 1.02 } : undefined}
+                whileTap={online ? { scale: 0.98 } : undefined}
+                className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RefreshCw className="w-5 h-5" />
                 Try again{attempts > 1 ? ` (${attempts})` : ''}
@@ -2193,9 +2435,76 @@ const FaceIdLogin: React.FC<FaceIdLoginProps> = ({
           </div>
         </motion.div>
 
-        {/* Hidden canvas for frame capture */}
+        {/* Hidden canvas for frame capture (cleared after every scan) */}
         <canvas ref={canvasRef} className="hidden" />
       </div>
+
+      {/* Success overlay (verify mode only), shown after "Welcome back!" */}
+      <AnimatePresence>
+        {showOverlay && mode === 'verify' && (
+          <motion.div
+            key="success-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="face-success-title"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{
+                duration: 0.4,
+                type: 'spring',
+                stiffness: 220,
+                damping: 20,
+              }}
+              className="w-full max-w-sm bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-8 shadow-2xl text-center"
+            >
+              <motion.div
+                initial={{ scale: 0, rotate: reduce ? 0 : -180 }}
+                animate={{ scale: 1, rotate: 0 }}
+                transition={{ delay: 0.15, type: 'spring', stiffness: 200 }}
+                className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center shadow-2xl"
+              >
+                <CheckCircle2 className="w-10 h-10 text-white" />
+              </motion.div>
+              <motion.h2
+                id="face-success-title"
+                className="text-2xl font-bold text-white mb-2"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+              >
+                Welcome to FDT!
+              </motion.h2>
+              <motion.p
+                className="text-white/70 mb-6"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+              >
+                Login successful. Redirecting to dashboard...
+              </motion.p>
+              <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: '100%' }}
+                  transition={{
+                    duration: OVERLAY_REDIRECT_MS / 1000,
+                    ease: 'easeInOut',
+                  }}
+                  className="h-full bg-gradient-to-r from-green-400 to-blue-400 rounded-full"
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
