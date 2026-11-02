@@ -35,7 +35,7 @@ window.__APP_CONFIG__ = {
   },
   environment: 'development',
   logging: {
-    console_enabled: false,
+    console_enabled: true,
     api_enabled: false,
     level: 'info',
     maxEntries: 1000,

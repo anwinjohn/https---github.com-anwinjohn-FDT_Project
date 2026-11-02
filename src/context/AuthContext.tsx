@@ -42,6 +42,7 @@ interface FaceVerificationToken {
 interface FaceLoginResponse {
   status_code?: number;
   access_token?: string;
+  refresh_token?: string;
   user?: Omit<UserInfo, 'request_username'> & {
     request_username?: string;
     sessionId?: string;
@@ -222,6 +223,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     clearTimers();
     localStorage.removeItem('authToken');
+    localStorage.removeItem('refreshToken');
     localStorage.removeItem('userData');
     localStorage.removeItem('lastActivity');
     localStorage.removeItem('sessionWarningShown');
@@ -474,9 +476,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const establishAuthenticatedSession = (
     accessToken: string,
+    refreshToken: string,
     authenticatedUser: UserInfo
   ) => {
     localStorage.setItem('authToken', accessToken);
+    localStorage.setItem('refreshToken', refreshToken);
     localStorage.setItem('userData', JSON.stringify(authenticatedUser));
     localStorage.setItem('lastActivity', Date.now().toString());
     setUser(authenticatedUser);
@@ -520,13 +524,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const responseData = await response.json();
       const decryptedResponse = decryptResponse(responseData.data);
 
-      if (response.ok && decryptedResponse.status_code === 200) {
+      if (
+        response.ok &&
+        decryptedResponse.status_code === 200 &&
+        decryptedResponse.access_token &&
+        decryptedResponse.refresh_token
+      ) {
         if (decryptedResponse.user.sessionId !== sessionId) {
           console.error('Login Response validation failed, session does not match.');
           return false;
         }
         establishAuthenticatedSession(
           decryptedResponse.access_token,
+          decryptedResponse.refresh_token,
           decryptedResponse.user
         );
         return true;
@@ -581,6 +591,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         !response.success ||
         result?.status_code !== 200 ||
         !result.access_token ||
+        !result.refresh_token ||
         !result.user ||
         result.user.sessionId !== sessionId ||
         !result.user.id ||
@@ -590,7 +601,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(response.error || 'Face ID sign in could not be completed. Please try again.');
       }
 
-      establishAuthenticatedSession(result.access_token, {
+      establishAuthenticatedSession(result.access_token, result.refresh_token, {
         ...result.user,
         request_username: result.user.request_username ?? result.user.username,
       });

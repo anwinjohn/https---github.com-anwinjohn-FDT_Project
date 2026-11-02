@@ -62,15 +62,12 @@ class SecureApiClient {
           const machineInfo = getLocalMachineInfo();
           if (machineInfo) {
             // The header also covers body-less requests such as GET and DELETE.
-            request.headers['X-Machine-Info'] = this.encryptRequest(JSON.stringify(machineInfo));
-          }
-          else{
+            request.headers['X-Machine-Info'] = this.encryptRequest(
+              JSON.stringify(machineInfo)
+            );
+          } else {
             console.log('Machine info null or empty : ', machineInfo);
           }
-
-          // A 401 retry passes through this interceptor with an already
-          // encrypted body. Do not encrypt the envelope a second time.
-          // if ((request as any)._machineInfoEnriched) return request;
 
           let token = localStorage.getItem('authToken');
           if (token) {
@@ -82,7 +79,11 @@ class SecureApiClient {
           request.headers['X-Timestamp'] = Math.floor(
             Date.now() / 1000
           ).toString();
-          if (request.data !== undefined && request.data !== null) {
+          if (
+            request.data !== undefined &&
+            request.data !== null &&
+            !(request as any)._machineInfoEnriched
+          ) {
             const body = request.data;
             let payload: any = body;
             if (typeof body === 'string') {
@@ -134,7 +135,6 @@ class SecureApiClient {
             console.log('tyepeof response.data', typeof response.data);
             console.log('response.data.data', response.data.data);
           }
-          console.log('isEncrypted : ', isEncrypted);
           if (
             isEncrypted &&
             response.data.data &&
@@ -142,7 +142,10 @@ class SecureApiClient {
           ) {
             if (config.logging.console_enabled) {
               console.log('data: ', response.data);
-              console.log('DECY data', this.decryptResponse(response.data.data));
+              console.log(
+                'DECY data',
+                this.decryptResponse(response.data.data)
+              );
             }
             const decrypted = this.decryptResponse(response.data.data);
             response.data = decrypted;
@@ -277,15 +280,13 @@ class SecureApiClient {
     }
 
     this.refreshTokenPromise = (async () => {
-      const accessToken = localStorage.getItem('authToken');
-
-      if (!accessToken) {
-        // this.handleAuthenticationFailure();
-        throw new Error('No refresh token');
-      }
       try {
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (!refreshToken) {
+          throw new Error('No refresh token');
+        }
         const payload = JSON.stringify({
-          access_token: accessToken,
+          refresh_token: refreshToken,
         });
         const encryptedPayload = this.encryptRequest(payload);
         const response = await axios.post(
@@ -304,14 +305,20 @@ class SecureApiClient {
         );
         const decryptedResponse = this.decryptResponse(response.data.data);
         const newAccessToken = decryptedResponse?.access_token;
-        if (!newAccessToken) {
+        const newRefreshToken = decryptedResponse?.refresh_token;
+        if (
+          decryptedResponse?.status_code !== 200 ||
+          !newAccessToken ||
+          !newRefreshToken
+        ) {
           throw new Error('Invalid refresh response');
         }
 
         localStorage.setItem('authToken', newAccessToken);
+        localStorage.setItem('refreshToken', newRefreshToken);
         return newAccessToken;
       } catch (error) {
-        // this.handleAuthenticationFailure();
+        this.handleAuthenticationFailure();
         throw error;
       } finally {
         this.refreshTokenPromise = null;
