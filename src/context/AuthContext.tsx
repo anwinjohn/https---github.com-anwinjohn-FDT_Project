@@ -1,17 +1,20 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useNotifications } from '../components/notifications';
-import config from '../config/app-config.json';
+import { appConfig as config } from '../config/runtime-config';
 import CryptoJS from 'crypto-js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Clock, RefreshCw } from 'lucide-react';
 import { add } from 'date-fns';
-
+import type { LocalMachineInfo } from '../utils/machineInfoStore';
+import apiClient from '../utils/apiClient';
+import { jwtDecode } from 'jwt-decode';
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: UserInfo | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo) => Promise<boolean>;
+  loginWithFaceVerification: (username: string, verificationToken: string) => Promise<boolean>;
   logout: () => void;
   loading: boolean;
   resetSessionTimer: () => void;
@@ -25,6 +28,25 @@ interface UserInfo {
   role_id: number;
   mfa_enabled: boolean;
   request_username: string;
+  canViewSensitive?: boolean;
+}
+
+interface FaceVerificationToken {
+  sub?: string;
+  iss?: string;
+  jti?: string;
+  scope?: string;
+  exp?: number;
+}
+
+interface FaceLoginResponse {
+  status_code?: number;
+  access_token?: string;
+  refresh_token?: string;
+  user?: Omit<UserInfo, 'request_username'> & {
+    request_username?: string;
+    sessionId?: string;
+  };
 }
 
 // Mock admin user for development
@@ -201,6 +223,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     clearTimers();
     localStorage.removeItem('authToken');
+    localStorage.removeItem('refreshToken');
     localStorage.removeItem('userData');
     localStorage.removeItem('lastActivity');
     localStorage.removeItem('sessionWarningShown');
@@ -262,7 +285,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const resetSessionTimer = () => {
-    if (!isAuthenticated || isLoggingOutRef.current) return;
+    if (isLoggingOutRef.current) return;
 
     clearTimers();
     lastActivityRef.current = Date.now();
@@ -451,7 +474,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const establishAuthenticatedSession = (
+    accessToken: string,
+    refreshToken: string,
+    authenticatedUser: UserInfo
+  ) => {
+    localStorage.setItem('authToken', accessToken);
+    localStorage.setItem('refreshToken', refreshToken);
+    localStorage.setItem('userData', JSON.stringify(authenticatedUser));
+    localStorage.setItem('lastActivity', Date.now().toString());
+    setUser(authenticatedUser);
+    setIsAuthenticated(true);
+    resetSessionTimer();
+  };
+
+  const login = async (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo): Promise<boolean> => {
     try {
       // Clear any existing session data
       clearTimers();
@@ -459,23 +496,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       warningShownRef.current = false;
       isLoggingOutRef.current = false;
 
-      // Mock admin login
-      // if (username === 'admin' && password === 'admin123') {
-      //   localStorage.setItem('authToken', 'admin-token');
-      //   localStorage.setItem('userData', JSON.stringify(MOCK_ADMIN));
-      //   localStorage.setItem('lastActivity', Date.now().toString());
-      //   setUser(MOCK_ADMIN);
-      //   setIsAuthenticated(true);
-      //   resetSessionTimer();
-      //   return true;
-      // }
-      
       // Encrypt the credentials
       const iv = CryptoJS.lib.WordArray.random(16);
       const sessionId = iv.toString();
 
       const encrypted = CryptoJS.AES.encrypt(
-        JSON.stringify({ username, password, sessionId }),
+        JSON.stringify({ username, password, sessionId, isLDAPEnabled, machineInfo }),
         CryptoJS.enc.Utf8.parse(ENCRYPTION_KEY),
         {
           iv: iv,
@@ -485,32 +511,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
       // Combine IV and ciphertext
       const encryptedData = iv.concat(encrypted.ciphertext).toString(CryptoJS.enc.Base64);
-
       const response = await fetch(`${config.api.authBaseUrl}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Encrypted': 'true'
+          'X-Client-Version': config.app.version,
+          'X-Encrypted': 'true',
         },
-        body: JSON.stringify({ data: encryptedData })
+        body: JSON.stringify({ data: encryptedData }),
       });
 
       const responseData = await response.json();
       const decryptedResponse = decryptResponse(responseData.data);
 
-      if (response.ok && decryptedResponse.status_code === 200) {
+      if (
+        response.ok &&
+        decryptedResponse.status_code === 200 &&
+        decryptedResponse.access_token &&
+        decryptedResponse.refresh_token
+      ) {
         if (decryptedResponse.user.sessionId !== sessionId) {
           console.error('Login Response validation failed, session does not match.');
           return false;
         }
-        // Store token and user data
-        localStorage.setItem('authToken', decryptedResponse.access_token);
-        localStorage.setItem('userData', JSON.stringify(decryptedResponse.user));
-        localStorage.setItem('lastActivity', Date.now().toString());
-
-        setUser(decryptedResponse.user);
-        setIsAuthenticated(true);
-        resetSessionTimer();
+        establishAuthenticatedSession(
+          decryptedResponse.access_token,
+          decryptedResponse.refresh_token,
+          decryptedResponse.user
+        );
         return true;
       }
       else {
@@ -525,6 +553,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Exchange the short-lived biometric verification token for the same
+  // application session used by password login, then update context and storage
+  // together so route guards, timers, and role based menus see one auth state.
+  const loginWithFaceVerification = async (
+    username: string,
+    verificationToken: string
+  ): Promise<boolean> => {
+    try {
+      const claims = jwtDecode<FaceVerificationToken>(verificationToken);
+      const requestedUsername = username.trim();
+      const tokenUsername = claims.sub?.trim();
+      if (
+        claims.scope !== 'face-verification' ||
+        !claims.iss ||
+        !claims.jti ||
+        !claims.exp ||
+        claims.exp <= Math.floor(Date.now() / 1000) ||
+        !tokenUsername ||
+        tokenUsername.toLowerCase() !== requestedUsername.toLowerCase()
+      ) {
+        throw new Error('Face verification token is invalid or expired. Please try again.');
+      }
+
+      clearTimers();
+      localStorage.removeItem('sessionWarningShown');
+      warningShownRef.current = false;
+      isLoggingOutRef.current = false;
+
+      const sessionId = `${claims.iss}-${claims.jti}`;
+      const response = await apiClient.post<FaceLoginResponse>('/user/efr-login', {
+        userId: tokenUsername,
+        sessionId,
+      });
+      const result = response.data;
+      if (
+        !response.success ||
+        result?.status_code !== 200 ||
+        !result.access_token ||
+        !result.refresh_token ||
+        !result.user ||
+        result.user.sessionId !== sessionId ||
+        !result.user.id ||
+        !result.user.username ||
+        !result.user.role_id
+      ) {
+        throw new Error(response.error || 'Face ID sign in could not be completed. Please try again.');
+      }
+
+      establishAuthenticatedSession(result.access_token, result.refresh_token, {
+        ...result.user,
+        request_username: result.user.request_username ?? result.user.username,
+      });
+      return true;
+    } catch (error) {
+      console.error('Face ID login error:', error);
+      addNotification(
+        error instanceof Error ? error.message : 'Face ID sign in failed. Please try again.',
+        'error',
+        5000,
+        'Login Error'
+      );
+      return false;
+    }
+  };
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -533,7 +626,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, user, login, logout, loading, resetSessionTimer }}>
+    <AuthContext.Provider value={{ isAuthenticated, user, login, loginWithFaceVerification, logout, loading, resetSessionTimer }}>
       {children}
       <SessionTimeoutModal
         isOpen={showTimeoutModal}
