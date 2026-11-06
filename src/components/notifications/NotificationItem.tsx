@@ -1,12 +1,13 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { motion } from 'framer-motion';
+import React, { useEffect, useRef, useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import {
-  CheckCircle,
-  AlertCircle,
+  CheckCircle2,
+  XCircle,
   AlertTriangle,
   Info,
   X,
   Clock,
+  ArrowRight,
 } from 'lucide-react';
 import { Notification } from './NotificationContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -16,243 +17,326 @@ interface NotificationItemProps {
   onRemove: (id: string) => void;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Per-type palette                                                   */
+/*  rgb is used to build tints/glows; from/to drive the icon gradient  */
+/* ------------------------------------------------------------------ */
+
+const TYPE_CONFIG = {
+  success: {
+    icon: CheckCircle2,
+    label: 'Success',
+    rgb: '16,185,129',
+    from: '#10b981',
+    to: '#14b8a6',
+    textLight: '#047857',
+    textDark: '#6ee7b7',
+  },
+  error: {
+    icon: XCircle,
+    label: 'Error',
+    rgb: '239,68,68',
+    from: '#ef4444',
+    to: '#f43f5e',
+    textLight: '#b91c1c',
+    textDark: '#fca5a5',
+  },
+  warning: {
+    icon: AlertTriangle,
+    label: 'Warning',
+    rgb: '245,158,11',
+    from: '#f59e0b',
+    to: '#f97316',
+    textLight: '#b45309',
+    textDark: '#fcd34d',
+  },
+  info: {
+    icon: Info,
+    label: 'Info',
+    rgb: '59,130,246',
+    from: '#3b82f6',
+    to: '#6366f1',
+    textLight: '#1d4ed8',
+    textDark: '#93c5fd',
+  },
+} as const;
+
+const TICK_MS = 50;
 
 const NotificationItem: React.FC<NotificationItemProps> = ({
   notification,
   onRemove,
 }) => {
-  const [progress, setProgress] = useState(100);
-  const [isHovered, setIsHovered] = useState(false);
   const { theme } = useTheme();
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-
   const isDark = theme === 'dark';
+  const reduceMotion = useReducedMotion();
 
-  
-const notificationConfig = {
-  success: {
-    icon: CheckCircle,
-    accent: '#22c55e',
-    accentDark: '#16a34a',
-    label: 'Success',
-    iconBg: 'rgba(34,197,94,0.12)',
-    iconColor: '#22c55e',
-    progressColor: '#22c55e',
-    bgColor:
-          theme === 'dark'
-            ? 'bg-gradient-to-r from-green-500/90 to-emerald-500/90'
-            : 'bg-gradient-to-r from-green-500 to-emerald-500',
-  },
-  error: {
-    icon: AlertCircle,
-    accent: '#ef4444',
-    accentDark: '#dc2626',
-    label: 'Error',
-    iconBg: 'rgba(239,68,68,0.12)',
-    iconColor: '#ef4444',
-    progressColor: '#ef4444',
-    bgColor:
-          theme === 'dark'
-            ? 'bg-gradient-to-r from-red-500/90 to-rose-500/90'
-            : 'bg-gradient-to-r from-red-500 to-rose-500',
-        borderColor: 'border-red-400',
-  },
-  warning: {
-    icon: AlertTriangle,
-    accent: '#f59e0b',
-    accentDark: '#d97706',
-    label: 'Warning',
-    iconBg: 'rgba(245,158,11,0.12)',
-    iconColor: '#f59e0b',
-    progressColor: '#f59e0b',
-    bgColor:
-          theme === 'dark'
-            ? 'bg-gradient-to-r from-yellow-500/90 to-orange-500/90'
-            : 'bg-gradient-to-r from-yellow-500 to-orange-500',
-  },
-  info: {
-    icon: Info,
-    accent: '#3b82f6',
-    accentDark: '#2563eb',
-    label: 'Info',
-    iconBg: 'rgba(59,130,246,0.12)',
-    iconColor: '#3b82f6',
-    progressColor: '#3b82f6',
-    bgColor:
-          theme === 'dark'
-            ? 'bg-gradient-to-r from-blue-500/90 to-indigo-500/90'
-            : 'bg-gradient-to-r from-blue-500 to-indigo-500',
-  },
-};
+  const [progress, setProgress] = useState(1); // 1 → 0
+  const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
 
-  // Keep existing session-warning icon logic intact
-  const getNotificationConfig = (type: Notification['type']) => {
-    const base = notificationConfig[type] || notificationConfig.info;
-    if (type === 'warning' && notification.title?.includes('Session')) {
-      return { ...base, icon: Clock };
-    }
-    return base;
-  };
+  const pausedRef = useRef(false);
+  const onRemoveRef = useRef(onRemove);
+  onRemoveRef.current = onRemove;
 
-  const config = getNotificationConfig(notification.type);
-  const Icon = config.icon;
+  const base = TYPE_CONFIG[notification.type] || TYPE_CONFIG.info;
+  const isSession =
+    notification.type === 'warning' &&
+    !!notification.title?.includes('Session');
+  // Keep the existing session-warning icon behaviour
+  const Icon = isSession ? Clock : base.icon;
 
-  const handleRemove = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-    onRemove(notification.id);
-  };
+  const hasTimer = !!notification.duration && notification.duration > 0;
+  const clickable = !!notification.onClick;
 
-  const handleClick = () => {
-    if (notification.onClick) {
-      notification.onClick();
-      handleRemove();
-    }
-  };
+  /* ---- Auto-dismiss timer: pauses while hovered / focused ---- */
+  pausedRef.current = isHovered || isFocused;
 
   useEffect(() => {
-    if (notification.duration && notification.duration > 0) {
-      const intervalTime = 100;
-      const steps = notification.duration / intervalTime;
-      const decrementPerStep = 100 / steps;
+    if (!hasTimer) return;
+    const total = notification.duration as number;
+    let remaining = total;
 
-      intervalRef.current = setInterval(() => {
-        setProgress((prev) => {
-          const newProgress = prev - decrementPerStep;
-          if (newProgress <= 0) {
-            if (intervalRef.current) {
-              clearInterval(intervalRef.current);
-              intervalRef.current = null;
-            }
-            setTimeout(() => {
-              onRemove(notification.id);
-            }, 0);
-            return 0;
-          }
-          return newProgress;
-        });
-      }, intervalTime);
-    }
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+    const id = setInterval(() => {
+      if (pausedRef.current) return;
+      remaining -= TICK_MS;
+      if (remaining <= 0) {
+        clearInterval(id);
+        setProgress(0);
+        onRemoveRef.current(notification.id);
+        return;
       }
-    };
-  }, [notification.id, notification.duration, onRemove]);
+      setProgress(remaining / total);
+    }, TICK_MS);
 
-  const bg = isDark ? 'rgba(252, 252, 252, 0.92)' : 'rgba(45,45,46,0.92)';
-  const border = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
-  const titleColor = isDark ? '#0f172a' : '#f1f5f9' ;
-  const msgColor = isDark ? '#475569' : '#94a3b8' ;
-  const actionColor = config.accent;
-  const closeBg = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
-  const closeHoverBg = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)';
-  const shadow = isDark
-    ? `0 8px 32px rgba(0,0,0,0.45), 0 0 0 1px ${border}, inset 0 1px 0 rgba(255,255,255,0.06)`
-    : `0 4px 24px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04), 0 0 0 1px ${border}`;
+    return () => clearInterval(id);
+  }, [notification.id, notification.duration, hasTimer]);
+
+  const handleRemove = () => onRemoveRef.current(notification.id);
+
+  const handleActivate = () => {
+    if (!notification.onClick) return;
+    notification.onClick();
+    handleRemove();
+  };
+
+  /* ---- Theme tokens ---- */
+  const t = isDark
+    ? {
+        surface: 'rgba(15, 23, 42, 0.74)',
+        title: '#f8fafc',
+        message: 'rgba(226, 232, 240, 0.82)',
+        border: 'rgba(255, 255, 255, 0.14)',
+        ring: 'rgba(0, 0, 0, 0.35)',
+        sheen: 'rgba(255, 255, 255, 0.10)',
+        closeBg: 'rgba(255, 255, 255, 0.08)',
+        closeHover: 'rgba(255, 255, 255, 0.18)',
+        track: 'rgba(255, 255, 255, 0.08)',
+        labelColor: base.textDark,
+        shadow: `0 18px 40px -12px rgba(0,0,0,0.55), 0 6px 14px -6px rgba(0,0,0,0.4)`,
+      }
+    : {
+        surface: 'rgba(255, 255, 255, 0.78)',
+        title: '#0f172a',
+        message: '#475569',
+        border: 'rgba(255, 255, 255, 0.85)',
+        ring: 'rgba(15, 23, 42, 0.10)',
+        sheen: 'rgba(255, 255, 255, 0.65)',
+        closeBg: 'rgba(15, 23, 42, 0.05)',
+        closeHover: 'rgba(15, 23, 42, 0.11)',
+        track: 'rgba(15, 23, 42, 0.07)',
+        labelColor: base.textLight,
+        shadow: `0 18px 40px -14px rgba(15,23,42,0.28), 0 6px 14px -6px rgba(15,23,42,0.14)`,
+      };
+
+  const tintStrength = isDark ? 0.2 : 0.14;
 
   return (
     <motion.div
-      layout
-      initial={{ opacity: 0, y: 16, scale: 0.97, x: 20 }}
-      animate={{ opacity: 1, y: 0, scale: 1, x: 0 }}
-      exit={{ opacity: 0, y: -8, scale: 0.97, x: 20 }}
-      transition={{ duration: 0.28, type: 'spring', stiffness: 340, damping: 28 }}
-      style={{ width: '100%', maxWidth: 380, position: 'relative' }}
+      layout={!reduceMotion}
+      initial={
+        reduceMotion ? { opacity: 0 } : { opacity: 0, x: 40, scale: 0.96 }
+      }
+      animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={
+        reduceMotion
+          ? { opacity: 0 }
+          : { opacity: 0, x: 40, scale: 0.96, transition: { duration: 0.2 } }
+      }
+      transition={{ type: 'spring', stiffness: 360, damping: 30 }}
+      style={{ width: '100%', maxWidth: 400, position: 'relative' }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onFocusCapture={() => setIsFocused(true)}
+      onBlurCapture={() => setIsFocused(false)}
+      role={
+        notification.type === 'error' || notification.type === 'warning'
+          ? 'alert'
+          : 'status'
+      }
+      aria-live={
+        notification.type === 'error' || notification.type === 'warning'
+          ? 'assertive'
+          : 'polite'
+      }
     >
-      {/* Glow effect behind card */}
+      {/* Ambient coloured glow behind the card */}
       <div
+        aria-hidden
         style={{
           position: 'absolute',
-          inset: 0,
-          borderRadius: 16,
-          background: `radial-gradient(ellipse at 20% 50%, ${config.accent}18 0%, transparent 70%)`,
-          opacity: isHovered ? 1 : 0,
+          inset: -6,
+          borderRadius: 26,
+          background: `radial-gradient(60% 80% at 15% 50%, rgba(${base.rgb}, ${
+            isDark ? 0.35 : 0.28
+          }) 0%, transparent 70%)`,
+          filter: 'blur(14px)',
+          opacity: isHovered ? 1 : 0.65,
           transition: 'opacity 0.3s ease',
           pointerEvents: 'none',
         }}
       />
 
+      {/* Glass card */}
       <div
-        onClick={notification.onClick ? handleClick : undefined}
+        onClick={clickable ? handleActivate : undefined}
+        onKeyDown={
+          clickable
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleActivate();
+                }
+              }
+            : undefined
+        }
+        tabIndex={clickable ? 0 : undefined}
         style={{
           position: 'relative',
           display: 'flex',
           alignItems: 'flex-start',
-          gap: 12,
-          padding: '14px 14px 14px 16px',
-          background: bg,
-          borderRadius: 16,
-          boxShadow: shadow,
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          cursor: notification.onClick ? 'pointer' : 'default',
+          gap: 14,
+          padding: '16px 14px 18px 16px',
+          borderRadius: 20,
           overflow: 'hidden',
-          transform: isHovered ? 'translateY(-1px)' : 'translateY(0)',
-          transition: 'transform 0.2s ease, box-shadow 0.2s ease',
-          borderLeft: `3px solid ${config.accent}`,
+          cursor: clickable ? 'pointer' : 'default',
+          // tinted layer over the frosted base
+          background: `linear-gradient(135deg, rgba(${base.rgb}, ${tintStrength}) 0%, rgba(${base.rgb}, 0.03) 45%, transparent 100%), linear-gradient(${t.surface}, ${t.surface})`,
+          backdropFilter: 'blur(24px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+          border: `1px solid ${t.border}`,
+          boxShadow: `${t.shadow}, 0 0 0 1px ${t.ring}`,
+          transform:
+            isHovered && !reduceMotion ? 'translateY(-2px)' : 'translateY(0)',
+          transition: 'transform 0.2s ease',
+          outline: 'none',
         }}
       >
-        {/* Icon pill */}
+        {/* Top glass sheen */}
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: `linear-gradient(180deg, ${t.sheen} 0%, transparent 42%)`,
+            pointerEvents: 'none',
+          }}
+        />
+
+        {/* Accent edge */}
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 14,
+            bottom: 14,
+            width: 3,
+            borderRadius: '0 3px 3px 0',
+            background: `linear-gradient(180deg, ${base.from}, ${base.to})`,
+          }}
+        />
+
+        {/* Icon */}
         <div
           style={{
+            position: 'relative',
             flexShrink: 0,
-            width: 36,
-            height: 36,
-            borderRadius: 10,
-            background: config.iconBg,
+            width: 40,
+            height: 40,
+            borderRadius: 13,
+            background: `linear-gradient(135deg, ${base.from}, ${base.to})`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            marginTop: 1,
+            boxShadow: `0 6px 16px -4px rgba(${base.rgb}, 0.55), inset 0 1px 0 rgba(255,255,255,0.35)`,
           }}
         >
           <Icon
-            style={{ width: 18, height: 18, color: config.iconColor }}
-            strokeWidth={2.2}
+            style={{ width: 20, height: 20, color: '#fff' }}
+            strokeWidth={2.3}
           />
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Type label + title row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: notification.title ? 2 : 4 }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 4,
+            }}
+          >
             <span
               style={{
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: 700,
-                letterSpacing: '0.08em',
+                letterSpacing: '0.09em',
                 textTransform: 'uppercase',
-                color: config.accent,
-                fontFamily: 'ui-monospace, "Fira Code", monospace',
+                color: t.labelColor,
               }}
             >
-              {config.label}
+              {base.label}
             </span>
-            {notification.type === 'warning' && notification.title?.includes('Session') && (
-              <motion.div
-                animate={{ opacity: [1, 0.3, 1] }}
-                transition={{ duration: 1.4, repeat: Infinity }}
-                style={{ width: 6, height: 6, borderRadius: '50%', background: config.accent }}
+
+            {(isSession || notification.persistent) && (
+              <motion.span
+                aria-hidden
+                animate={reduceMotion ? undefined : { opacity: [1, 0.3, 1] }}
+                transition={{ duration: 1.6, repeat: Infinity }}
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: base.from,
+                  boxShadow: `0 0 8px rgba(${base.rgb}, 0.9)`,
+                }}
               />
+            )}
+            {notification.persistent && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: t.message,
+                  opacity: 0.8,
+                }}
+              >
+                Pinned
+              </span>
             )}
           </div>
 
           {notification.title && (
             <p
               style={{
-                fontSize: 13.5,
-                fontWeight: 600,
-                color: titleColor,
                 margin: '0 0 3px',
+                fontSize: 14.5,
+                fontWeight: 650 as any,
                 lineHeight: 1.35,
                 letterSpacing: '-0.01em',
+                color: t.title,
               }}
             >
               {notification.title}
@@ -261,97 +345,90 @@ const notificationConfig = {
 
           <p
             style={{
-              fontSize: 13,
-              color: msgColor,
               margin: 0,
+              fontSize: 13,
               lineHeight: 1.5,
-              letterSpacing: '-0.005em',
+              color: t.message,
+              wordBreak: 'break-word',
             }}
           >
             {notification.message}
           </p>
 
-          {notification.onClick && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 7 }}>
-              <span
-                style={{
-                  fontSize: 14,
-                  fontWeight: 800,
-                  color: actionColor,
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                Take action →
-              </span>
+          {clickable && (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                marginTop: 10,
+                padding: '5px 11px',
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 700,
+                color: t.labelColor,
+                background: `rgba(${base.rgb}, ${isDark ? 0.18 : 0.12})`,
+                border: `1px solid rgba(${base.rgb}, ${isDark ? 0.35 : 0.25})`,
+              }}
+            >
+              Take action
+              <ArrowRight style={{ width: 13, height: 13 }} strokeWidth={2.6} />
             </div>
           )}
         </div>
 
-        {/* Close button */}
+        {/* Close */}
         <button
+          type="button"
+          aria-label="Dismiss notification"
           onClick={(e) => {
             e.stopPropagation();
             handleRemove();
           }}
           style={{
+            position: 'relative',
             flexShrink: 0,
             width: 28,
             height: 28,
-            borderRadius: 8,
+            borderRadius: 9,
             border: 'none',
-            background: isHovered ? closeHoverBg : closeBg,
+            background: isHovered ? t.closeHover : t.closeBg,
+            color: t.message,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'pointer',
             transition: 'background 0.15s ease',
-            marginTop: 1,
-            color: msgColor,
           }}
         >
           <X style={{ width: 14, height: 14 }} strokeWidth={2.5} />
         </button>
 
-        {/* Progress bar */}
-        {notification.duration && notification.duration > 0 && (
+        {/* Progress (pauses on hover / focus) */}
+        {hasTimer && (
           <div
+            aria-hidden
             style={{
               position: 'absolute',
-              bottom: 0,
               left: 0,
               right: 0,
-              height: 2,
-              background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+              bottom: 0,
+              height: 3,
+              background: t.track,
             }}
           >
             <div
               style={{
                 height: '100%',
-                width: `${progress}%`,
-                background: config.progressColor,
-                opacity: 0.7,
-                borderRadius: '0 1px 1px 0',
-                transition: 'width 0.1s linear',
+                width: '100%',
+                transformOrigin: 'left center',
+                transform: `scaleX(${progress})`,
+                background: `linear-gradient(90deg, ${base.from}, ${base.to})`,
+                transition: `transform ${TICK_MS}ms linear`,
+                opacity: isHovered || isFocused ? 0.5 : 0.95,
               }}
             />
           </div>
-        )}
-
-        {/* Persistent dot */}
-        {notification.persistent && (
-          <motion.div
-            animate={{ opacity: [1, 0.4, 1] }}
-            transition={{ duration: 2, repeat: Infinity }}
-            style={{
-              position: 'absolute',
-              top: 10,
-              right: 48,
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              background: config.accent,
-            }}
-          />
         )}
       </div>
     </motion.div>

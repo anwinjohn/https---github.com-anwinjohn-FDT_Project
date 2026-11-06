@@ -33,6 +33,7 @@ import RulesManagement from './admin/RulesManagement';
 import ManagementFraudDashboard from './admin/Managementfrauddashboard';
 import AlertListing from './alerts/AlertListing';
 import ReportsPage from './ReportsPage';
+import UserProfilePage from './UserProfile';
 
 import {
   FraudVolumeOverTimeCard,
@@ -895,6 +896,8 @@ const Dashboard: React.FC = () => {
       case 'audit-logs':
       case 'logs':
         return <SystemLogMonitor />;
+      case 'profile-management':
+        return <UserProfilePage />;
       case 'rules':
         return (
           <DetailedRulesPanel data={alertsSummary} isLoading={isLoading} />
