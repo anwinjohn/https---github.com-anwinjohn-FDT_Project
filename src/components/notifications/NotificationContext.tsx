@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect } from 'react';
 import { appConfig as config } from '../../config/runtime-config';
+import {
+  loadNotificationPrefs,
+  NOTIFICATION_PREFS_EVENT,
+} from '../../utils/preferencesStore';
 
 export interface Notification {
   id: string;
@@ -14,9 +18,9 @@ export interface Notification {
 interface NotificationContextType {
   notifications: Notification[];
   addNotification: (
-    message: string, 
-    type?: Notification['type'], 
-    duration?: number, 
+    message: string,
+    type?: Notification['type'],
+    duration?: number,
     title?: string,
     onClick?: () => void
   ) => void;
@@ -33,6 +37,16 @@ interface NotificationProviderProps {
 export const NotificationProvider: React.FC<NotificationProviderProps> = ({ children }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [timeouts, setTimeouts] = useState<Record<string, NodeJS.Timeout>>({});
+  // Respect the persisted "toast notifications" preference; defaults to on.
+  const [toastsEnabled, setToastsEnabled] = useState(
+    () => loadNotificationPrefs().toastsEnabled
+  );
+
+  useEffect(() => {
+    const handler = () => setToastsEnabled(loadNotificationPrefs().toastsEnabled);
+    window.addEventListener(NOTIFICATION_PREFS_EVENT, handler);
+    return () => window.removeEventListener(NOTIFICATION_PREFS_EVENT, handler);
+  }, []);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -42,12 +56,13 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
   }, [timeouts]);
 
   const addNotification = useCallback((
-    message: string, 
-    type: Notification['type'] = 'info', 
+    message: string,
+    type: Notification['type'] = 'info',
     duration: number = 10000,
     title?: string,
     onClick?: () => void
   ) => {
+    if (!loadNotificationPrefs().toastsEnabled) return;
     const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     title = config.app.name;

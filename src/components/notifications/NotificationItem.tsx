@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion, useReducedMotion, PanInfo } from 'framer-motion';
 import {
   CheckCircle2,
   XCircle,
@@ -7,96 +7,140 @@ import {
   Info,
   X,
   Clock,
-  ArrowRight,
 } from 'lucide-react';
 import { Notification } from './NotificationContext';
-import { useTheme } from '../../context/ThemeContext';
+
+/**
+ * Toast item v2 — "Quiet Glass".
+ * Frosted, near-opaque surface, hairline border + inner highlight, one
+ * semantic accent (icon ring = countdown, edge pill, action button).
+ *
+ * Business behavior is unchanged: same props, same Notification fields,
+ * same timer / pause / onClick / onRemove / persistent / Session-clock logic.
+ * All new capabilities are OPTIONAL extra fields (RichNotification) and
+ * therefore non-breaking for existing callers.
+ */
+
+export interface RichNotification extends Notification {
+  /** Small meta text, e.g. "now", "2m ago" */
+  meta?: string;
+  /** Avatar image (social toasts). Type icon becomes a small badge. */
+  avatarUrl?: string;
+  /** Media thumbnail (e.g. upload preview), shown on the right. */
+  mediaUrl?: string;
+  /** Inline action (e.g. Reply, Retry). Does not replace onClick. */
+  actionLabel?: string;
+  onAction?: () => void;
+}
 
 interface NotificationItemProps {
-  notification: Notification;
+  notification: RichNotification;
   onRemove: (id: string) => void;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Per-type palette                                                   */
-/*  rgb is used to build tints/glows; from/to drive the icon gradient  */
-/* ------------------------------------------------------------------ */
+interface Palette {
+  icon: React.ElementType;
+  label: string;
+  /** Decorative / non-text UI (>= 3:1) */
+  accent: string;
+  accentDark: string;
+  /** Text-safe accent (>= 4.5:1 on surface) */
+  text: string;
+  textDark: string;
+  /** Solid button background + foreground (>= 4.5:1) */
+  btnBg: string;
+  btnFg: string;
+  btnBgDark: string;
+  btnFgDark: string;
+}
 
-const TYPE_CONFIG = {
+const TYPE_CONFIG: Record<'success' | 'error' | 'warning' | 'info', Palette> = {
   success: {
     icon: CheckCircle2,
     label: 'Success',
-    rgb: '16,185,129',
-    from: '#10b981',
-    to: '#14b8a6',
-    textLight: '#047857',
-    textDark: '#6ee7b7',
+    accent: '#0E9F6E',
+    accentDark: '#34D399',
+    text: '#047857',
+    textDark: '#6EE7B7',
+    btnBg: '#047857',
+    btnFg: '#FFFFFF',
+    btnBgDark: '#34D399',
+    btnFgDark: '#052E22',
   },
   error: {
     icon: XCircle,
     label: 'Error',
-    rgb: '239,68,68',
-    from: '#ef4444',
-    to: '#f43f5e',
-    textLight: '#b91c1c',
-    textDark: '#fca5a5',
+    accent: '#E11D48',
+    accentDark: '#FB7185',
+    text: '#BE123C',
+    textDark: '#FDA4AF',
+    btnBg: '#BE123C',
+    btnFg: '#FFFFFF',
+    btnBgDark: '#FB7185',
+    btnFgDark: '#3B0614',
   },
   warning: {
     icon: AlertTriangle,
     label: 'Warning',
-    rgb: '245,158,11',
-    from: '#f59e0b',
-    to: '#f97316',
-    textLight: '#b45309',
-    textDark: '#fcd34d',
+    accent: '#D97706',
+    accentDark: '#FBBF24',
+    text: '#B45309',
+    textDark: '#FCD34D',
+    btnBg: '#B45309',
+    btnFg: '#FFFFFF',
+    btnBgDark: '#FBBF24',
+    btnFgDark: '#3A2300',
   },
   info: {
     icon: Info,
     label: 'Info',
-    rgb: '59,130,246',
-    from: '#3b82f6',
-    to: '#6366f1',
-    textLight: '#1d4ed8',
-    textDark: '#93c5fd',
+    accent: '#4F6EF7',
+    accentDark: '#7C9CFF',
+    text: '#3F51D8',
+    textDark: '#A5B8FF',
+    btnBg: '#3F51D8',
+    btnFg: '#FFFFFF',
+    btnBgDark: '#7C9CFF',
+    btnFgDark: '#0B1230',
   },
-} as const;
+};
 
 const TICK_MS = 50;
+const SWIPE_DISMISS_PX = 80;
+const SWIPE_DISMISS_VELOCITY = 500;
+const RING_SIZE = 38;
+const RING_R = 17;
+const RING_C = 2 * Math.PI * RING_R;
 
 const NotificationItem: React.FC<NotificationItemProps> = ({
   notification,
   onRemove,
 }) => {
-  const { theme } = useTheme();
-  const isDark = theme === 'dark';
   const reduceMotion = useReducedMotion();
-
-  const [progress, setProgress] = useState(1); // 1 → 0
-  const [isHovered, setIsHovered] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
+  const [progress, setProgress] = useState(1);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [held, setHeld] = useState(false); // touch / pointer hold
 
   const pausedRef = useRef(false);
   const onRemoveRef = useRef(onRemove);
   onRemoveRef.current = onRemove;
 
-  const base = TYPE_CONFIG[notification.type] || TYPE_CONFIG.info;
+  const base = TYPE_CONFIG[notification.type] ?? TYPE_CONFIG.info;
   const isSession =
     notification.type === 'warning' &&
     !!notification.title?.includes('Session');
-  // Keep the existing session-warning icon behaviour
   const Icon = isSession ? Clock : base.icon;
 
   const hasTimer = !!notification.duration && notification.duration > 0;
   const clickable = !!notification.onClick;
-
-  /* ---- Auto-dismiss timer: pauses while hovered / focused ---- */
-  pausedRef.current = isHovered || isFocused;
+  const paused = hovered || focused || held;
+  pausedRef.current = paused;
 
   useEffect(() => {
     if (!hasTimer) return;
     const total = notification.duration as number;
     let remaining = total;
-
     const id = setInterval(() => {
       if (pausedRef.current) return;
       remaining -= TICK_MS;
@@ -108,48 +152,54 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
       }
       setProgress(remaining / total);
     }, TICK_MS);
-
     return () => clearInterval(id);
   }, [notification.id, notification.duration, hasTimer]);
 
-  const handleRemove = () => onRemoveRef.current(notification.id);
+  const isDark = document.documentElement.classList.contains('dark');
+
+  // Tokens
+  const surface = isDark ? 'rgba(17,24,39,0.82)' : 'rgba(255,255,255,0.86)';
+  const titleColor = isDark ? '#F9FAFB' : '#101828';
+  const textColor = isDark ? 'rgba(226,232,240,0.88)' : '#475467';
+  const metaColor = isDark ? '#94A3B8' : '#667085';
+  const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(16,24,40,0.08)';
+  const trackColor = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(16,24,40,0.08)';
+  const accent = isDark ? base.accentDark : base.accent;
+  const accentText = isDark ? base.textDark : base.text;
+  const btnBg = isDark ? base.btnBgDark : base.btnBg;
+  const btnFg = isDark ? base.btnFgDark : base.btnFg;
+  const accentSoft = `rgba(${hexToRgb(accent)}, ${isDark ? 0.16 : 0.1})`;
+  const accentGlow = `rgba(${hexToRgb(accent)}, ${isDark ? 0.4 : 0.32})`;
+
+  const isPriority =
+    notification.type === 'error' || notification.type === 'warning';
+  const hasAvatar = !!notification.avatarUrl;
+
+  const shadowRest = isDark
+    ? '0 1px 2px rgba(0,0,0,0.4), 0 12px 32px -12px rgba(0,0,0,0.6)'
+    : '0 1px 2px rgba(16,24,40,0.06), 0 12px 32px -14px rgba(16,24,40,0.24)';
+  const shadowHover = isDark
+    ? '0 2px 4px rgba(0,0,0,0.45), 0 18px 40px -12px rgba(0,0,0,0.7)'
+    : '0 2px 4px rgba(16,24,40,0.08), 0 18px 40px -14px rgba(16,24,40,0.32)';
+  const innerHighlight = isDark
+    ? 'inset 0 1px 0 rgba(255,255,255,0.05)'
+    : 'inset 0 1px 0 rgba(255,255,255,0.7)';
 
   const handleActivate = () => {
     if (!notification.onClick) return;
     notification.onClick();
-    handleRemove();
+    onRemoveRef.current(notification.id);
   };
 
-  /* ---- Theme tokens ---- */
-  const t = isDark
-    ? {
-        surface: 'rgba(15, 23, 42, 0.74)',
-        title: '#f8fafc',
-        message: 'rgba(226, 232, 240, 0.82)',
-        border: 'rgba(255, 255, 255, 0.14)',
-        ring: 'rgba(0, 0, 0, 0.35)',
-        sheen: 'rgba(255, 255, 255, 0.10)',
-        closeBg: 'rgba(255, 255, 255, 0.08)',
-        closeHover: 'rgba(255, 255, 255, 0.18)',
-        track: 'rgba(255, 255, 255, 0.08)',
-        labelColor: base.textDark,
-        shadow: `0 18px 40px -12px rgba(0,0,0,0.55), 0 6px 14px -6px rgba(0,0,0,0.4)`,
-      }
-    : {
-        surface: 'rgba(255, 255, 255, 0.78)',
-        title: '#0f172a',
-        message: '#475569',
-        border: 'rgba(255, 255, 255, 0.85)',
-        ring: 'rgba(15, 23, 42, 0.10)',
-        sheen: 'rgba(255, 255, 255, 0.65)',
-        closeBg: 'rgba(15, 23, 42, 0.05)',
-        closeHover: 'rgba(15, 23, 42, 0.11)',
-        track: 'rgba(15, 23, 42, 0.07)',
-        labelColor: base.textLight,
-        shadow: `0 18px 40px -14px rgba(15,23,42,0.28), 0 6px 14px -6px rgba(15,23,42,0.14)`,
-      };
-
-  const tintStrength = isDark ? 0.2 : 0.14;
+  const handleDragEnd = (_: unknown, info: PanInfo) => {
+    setHeld(false);
+    if (
+      info.offset.x > SWIPE_DISMISS_PX ||
+      info.velocity.x > SWIPE_DISMISS_VELOCITY
+    ) {
+      onRemoveRef.current(notification.id);
+    }
+  };
 
   return (
     <motion.div
@@ -161,48 +211,41 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
       exit={
         reduceMotion
           ? { opacity: 0 }
-          : { opacity: 0, x: 40, scale: 0.96, transition: { duration: 0.2 } }
+          : {
+              opacity: 0,
+              x: 40,
+              scale: 0.97,
+              transition: { duration: 0.18, ease: [0.4, 0, 1, 1] },
+            }
       }
-      transition={{ type: 'spring', stiffness: 360, damping: 30 }}
-      style={{ width: '100%', maxWidth: 400, position: 'relative' }}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      onFocusCapture={() => setIsFocused(true)}
-      onBlurCapture={() => setIsFocused(false)}
-      role={
-        notification.type === 'error' || notification.type === 'warning'
-          ? 'alert'
-          : 'status'
-      }
-      aria-live={
-        notification.type === 'error' || notification.type === 'warning'
-          ? 'assertive'
-          : 'polite'
-      }
+      whileHover={reduceMotion ? undefined : { y: -1 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.9 }}
+      drag={reduceMotion ? false : 'x'}
+      dragConstraints={{ left: 0, right: 0 }}
+      dragElastic={{ left: 0.05, right: 0.7 }}
+      dragSnapToOrigin
+      onDragStart={() => setHeld(true)}
+      onDragEnd={handleDragEnd}
+      style={{ width: '100%', position: 'relative', touchAction: 'pan-y' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onPointerDown={() => setHeld(true)}
+      onPointerUp={() => setHeld(false)}
+      onPointerCancel={() => setHeld(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onRemoveRef.current(notification.id);
+      }}
+      role={isPriority ? 'alert' : 'status'}
+      aria-live={isPriority ? 'assertive' : 'polite'}
     >
-      {/* Ambient coloured glow behind the card */}
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute',
-          inset: -6,
-          borderRadius: 26,
-          background: `radial-gradient(60% 80% at 15% 50%, rgba(${base.rgb}, ${
-            isDark ? 0.35 : 0.28
-          }) 0%, transparent 70%)`,
-          filter: 'blur(14px)',
-          opacity: isHovered ? 1 : 0.65,
-          transition: 'opacity 0.3s ease',
-          pointerEvents: 'none',
-        }}
-      />
-
-      {/* Glass card */}
       <div
         onClick={clickable ? handleActivate : undefined}
         onKeyDown={
           clickable
             ? (e) => {
+                if (e.target !== e.currentTarget) return;
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   handleActivate();
@@ -212,38 +255,25 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
         }
         tabIndex={clickable ? 0 : undefined}
         style={{
-          position: 'relative',
           display: 'flex',
           alignItems: 'flex-start',
-          gap: 14,
-          padding: '16px 14px 18px 16px',
-          borderRadius: 20,
-          overflow: 'hidden',
+          gap: 12,
+          padding: '14px 12px 14px 18px',
+          borderRadius: 16,
+          background: surface,
+          backdropFilter: 'blur(18px) saturate(160%)',
+          WebkitBackdropFilter: 'blur(18px) saturate(160%)',
+          border: `1px solid ${borderColor}`,
+          boxShadow: `${hovered ? shadowHover : shadowRest}, ${innerHighlight}`,
           cursor: clickable ? 'pointer' : 'default',
-          // tinted layer over the frosted base
-          background: `linear-gradient(135deg, rgba(${base.rgb}, ${tintStrength}) 0%, rgba(${base.rgb}, 0.03) 45%, transparent 100%), linear-gradient(${t.surface}, ${t.surface})`,
-          backdropFilter: 'blur(24px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-          border: `1px solid ${t.border}`,
-          boxShadow: `${t.shadow}, 0 0 0 1px ${t.ring}`,
-          transform:
-            isHovered && !reduceMotion ? 'translateY(-2px)' : 'translateY(0)',
-          transition: 'transform 0.2s ease',
-          outline: 'none',
+          outline: focused && clickable ? `2px solid ${accent}` : 'none',
+          outlineOffset: 2,
+          position: 'relative',
+          overflow: 'hidden',
+          transition: 'box-shadow 0.25s ease',
         }}
       >
-        {/* Top glass sheen */}
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background: `linear-gradient(180deg, ${t.sheen} 0%, transparent 42%)`,
-            pointerEvents: 'none',
-          }}
-        />
-
-        {/* Accent edge */}
+        {/* Accent edge pill */}
         <div
           aria-hidden
           style={{
@@ -253,159 +283,300 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
             bottom: 14,
             width: 3,
             borderRadius: '0 3px 3px 0',
-            background: `linear-gradient(180deg, ${base.from}, ${base.to})`,
+            background: accent,
           }}
         />
 
-        {/* Icon */}
-        <div
-          style={{
-            position: 'relative',
-            flexShrink: 0,
-            width: 40,
-            height: 40,
-            borderRadius: 13,
-            background: `linear-gradient(135deg, ${base.from}, ${base.to})`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: `0 6px 16px -4px rgba(${base.rgb}, 0.55), inset 0 1px 0 rgba(255,255,255,0.35)`,
-          }}
-        >
-          <Icon
-            style={{ width: 20, height: 20, color: '#fff' }}
-            strokeWidth={2.3}
-          />
-        </div>
-
-        {/* Content */}
-        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+        {/* Leading visual: avatar (+ type badge) or icon with countdown ring */}
+        {hasAvatar ? (
           <div
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              marginBottom: 4,
+              position: 'relative',
+              flexShrink: 0,
+              width: RING_SIZE,
+              height: RING_SIZE,
             }}
           >
-            <span
+            <img
+              src={notification.avatarUrl}
+              alt=""
               style={{
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: '0.09em',
-                textTransform: 'uppercase',
-                color: t.labelColor,
+                width: RING_SIZE,
+                height: RING_SIZE,
+                borderRadius: '50%',
+                objectFit: 'cover',
+                display: 'block',
+                border: `1px solid ${borderColor}`,
+              }}
+            />
+            <div
+              aria-hidden
+              style={{
+                position: 'absolute',
+                right: -3,
+                bottom: -3,
+                width: 18,
+                height: 18,
+                borderRadius: '50%',
+                background: accent,
+                border: `2px solid ${isDark ? '#111827' : '#FFFFFF'}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              {base.label}
-            </span>
-
-            {(isSession || notification.persistent) && (
-              <motion.span
-                aria-hidden
-                animate={reduceMotion ? undefined : { opacity: [1, 0.3, 1] }}
-                transition={{ duration: 1.6, repeat: Infinity }}
+              <Icon
                 style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: base.from,
-                  boxShadow: `0 0 8px rgba(${base.rgb}, 0.9)`,
+                  width: 10,
+                  height: 10,
+                  color: isDark ? base.btnFgDark : '#FFFFFF',
                 }}
+                strokeWidth={2.8}
               />
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              position: 'relative',
+              flexShrink: 0,
+              width: RING_SIZE,
+              height: RING_SIZE,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: '50%',
+                background: accentSoft,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Icon
+                style={{ width: 16, height: 16, color: accent }}
+                strokeWidth={2.2}
+              />
+            </div>
+            {hasTimer && (
+              <svg
+                aria-hidden
+                width={RING_SIZE}
+                height={RING_SIZE}
+                viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  transform: 'rotate(-90deg)',
+                }}
+              >
+                <circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_R}
+                  fill="none"
+                  stroke={trackColor}
+                  strokeWidth={2}
+                />
+                <circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_R}
+                  fill="none"
+                  stroke={accent}
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeDasharray={RING_C}
+                  strokeDashoffset={RING_C * (1 - progress)}
+                  style={{
+                    transition: `stroke-dashoffset ${TICK_MS}ms linear, opacity 0.2s ease`,
+                    opacity: paused ? 0.45 : 1,
+                  }}
+                />
+              </svg>
+            )}
+          </div>
+        )}
+
+        {/* Content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            {notification.title && (
+              <span
+                style={{
+                  fontSize: 13.5,
+                  fontWeight: 650,
+                  lineHeight: 1.35,
+                  color: titleColor,
+                  letterSpacing: '-0.012em',
+                }}
+              >
+                {notification.title}
+              </span>
             )}
             {notification.persistent && (
               <span
                 style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  color: t.message,
-                  opacity: 0.8,
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  letterSpacing: '0.09em',
+                  textTransform: 'uppercase',
+                  color: accentText,
                 }}
               >
                 Pinned
               </span>
             )}
+            {notification.meta && (
+              <span
+                style={{
+                  marginLeft: 'auto',
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: metaColor,
+                  fontVariantNumeric: 'tabular-nums',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {notification.meta}
+              </span>
+            )}
           </div>
-
-          {notification.title && (
-            <p
-              style={{
-                margin: '0 0 3px',
-                fontSize: 14.5,
-                fontWeight: 650 as any,
-                lineHeight: 1.35,
-                letterSpacing: '-0.01em',
-                color: t.title,
-              }}
-            >
-              {notification.title}
-            </p>
-          )}
-
           <p
             style={{
               margin: 0,
-              fontSize: 13,
+              marginTop: notification.title ? 2 : 0,
+              fontSize: 12.5,
               lineHeight: 1.5,
-              color: t.message,
+              color: textColor,
               wordBreak: 'break-word',
             }}
           >
             {notification.message}
           </p>
 
-          {clickable && (
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                marginTop: 10,
-                padding: '5px 11px',
-                borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 700,
-                color: t.labelColor,
-                background: `rgba(${base.rgb}, ${isDark ? 0.18 : 0.12})`,
-                border: `1px solid rgba(${base.rgb}, ${isDark ? 0.35 : 0.25})`,
-              }}
-            >
-              Take action
-              <ArrowRight style={{ width: 13, height: 13 }} strokeWidth={2.6} />
+          {notification.actionLabel && notification.onAction && (
+            <div style={{ marginTop: 10 }}>
+              {isPriority ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    notification.onAction?.();
+                    onRemoveRef.current(notification.id);
+                  }}
+                  style={{
+                    height: 30,
+                    padding: '0 14px',
+                    borderRadius: 9,
+                    border: 'none',
+                    background: btnBg,
+                    color: btnFg,
+                    fontSize: 12,
+                    fontWeight: 650,
+                    letterSpacing: '-0.005em',
+                    cursor: 'pointer',
+                    boxShadow: `0 0 0 3px ${accentSoft}, 0 6px 16px -4px ${accentGlow}`,
+                  }}
+                >
+                  {notification.actionLabel}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    notification.onAction?.();
+                    onRemoveRef.current(notification.id);
+                  }}
+                  style={{
+                    height: 28,
+                    padding: '0 10px',
+                    marginLeft: -10,
+                    borderRadius: 8,
+                    border: 'none',
+                    background: 'transparent',
+                    color: accentText,
+                    fontSize: 12,
+                    fontWeight: 650,
+                    cursor: 'pointer',
+                    transition: 'background 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = accentSoft;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  {notification.actionLabel}
+                </button>
+              )}
             </div>
           )}
         </div>
 
-        {/* Close */}
+        {/* Media thumbnail */}
+        {notification.mediaUrl && (
+          <img
+            src={notification.mediaUrl}
+            alt=""
+            style={{
+              flexShrink: 0,
+              width: 44,
+              height: 44,
+              borderRadius: 10,
+              objectFit: 'cover',
+              border: `1px solid ${borderColor}`,
+            }}
+          />
+        )}
+
+        {/* Close — quiet until hover/focus */}
         <button
           type="button"
           aria-label="Dismiss notification"
           onClick={(e) => {
             e.stopPropagation();
-            handleRemove();
+            onRemoveRef.current(notification.id);
           }}
           style={{
-            position: 'relative',
             flexShrink: 0,
             width: 28,
             height: 28,
-            borderRadius: 9,
+            borderRadius: 8,
             border: 'none',
-            background: isHovered ? t.closeHover : t.closeBg,
-            color: t.message,
+            background: 'transparent',
+            color: isDark ? '#94A3B8' : '#667085',
+            opacity: hovered || focused ? 1 : 0.6,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'pointer',
-            transition: 'background 0.15s ease',
+            transition:
+              'background 0.15s ease, color 0.15s ease, opacity 0.15s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = isDark
+              ? 'rgba(255,255,255,0.08)'
+              : 'rgba(16,24,40,0.06)';
+            e.currentTarget.style.color = isDark ? '#E2E8F0' : '#344054';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = isDark ? '#94A3B8' : '#667085';
           }}
         >
-          <X style={{ width: 14, height: 14 }} strokeWidth={2.5} />
+          <X style={{ width: 14, height: 14 }} strokeWidth={2.4} />
         </button>
 
-        {/* Progress (pauses on hover / focus) */}
-        {hasTimer && (
+        {/* Fading underline for toasts without an icon ring (avatar layout) */}
+        {hasTimer && hasAvatar && (
           <div
             aria-hidden
             style={{
@@ -413,8 +584,8 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
               left: 0,
               right: 0,
               bottom: 0,
-              height: 3,
-              background: t.track,
+              height: 2,
+              background: trackColor,
             }}
           >
             <div
@@ -423,9 +594,9 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
                 width: '100%',
                 transformOrigin: 'left center',
                 transform: `scaleX(${progress})`,
-                background: `linear-gradient(90deg, ${base.from}, ${base.to})`,
+                background: accent,
                 transition: `transform ${TICK_MS}ms linear`,
-                opacity: isHovered || isFocused ? 0.5 : 0.95,
+                opacity: paused ? 0.4 : 0.9,
               }}
             />
           </div>
@@ -434,5 +605,13 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     </motion.div>
   );
 };
+
+function hexToRgb(hex: string): string {
+  const m = hex.replace('#', '');
+  const r = parseInt(m.slice(0, 2), 16);
+  const g = parseInt(m.slice(2, 4), 16);
+  const b = parseInt(m.slice(4, 6), 16);
+  return `${r},${g},${b}`;
+}
 
 export default NotificationItem;

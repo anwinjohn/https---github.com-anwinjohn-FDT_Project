@@ -41,7 +41,7 @@ import {
   UserCheck,
   History,
   Hash,
-  HomeIcon,
+  Home as HomeIcon,
   LayoutDashboard,
   StickyNote,
   Paperclip,
@@ -59,7 +59,11 @@ import { AlertDetailsResponse } from '../../types/alerts';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatNumber } from '../../utils/formatters';
-import { appConfig as config } from '../../config/runtime-config';
+import apiClient from '../../utils/apiClient';
+import {
+  alertAttachmentsService,
+  fmtSize,
+} from '../../services/alertAttachmentsService';
 
 interface AlertDetailsModalProps {
   isOpen: boolean;
@@ -96,14 +100,6 @@ interface NoteLite {
   created_at: string;
   updated_at?: string | null;
 }
-interface AttachmentLite {
-  attachment_id: string;
-  file_name: string;
-  file_size: number;
-  description?: string;
-  uploaded_by: string;
-  uploaded_at: string;
-}
 interface AlertLock {
   is_locked: boolean;
   locked_by?: string | null;
@@ -114,23 +110,9 @@ interface AlertLock {
 type TabKey = 'overview' | 'transactions' | 'risk' | 'notes';
 type LoadState = 'idle' | 'loading' | 'ok' | 'error';
 
-const apiBaseUrl = config.api.baseUrl;
-const RISK_INSIGHTS_API_URL = `${apiBaseUrl}/customer-risk-insight`;
-
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-async function postJson<T = any>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  const text = await res.text();
-  return (text ? JSON.parse(text) : {}) as T;
-}
 
 const num = (v: unknown) => Number.parseFloat(String(v ?? '')) || 0;
 const fmtDate = (v?: string | null) => {
@@ -148,12 +130,6 @@ const fmtDateTime = (v?: string | null) => {
   const d = new Date(v);
   return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 };
-const fmtSize = (b: number) =>
-  b < 1024
-    ? `${b} B`
-    : b < 1024 * 1024
-      ? `${(b / 1024).toFixed(1)} KB`
-      : `${(b / 1024 / 1024).toFixed(1)} MB`;
 
 // Neutralise spreadsheet formula injection in exported CSV cells
 const csvCell = (v: unknown) => {
@@ -536,13 +512,14 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
     setInsightsLoading(true);
     setInsightsError(null);
     try {
-      const data = await postJson<RiskInsights>(RISK_INSIGHTS_API_URL, {
+      const data = await apiClient.post<RiskInsights>('customer-risk-insight', {
         alert_id: alertId,
         customer_code: customerCode,
         customer_name: customerName,
       });
       if (id !== riskReq.current) return; // stale response
-      setRiskInsights(data);
+      if (!data.success) throw new Error(data.error || 'API error');
+      setRiskInsights((data.data ?? null) as RiskInsights | null);
     } catch (error) {
       if (id !== riskReq.current) return;
       console.error('Error fetching risk insights:', error);
@@ -566,7 +543,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
 
   /* ---- Notes / attachments / WIP lock (read-only view) -------------- */
   const [notes, setNotes] = useState<NoteLite[]>([]);
-  const [files, setFiles] = useState<AttachmentLite[]>([]);
+  const [files, setFiles] = useState<AlertAttachment[]>([]);
   const [lock, setLock] = useState<AlertLock | null>(null);
   const [notesState, setNotesState] = useState<LoadState>('idle');
   const [filesState, setFilesState] = useState<LoadState>('idle');
@@ -579,24 +556,23 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
     setFilesState('loading');
     const [n, f, l] = await Promise.allSettled([
       username
-        ? postJson<any>(`${apiBaseUrl}/alert-notes/list`, {
+        ? apiClient.post<any>('alert-notes/list', {
             alert_id: alertId,
             username,
           })
         : Promise.resolve(null),
-      postJson<any>(`${apiBaseUrl}/alert-attachments/list`, {
-        alert_id: alertId,
-      }),
-      postJson<AlertLock>(`${apiBaseUrl}/alert-lock/status`, {
+      alertAttachmentsService.list(alertId),
+      apiClient.post<AlertLock>('alert-lock/status', {
         alert_id: alertId,
       }),
     ]);
     if (id !== sideReq.current) return;
 
-    if (n.status === 'fulfilled' && n.value) {
-      const list: NoteLite[] = Array.isArray(n.value)
-        ? n.value
-        : (n.value.notes ?? []);
+    if (n.status === 'fulfilled' && n.value?.success) {
+      const payload = n.value.data;
+      const list: NoteLite[] = Array.isArray(payload)
+        ? payload
+        : (payload?.notes ?? payload?.data ?? []);
       list.sort(
         (a, b) =>
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -607,9 +583,7 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
       setNotesState('error');
     }
     if (f.status === 'fulfilled') {
-      const list: AttachmentLite[] = Array.isArray(f.value)
-        ? f.value
-        : (f.value.attachments ?? []);
+      const list: AlertAttachment[] = f.value;
       list.sort(
         (a, b) =>
           new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()
@@ -619,7 +593,8 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
     } else {
       setFilesState('error');
     }
-    if (l.status === 'fulfilled') setLock(l.value);
+    if (l.status === 'fulfilled' && l.value?.success)
+      setLock(l.value.data as AlertLock);
   }, [alertId, username]);
 
   useEffect(() => {
@@ -1764,16 +1739,21 @@ const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({
                       </div>
                     </div>
                   </div>
-                  <a
-                    href={`${apiBaseUrl}/alert-attachments/download/${encodeURIComponent(a.attachment_id)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
                     aria-label={`Download ${a.file_name}`}
+                    onClick={async () => {
+                      try {
+                        await alertAttachmentsService.download(a);
+                      } catch {
+                        /* download failed - the file stays listed */
+                      }
+                    }}
                     className={s.ghostBtn}
                   >
                     <Download className="w-3.5 h-3.5" />
                     Download
-                  </a>
+                  </button>
                 </div>
               ))}
             </div>

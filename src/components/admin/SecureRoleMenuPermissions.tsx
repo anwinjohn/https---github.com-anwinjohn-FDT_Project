@@ -115,7 +115,7 @@ const PERMISSION_META: Record<
   can_create: { label: 'Create', short: 'Create', icon: Plus },
   can_edit: { label: 'Edit', short: 'Edit', icon: Pencil },
   can_delete: { label: 'Delete', short: 'Delete', icon: Trash2 },
-  can_export: { label: 'Export', short: 'Export', icon: Download },
+  can_export: { label: 'Export / Download', short: 'Export', icon: Download },
   can_import: { label: 'Import / Upload', short: 'Import', icon: Upload },
 };
 

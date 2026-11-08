@@ -1,4 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+} from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useNotifications } from '../components/notifications';
 import { appConfig as config } from '../config/runtime-config';
@@ -13,8 +19,16 @@ import { jwtDecode } from 'jwt-decode';
 interface AuthContextType {
   isAuthenticated: boolean;
   user: UserInfo | null;
-  login: (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo) => Promise<boolean>;
-  loginWithFaceVerification: (username: string, verificationToken: string) => Promise<boolean>;
+  login: (
+    username: string,
+    password: string,
+    isLDAPEnabled: boolean,
+    machineInfo?: LocalMachineInfo
+  ) => Promise<boolean>;
+  loginWithFaceVerification: (
+    username: string,
+    verificationToken: string
+  ) => Promise<boolean>;
   logout: () => void;
   loading: boolean;
   resetSessionTimer: () => void;
@@ -57,7 +71,7 @@ const MOCK_ADMIN: UserInfo = {
   full_name: 'System Administrator',
   role_id: 1, // Admin role as integer
   mfa_enabled: false,
-  request_username: 'admin'
+  request_username: 'admin',
 };
 
 const ENCRYPTION_KEY = 'xK6$9pF2!qW8#zR1@lY3*uM5%vS7^dN$';
@@ -91,42 +105,69 @@ const SessionTimeoutModal: React.FC<{
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className={`w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden ${theme === 'dark'
-                ? 'bg-gradient-to-br from-slate-800/95 via-slate-900/95 to-slate-800/95 border-white/20'
-                : 'bg-gradient-to-br from-white/95 via-gray-50/95 to-white/95 border-gray-200'
-                } backdrop-blur-2xl`}
+              className={`w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden ${
+                theme === 'dark'
+                  ? 'bg-gradient-to-br from-slate-800/95 via-slate-900/95 to-slate-800/95 border-white/20'
+                  : 'bg-gradient-to-br from-white/95 via-gray-50/95 to-white/95 border-gray-200'
+              } backdrop-blur-2xl`}
             >
-              <div className={`p-6 border-b ${theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-                }`}>
+              <div
+                className={`p-6 border-b ${
+                  theme === 'dark' ? 'border-white/20' : 'border-gray-200'
+                }`}
+              >
                 <div className="flex items-center gap-4">
                   <div className="p-3 bg-gradient-to-br from-yellow-500 to-orange-600 rounded-xl shadow-lg">
                     <Clock className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h2 className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
-                      }`}>Session Timeout Warning</h2>
-                    <p className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                      }`}>Your session is about to expire</p>
+                    <h2
+                      className={`text-xl font-bold ${
+                        theme === 'dark' ? 'text-white' : 'text-gray-900'
+                      }`}
+                    >
+                      Session Timeout Warning
+                    </h2>
+                    <p
+                      className={`text-sm ${
+                        theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                      }`}
+                    >
+                      Your session is about to expire
+                    </p>
                   </div>
                 </div>
               </div>
 
               <div className="p-6">
-                <div className={`mb-6 p-4 rounded-xl border ${theme === 'dark'
-                  ? 'bg-yellow-500/10 border-yellow-500/30 text-white/80'
-                  : 'bg-yellow-50 border-yellow-200 text-gray-700'
-                  }`}>
-                  <p className="mb-2">Due to inactivity, your session will expire in:</p>
-                  <div className={`text-2xl font-bold text-center ${theme === 'dark' ? 'text-yellow-300' : 'text-yellow-600'
-                    }`}>
-                    {minutes.toString().padStart(2, '0')}:{seconds.toString().padStart(2, '0')}
+                <div
+                  className={`mb-6 p-4 rounded-xl border ${
+                    theme === 'dark'
+                      ? 'bg-yellow-500/10 border-yellow-500/30 text-white/80'
+                      : 'bg-yellow-50 border-yellow-200 text-gray-700'
+                  }`}
+                >
+                  <p className="mb-2">
+                    Due to inactivity, your session will expire in:
+                  </p>
+                  <div
+                    className={`text-2xl font-bold text-center ${
+                      theme === 'dark' ? 'text-yellow-300' : 'text-yellow-600'
+                    }`}
+                  >
+                    {minutes.toString().padStart(2, '0')}:
+                    {seconds.toString().padStart(2, '0')}
                   </div>
                 </div>
 
-                <p className={`mb-6 text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                  }`}>
-                  For security reasons, your session will automatically end if no action is taken.
-                  Click the button below to extend your session.
+                <p
+                  className={`mb-6 text-sm ${
+                    theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                  }`}
+                >
+                  For security reasons, your session will automatically end if
+                  no action is taken. Click the button below to extend your
+                  session.
                 </p>
 
                 <div className="flex justify-center">
@@ -134,10 +175,11 @@ const SessionTimeoutModal: React.FC<{
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={onExtend}
-                    className={`flex items-center gap-2 px-6 py-3 rounded-xl transition-colors ${theme === 'dark'
-                      ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 hover:from-blue-500/30 hover:to-indigo-500/30 text-blue-300 border border-blue-500/30'
-                      : 'bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-200 hover:to-indigo-200 text-blue-700 border border-blue-300'
-                      }`}
+                    className={`flex items-center gap-2 px-6 py-3 rounded-xl transition-colors ${
+                      theme === 'dark'
+                        ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 hover:from-blue-500/30 hover:to-indigo-500/30 text-blue-300 border border-blue-500/30'
+                        : 'bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-200 hover:to-indigo-200 text-blue-700 border border-blue-300'
+                    }`}
                   >
                     <RefreshCw className="w-5 h-5" />
                     Extend Session
@@ -145,11 +187,20 @@ const SessionTimeoutModal: React.FC<{
                 </div>
               </div>
 
-              <div className={`px-6 py-4 border-t ${theme === 'dark' ? 'border-white/20 bg-white/5' : 'border-gray-200 bg-gray-50'
-                }`}>
-                <p className={`text-xs text-center ${theme === 'dark' ? 'text-white/40' : 'text-gray-500'
-                  }`}>
-                  This timeout is for your security. Confidential information requires protection.
+              <div
+                className={`px-6 py-4 border-t ${
+                  theme === 'dark'
+                    ? 'border-white/20 bg-white/5'
+                    : 'border-gray-200 bg-gray-50'
+                }`}
+              >
+                <p
+                  className={`text-xs text-center ${
+                    theme === 'dark' ? 'text-white/40' : 'text-gray-500'
+                  }`}
+                >
+                  This timeout is for your security. Confidential information
+                  requires protection.
                 </p>
               </div>
             </motion.div>
@@ -160,7 +211,9 @@ const SessionTimeoutModal: React.FC<{
   );
 };
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -170,7 +223,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const warningTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Separate timer for "warning period elapsed without action". It must NOT
+  // share sessionTimerRef: showSessionWarning previously overwrote the ref
+  // while the 30-min inactivity logout timer was still pending, orphaning it
+  // so clearTimers could never cancel it — that orphan fired logout() on
+  // ACTIVE users at minute 30 of every session.
+  const warningLogoutTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastActivityRef = useRef<number>(Date.now());
+  const lastActivityHandledRef = useRef<number>(0);
   const warningShownRef = useRef<boolean>(false);
   const isLoggingOutRef = useRef<boolean>(false);
 
@@ -183,7 +243,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Update theme based on document class
   useEffect(() => {
     const updateTheme = () => {
-      setTheme(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+      setTheme(
+        document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+      );
     };
 
     updateTheme();
@@ -210,6 +272,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (warningTimerRef.current) {
       clearTimeout(warningTimerRef.current);
       warningTimerRef.current = null;
+    }
+    if (warningLogoutTimerRef.current) {
+      clearTimeout(warningLogoutTimerRef.current);
+      warningLogoutTimerRef.current = null;
     }
     if (timeoutIntervalRef.current) {
       clearInterval(timeoutIntervalRef.current);
@@ -265,21 +331,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     timeoutIntervalRef.current = setInterval(() => {
-      setTimeRemaining(prev => {
-        const newTime = prev - 1000;
-        if (newTime <= 0) {
-          clearInterval(timeoutIntervalRef.current!);
-          logout('Your session has expired due to inactivity. Please login again for security.');
-          return 0;
-        }
-        return newTime;
-      });
+      // Pure countdown only — the actual logout is owned by
+      // warningLogoutTimerRef below. Calling logout() inside a state updater
+      // can double-fire under StrictMode and mixes side effects into renders.
+      setTimeRemaining((prev) => Math.max(0, prev - 1000));
     }, 1000);
 
     // Auto-logout after warning period if no action taken
-    sessionTimerRef.current = setTimeout(() => {
+    warningLogoutTimerRef.current = setTimeout(() => {
       if (warningShownRef.current && !isLoggingOutRef.current) {
-        logout('Your session has expired due to inactivity. Please login again for security.');
+        logout(
+          'Your session has expired due to inactivity. Please login again for security.'
+        );
       }
     }, WARNING_TIME);
   };
@@ -304,27 +367,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Set logout timer (30 minutes)
     sessionTimerRef.current = setTimeout(() => {
       if (!isLoggingOutRef.current) {
-        logout('Your session has expired due to inactivity. Please login again for security.');
+        logout(
+          'Your session has expired due to inactivity. Please login again for security.'
+        );
       }
     }, SESSION_TIMEOUT);
   };
 
-  // Track user activity
+  // Track user activity. High-frequency events (mousemove, scroll) fire many
+  // times per second; each unthrottled hit rewrote localStorage and reset both
+  // session timers. Throttle to 5s — the idle deadline is minutes long, so a
+  // 5s extension lag is imperceptible, and activity during the warning
+  // countdown still dismisses the modal within one throttle window.
+  const ACTIVITY_THROTTLE_MS = 5000;
+
   useEffect(() => {
     const handleActivity = () => {
-      if (isAuthenticated && !isLoggingOutRef.current) {
-        resetSessionTimer();
-      }
+      if (!isAuthenticated || isLoggingOutRef.current) return;
+      const now = Date.now();
+      if (now - lastActivityHandledRef.current < ACTIVITY_THROTTLE_MS) return;
+      lastActivityHandledRef.current = now;
+      resetSessionTimer();
     };
 
-    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
+    const events = [
+      'mousedown',
+      'mousemove',
+      'keypress',
+      'scroll',
+      'touchstart',
+      'click',
+    ];
 
-    events.forEach(event => {
+    events.forEach((event) => {
       document.addEventListener(event, handleActivity, true);
     });
 
     return () => {
-      events.forEach(event => {
+      events.forEach((event) => {
         document.removeEventListener(event, handleActivity, true);
       });
     };
@@ -352,13 +432,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (token && lastActivity) {
         const timeSinceLastActivity = Date.now() - parseInt(lastActivity);
-        const timeSinceWarning = warningShown ? Date.now() - parseInt(warningShown) : 0;
+        const timeSinceWarning = warningShown
+          ? Date.now() - parseInt(warningShown)
+          : 0;
 
         if (timeSinceLastActivity > SESSION_TIMEOUT) {
           // Session expired
           logout('Your session has expired. Please login again.');
           return false;
-        } else if (timeSinceLastActivity > (SESSION_TIMEOUT - WARNING_TIME)) {
+        } else if (timeSinceLastActivity > SESSION_TIMEOUT - WARNING_TIME) {
           // In warning period
           if (warningShown && timeSinceWarning > WARNING_TIME) {
             // Warning period also expired
@@ -415,13 +497,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (lastActivity && isAuthenticated && !isLoggingOutRef.current) {
           const timeSinceLastActivity = Date.now() - parseInt(lastActivity);
-          const timeSinceWarning = warningShown ? Date.now() - parseInt(warningShown) : 0;
+          const timeSinceWarning = warningShown
+            ? Date.now() - parseInt(warningShown)
+            : 0;
 
           if (timeSinceLastActivity > SESSION_TIMEOUT) {
-            logout('Your session has expired due to inactivity. Please login again.');
-          } else if (timeSinceLastActivity > (SESSION_TIMEOUT - WARNING_TIME)) {
+            logout(
+              'Your session has expired due to inactivity. Please login again.'
+            );
+          } else if (timeSinceLastActivity > SESSION_TIMEOUT - WARNING_TIME) {
             if (warningShown && timeSinceWarning > WARNING_TIME) {
-              logout('Your session has expired due to inactivity. Please login again.');
+              logout(
+                'Your session has expired due to inactivity. Please login again.'
+              );
             } else {
               warningShownRef.current = !!warningShown;
               if (warningShown) {
@@ -449,7 +537,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Decode base64
       const encryptedBytes = CryptoJS.enc.Base64.parse(encryptedData);
       // Extract IV (first 16 bytes/4 words)
-      const iv = CryptoJS.lib.WordArray.create(encryptedBytes.words.slice(0, 4), 16);
+      const iv = CryptoJS.lib.WordArray.create(
+        encryptedBytes.words.slice(0, 4),
+        16
+      );
       // Extract ciphertext (rest of the data)
       const ciphertext = CryptoJS.lib.WordArray.create(
         encryptedBytes.words.slice(4),
@@ -462,7 +553,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         {
           iv: iv,
           mode: CryptoJS.mode.CBC,
-          padding: CryptoJS.pad.Pkcs7
+          padding: CryptoJS.pad.Pkcs7,
         }
       );
       // Convert to string and parse JSON
@@ -488,7 +579,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     resetSessionTimer();
   };
 
-  const login = async (username: string, password: string, isLDAPEnabled: boolean, machineInfo?: LocalMachineInfo): Promise<boolean> => {
+  const login = async (
+    username: string,
+    password: string,
+    isLDAPEnabled: boolean,
+    machineInfo?: LocalMachineInfo
+  ): Promise<boolean> => {
     try {
       // Clear any existing session data
       clearTimers();
@@ -501,16 +597,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const sessionId = iv.toString();
 
       const encrypted = CryptoJS.AES.encrypt(
-        JSON.stringify({ username, password, sessionId, isLDAPEnabled, machineInfo }),
+        JSON.stringify({
+          username,
+          password,
+          sessionId,
+          isLDAPEnabled,
+          machineInfo,
+        }),
         CryptoJS.enc.Utf8.parse(ENCRYPTION_KEY),
         {
           iv: iv,
           mode: CryptoJS.mode.CBC,
-          padding: CryptoJS.pad.Pkcs7
+          padding: CryptoJS.pad.Pkcs7,
         }
       );
       // Combine IV and ciphertext
-      const encryptedData = iv.concat(encrypted.ciphertext).toString(CryptoJS.enc.Base64);
+      const encryptedData = iv
+        .concat(encrypted.ciphertext)
+        .toString(CryptoJS.enc.Base64);
       const response = await fetch(`${config.api.authBaseUrl}/login`, {
         method: 'POST',
         headers: {
@@ -531,7 +635,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         decryptedResponse.refresh_token
       ) {
         if (decryptedResponse.user.sessionId !== sessionId) {
-          console.error('Login Response validation failed, session does not match.');
+          console.error(
+            'Login Response validation failed, session does not match.'
+          );
           return false;
         }
         establishAuthenticatedSession(
@@ -540,14 +646,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           decryptedResponse.user
         );
         return true;
-      }
-      else {
-        console.error('Login failed:', decryptedResponse.detail || 'Unknown error');
-        addNotification(decryptedResponse.detail || 'Login failed. Please try again.', 'error', 5000, 'Login Error');
+      } else {
+        console.error(
+          'Login failed:',
+          decryptedResponse.detail || 'Unknown error'
+        );
+        addNotification(
+          decryptedResponse.detail || 'Login failed. Please try again.',
+          'error',
+          5000,
+          'Login Error'
+        );
         return false;
       }
     } catch (error) {
-      addNotification('An error occurred during login. Please try again.', 'error', 5000, 'Login Error');
+      addNotification(
+        'An error occurred during login. Please try again.',
+        'error',
+        5000,
+        'Login Error'
+      );
       console.error('Login error:', error);
       return false;
     }
@@ -573,7 +691,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         !tokenUsername ||
         tokenUsername.toLowerCase() !== requestedUsername.toLowerCase()
       ) {
-        throw new Error('Face verification token is invalid or expired. Please try again.');
+        throw new Error(
+          'Face verification token is invalid or expired. Please try again.'
+        );
       }
 
       clearTimers();
@@ -582,10 +702,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoggingOutRef.current = false;
 
       const sessionId = `${claims.iss}-${claims.jti}`;
-      const response = await apiClient.post<FaceLoginResponse>('/user/efr-login', {
-        userId: tokenUsername,
-        sessionId,
-      });
+      const response = await apiClient.post<FaceLoginResponse>(
+        '/user/efr-login',
+        {
+          userId: tokenUsername,
+          sessionId,
+        }
+      );
       const result = response.data;
       if (
         !response.success ||
@@ -598,7 +721,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         !result.user.username ||
         !result.user.role_id
       ) {
-        throw new Error(response.error || 'Face ID sign in could not be completed. Please try again.');
+        throw new Error(
+          response.error ||
+            'Face ID sign in could not be completed. Please try again.'
+        );
       }
 
       establishAuthenticatedSession(result.access_token, result.refresh_token, {
@@ -609,7 +735,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       console.error('Face ID login error:', error);
       addNotification(
-        error instanceof Error ? error.message : 'Face ID sign in failed. Please try again.',
+        error instanceof Error
+          ? error.message
+          : 'Face ID sign in failed. Please try again.',
         'error',
         5000,
         'Login Error'
@@ -626,7 +754,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, user, login, loginWithFaceVerification, logout, loading, resetSessionTimer }}>
+    <AuthContext.Provider
+      value={{
+        isAuthenticated,
+        user,
+        login,
+        loginWithFaceVerification,
+        logout,
+        loading,
+        resetSessionTimer,
+      }}
+    >
       {children}
       <SessionTimeoutModal
         isOpen={showTimeoutModal}

@@ -32,14 +32,14 @@ export const useSecureMenu = () => {
     const rootMenus: SecureMenuItem[] = [];
 
     // Create map of all menu items
-    items.forEach(item => {
+    items.forEach((item) => {
       menuMap.set(item.id, { ...item, children: [] });
     });
 
     // Build tree structure
-    items.forEach(item => {
+    items.forEach((item) => {
       const menuItem = menuMap.get(item.id)!;
-      
+
       if (item.parent_id === null) {
         rootMenus.push(menuItem);
       } else {
@@ -53,7 +53,7 @@ export const useSecureMenu = () => {
     // Sort menus by order
     const sortMenus = (menus: SecureMenuItem[]) => {
       menus.sort((a, b) => a.menu_order - b.menu_order);
-      menus.forEach(menu => {
+      menus.forEach((menu) => {
         if (menu.children && menu.children.length > 0) {
           sortMenus(menu.children);
         }
@@ -75,14 +75,16 @@ export const useSecureMenu = () => {
       setLoading(true);
       setError(null);
 
-      const response = await apiClient.get(`${config.api.baseUrl}/api/menus/secure/${user.role_id}`);
-      
+      const response = await apiClient.get(
+        `${config.api.baseUrl}/api/menus/secure/${user.role_id}`
+      );
+
       if (response.success && response.data) {
         // Filter out items where user doesn't have view access
-        const accessibleItems = response.data.filter((item: SecureMenuItem) => 
-          item.can_view || user.role_id === 0 // Super admin can see all
+        const accessibleItems = response.data.filter(
+          (item: SecureMenuItem) => item.can_view || user.role_id === 0 // Super admin can see all
         );
-        
+
         const menuTree = buildMenuTree(accessibleItems);
         setMenuItems(menuTree);
       } else {
@@ -101,37 +103,59 @@ export const useSecureMenu = () => {
     loadSecureMenu();
   }, [loadSecureMenu]);
 
-  const hasMenuAccess = useCallback((menuId: number, action: 'view' | 'edit' | 'delete' | 'create' | 'export' | 'import' = 'view'): boolean => {
-    const findMenuItem = (items: SecureMenuItem[], id: number): SecureMenuItem | null => {
-      for (const item of items) {
-        if (item.id === id) return item;
-        if (item.children) {
-          const found = findMenuItem(item.children, id);
-          if (found) return found;
+  const hasMenuAccess = useCallback(
+    (
+      menuId: number,
+      action:
+        | 'view'
+        | 'edit'
+        | 'delete'
+        | 'create'
+        | 'export'
+        | 'import' = 'view'
+    ): boolean => {
+      const findMenuItem = (
+        items: SecureMenuItem[],
+        id: number
+      ): SecureMenuItem | null => {
+        for (const item of items) {
+          if (item.id === id) return item;
+          if (item.children) {
+            const found = findMenuItem(item.children, id);
+            if (found) return found;
+          }
         }
+        return null;
+      };
+
+      const menuItem = findMenuItem(menuItems, menuId);
+      if (!menuItem) return false;
+
+      switch (action) {
+        case 'view':
+          return menuItem.can_view;
+        case 'edit':
+          return menuItem.can_edit;
+        case 'delete':
+          return menuItem.can_delete;
+        case 'create':
+          return menuItem.can_create;
+        case 'export':
+          return menuItem.can_export;
+        case 'import':
+          return menuItem.can_import;
+        default:
+          return false;
       }
-      return null;
-    };
-
-    const menuItem = findMenuItem(menuItems, menuId);
-    if (!menuItem) return false;
-
-    switch (action) {
-      case 'view': return menuItem.can_view;
-      case 'edit': return menuItem.can_edit;
-      case 'delete': return menuItem.can_delete;
-      case 'create': return menuItem.can_create;
-      case 'export': return menuItem.can_export;
-      case 'import': return menuItem.can_import;
-      default: return false;
-    }
-  }, [menuItems]);
+    },
+    [menuItems]
+  );
 
   return {
     menuItems,
     loading,
     error,
     hasMenuAccess,
-    refreshMenu: loadSecureMenu
+    refreshMenu: loadSecureMenu,
   };
 };

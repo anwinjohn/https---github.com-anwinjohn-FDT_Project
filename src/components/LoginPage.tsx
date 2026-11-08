@@ -21,11 +21,11 @@ import {
   TrendingUp,
   ScanFace,
   Rocket,
+  AlertTriangle,
 } from 'lucide-react';
 import FaceIdLogin from './FaceIdLogin';
 import { useLocalMachine } from '../context/DeviceInfoContext';
 import { useSystemSettings } from '../hooks/useSystemSettings';
-
 
 const LoginPage = () => {
   const navigate = useNavigate();
@@ -81,7 +81,17 @@ const LoginPage = () => {
   const [authMethod, setAuthMethod] = useState('password');
   const [step, setStep] = useState('login');
   const [showFaceId, setShowFaceId] = useState(false);
- const { addNotification } = useNotifications();
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const { addNotification } = useNotifications();
+
+  // Show a "session expired" notice if the user was bounced here by the
+  // API layer after a failed token refresh, then clear the flag.
+  useEffect(() => {
+    if (localStorage.getItem('sessionExpired') === 'true') {
+      setSessionExpired(true);
+      localStorage.removeItem('sessionExpired');
+    }
+  }, []);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -181,15 +191,15 @@ const LoginPage = () => {
     });
   };
 
-   if (showFaceId) {
-     return (
-       <FaceIdLogin
-         onSuccess={handleFaceIdSuccess}
-         onBack={handleFaceIdBack}
-         username={username}
-       />
-     );
-   }
+  if (showFaceId) {
+    return (
+      <FaceIdLogin
+        onSuccess={handleFaceIdSuccess}
+        onBack={handleFaceIdBack}
+        username={username}
+      />
+    );
+  }
   const securityFeatures = [
     // { icon: Shield, text: 'Enterprise Security', description: 'Bank-grade encryption' },
     {
@@ -205,7 +215,8 @@ const LoginPage = () => {
     {
       icon: Rocket,
       text: 'Self-Services',
-      description: 'Create, manage custom Analytics reports & share with your team, org.',
+      description:
+        'Create, manage custom Analytics reports & share with your team, org.',
     },
   ];
 
@@ -451,10 +462,11 @@ const LoginPage = () => {
                             <button
                               key={method.id}
                               onClick={() => handleAuthMethodChange(method.id)}
-                              className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${authMethod === method.id
+                              className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all duration-200 ${
+                                authMethod === method.id
                                   ? 'bg-white/20 text-white shadow-lg scale-105'
                                   : 'text-white/60 hover:text-white hover:bg-white/10'
-                                }`}
+                              }`}
                             >
                               <method.icon className="w-5 h-5" />
                               <span className="text-xs font-medium">
@@ -528,8 +540,21 @@ const LoginPage = () => {
                         </div>
                       )}
 
+                      {sessionExpired && (
+                        <div
+                          className="flex items-start gap-2 p-3 rounded-xl border border-amber-400/30 bg-amber-400/10 text-amber-200 text-sm"
+                          role="alert"
+                        >
+                          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                          <span>
+                            Your session expired. Please sign in again.
+                          </span>
+                        </div>
+                      )}
+
                       {/* Remember Me & Forgot Password */}
                       <div className="flex items-center justify-between">
+                        {' '}
                         <label className="flex items-center gap-2 cursor-pointer group">
                           <input
                             type="checkbox"

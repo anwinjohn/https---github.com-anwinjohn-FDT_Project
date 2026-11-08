@@ -29,6 +29,10 @@ interface EncryptedApiResponse {
   data: string;
 }
 
+interface ApiRequestConfig extends AxiosRequestConfig {
+  skipBodyEncryption?: boolean;
+}
+
 class SecureApiClient {
   private static instance: SecureApiClient;
   private axiosInstance: AxiosInstance;
@@ -80,6 +84,7 @@ class SecureApiClient {
             Date.now() / 1000
           ).toString();
           if (
+            !(request as any).skipBodyEncryption &&
             request.data !== undefined &&
             request.data !== null &&
             !(request as any)._machineInfoEnriched
@@ -170,7 +175,9 @@ class SecureApiClient {
               return this.axiosInstance(originalRequest);
             }
           } catch (refreshError) {
-            this.handleAuthenticationFailure();
+            // performTokenRefresh already clears the session only for a
+            // definitive rejection; transient failures must not force a
+            // logout of an active user. Surface the failed request normally.
             return Promise.reject(refreshError);
           }
         }
@@ -318,7 +325,15 @@ class SecureApiClient {
         localStorage.setItem('refreshToken', newRefreshToken);
         return newAccessToken;
       } catch (error) {
-        this.handleAuthenticationFailure();
+        // Only a definitive rejection from the refresh endpoint (invalid /
+        // revoked refresh token) may end the session. Transient failures —
+        // network blips, backend restarts, timeouts — must NOT clear the
+        // session: an actively-working user would be force-logged-out. The
+        // thrown error still fails the caller's request, which surfaces a
+        // normal error message instead of a redirect.
+        if (axios.isAxiosError(error) && error.response) {
+          this.handleAuthenticationFailure();
+        }
         throw error;
       } finally {
         this.refreshTokenPromise = null;
@@ -336,6 +351,8 @@ class SecureApiClient {
     localStorage.removeItem('lastActivity');
     localStorage.removeItem('sessionWarningShown');
     localStorage.removeItem('localMachineInfo');
+    // Flag so the login screen can tell the user WHY they were signed out.
+    localStorage.setItem('sessionExpired', 'true');
     // Redirect to login
     window.location.href = '/login';
   }
@@ -365,7 +382,7 @@ class SecureApiClient {
   async post<T = any>(
     url: string,
     data?: any,
-    configs?: AxiosRequestConfig
+    configs?: ApiRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
       if (config.logging.console_enabled) {
@@ -440,6 +457,51 @@ class SecureApiClient {
       };
     } catch (error) {
       return this.handleApiError(error);
+    }
+  }
+
+  /**
+   * Multipart upload that bypasses the JSON-body encryption interceptor
+   * (the browser sets the multipart boundary; the backend accepts raw
+   * multipart on this endpoint). Auth, machine-info and 401-refresh still
+   * apply because it runs on the shared axios instance.
+   */
+  async postForm<T = any>(
+    url: string,
+    formData: FormData
+  ): Promise<ApiResponse<T>> {
+    try {
+      const response: AxiosResponse<T> = await this.axiosInstance.post(
+        url,
+        formData,
+        {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        }
+      );
+      return { success: true, data: response.data };
+    } catch (error) {
+      return this.handleApiError(error);
+    }
+  }
+
+  /**
+   * Binary download through the shared instance (Bearer token + refresh
+   * handling). Returns the raw Blob on success.
+   */
+  async downloadBlob(url: string): Promise<{
+    success: boolean;
+    blob?: Blob;
+    error?: string;
+    status?: number;
+  }> {
+    try {
+      const response: AxiosResponse<Blob> = await this.axiosInstance.get(url, {
+        responseType: 'blob',
+      });
+      return { success: true, blob: response.data };
+    } catch (error) {
+      const handled = this.handleApiError(error);
+      return { success: false, error: handled.error, status: handled.status };
     }
   }
 

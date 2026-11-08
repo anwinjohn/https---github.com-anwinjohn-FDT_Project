@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react';
-import { MenuItem, MenuPermission, MenuWithPermissions, UserMenuAccess } from '../types/menu';
+import {
+  MenuItem,
+  MenuPermission,
+  MenuWithPermissions,
+  UserMenuAccess,
+} from '../types/menu';
 import { useAuth } from '../context/AuthContext';
 import { appConfig as config } from '../config/runtime-config';
 
 export const useMenu = () => {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-  const [userPermissions, setUserPermissions] = useState<Map<number, UserMenuAccess>>(new Map());
+  const [userPermissions, setUserPermissions] = useState<
+    Map<number, UserMenuAccess>
+  >(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
@@ -24,25 +31,50 @@ export const useMenu = () => {
         setError(null);
 
         // Call the Python API to get menu based on role_id
-        const response = await fetch(`${config.api.baseUrl}/api/menus/${user.role_id}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+        const response = await fetch(
+          `${config.api.baseUrl}/api/menus/${user.role_id}`,
+          {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${localStorage.getItem('authToken')}`,
+            },
           }
-        });
+        );
 
         if (!response.ok) {
-          throw new Error(`Failed to fetch menu: ${response.status} ${response.statusText}`);
+          throw new Error(
+            `Failed to fetch menu: ${response.status} ${response.statusText}`
+          );
         }
 
         const menuData: MenuItem[] = await response.json();
-        
+
+        // Security: only keep menus the role can actually see. Items with
+        // can_view=false are dropped here so unassigned menu names/urls never
+        // reach the UI. A parent group survives only if it is itself viewable
+        // or still has at least one visible child, so no orphaned groups or
+        // half-visible subtrees are rendered.
+        const filterAccessible = (items: MenuItem[]): MenuItem[] => {
+          const visible: MenuItem[] = [];
+          items.forEach((item) => {
+            const children = item.children
+              ? filterAccessible(item.children)
+              : undefined;
+            if (item.can_view || (children && children.length > 0)) {
+              visible.push({ ...item, children });
+            }
+          });
+          return visible;
+        };
+
+        const accessibleMenu = filterAccessible(menuData);
+
         // Build permissions map from the API response
         const permissionsMap = new Map<number, UserMenuAccess>();
-        
+
         const extractPermissions = (items: MenuItem[]) => {
-          items.forEach(item => {
+          items.forEach((item) => {
             permissionsMap.set(item.id, {
               menuId: item.id,
               canView: item.can_view || false,
@@ -50,9 +82,9 @@ export const useMenu = () => {
               canDelete: item.can_delete || false,
               canCreate: item.can_create || false,
               canExport: item.can_export || false,
-              canImport: item.can_import || false
+              canImport: item.can_import || false,
             });
-            
+
             // Process children recursively
             if (item.children && item.children.length > 0) {
               extractPermissions(item.children);
@@ -62,11 +94,12 @@ export const useMenu = () => {
 
         extractPermissions(menuData);
         setUserPermissions(permissionsMap);
-        setMenuItems(menuData);
-
+        setMenuItems(accessibleMenu);
       } catch (error) {
         console.error('Error fetching menu items:', error);
-        setError(error instanceof Error ? error.message : 'Failed to load menu');
+        setError(
+          error instanceof Error ? error.message : 'Failed to load menu'
+        );
         setMenuItems([]);
         setUserPermissions(new Map());
       } finally {
@@ -77,10 +110,13 @@ export const useMenu = () => {
     fetchMenuItems();
   }, [user?.role_id]);
 
-  const hasPermission = (menuId: number, action: 'view' | 'edit' | 'delete' | 'create' | 'export' | 'import'): boolean => {
+  const hasPermission = (
+    menuId: number,
+    action: 'view' | 'edit' | 'delete' | 'create' | 'export' | 'import'
+  ): boolean => {
     const permission = userPermissions.get(menuId);
     if (!permission) return false;
-    
+
     switch (action) {
       case 'view':
         return permission.canView;
@@ -103,12 +139,12 @@ export const useMenu = () => {
     return userPermissions.get(menuId) || null;
   };
 
-  return { 
-    menuItems, 
-    loading, 
+  return {
+    menuItems,
+    loading,
     error,
-    hasPermission, 
+    hasPermission,
     getUserPermissions,
-    userPermissions: Array.from(userPermissions.values())
+    userPermissions: Array.from(userPermissions.values()),
   };
 };

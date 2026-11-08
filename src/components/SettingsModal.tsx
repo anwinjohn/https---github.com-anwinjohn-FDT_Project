@@ -26,6 +26,11 @@ import { logger } from '../utils/logger';
 import { useSystemSettings } from '../hooks/useSystemSettings';
 import { useNotifications } from './notifications';
 import { useTheme } from '../context/ThemeContext';
+import {
+  loadNotificationPrefs,
+  saveNotificationPrefs,
+  notifyPrefsChanged,
+} from '../utils/preferencesStore';
 import { useNavigate } from 'react-router-dom';
 
 interface SettingsModalProps {
@@ -52,6 +57,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [localMasterLive, setLocalMasterLive] = useState(masterLiveEnabled);
+  const [toastPrefs, setToastPrefs] = useState(() => loadNotificationPrefs());
 
   const {
     getSetting,
@@ -98,6 +104,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           : 'from-green-100 to-green-50',
       borderColor:
         theme === 'dark' ? 'border-green-500/30' : 'border-green-300',
+      isToastToggle: true,
     },
     {
       icon: Monitor,
@@ -188,10 +195,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleToggleToasts = () => {
+    const next = { ...toastPrefs, toastsEnabled: !toastPrefs.toastsEnabled };
+    setToastPrefs(next);
+    saveNotificationPrefs(next);
+    notifyPrefsChanged(next);
+  };
+
   const handleSectionClick = (section: (typeof settingsSections)[0]) => {
     if (section.isLiveToggle) {
-      // Handle live toggle directly
       handleMasterLiveToggle();
+      return;
+    }
+
+    if (section.isToastToggle) {
+      handleToggleToasts();
       return;
     }
 
@@ -406,6 +424,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                           disabled={
                             isLoading &&
                             !section.isLiveToggle &&
+                            !section.isToastToggle &&
                             !section.navigateTo
                           }
                           whileHover={{ y: -4, scale: 1.02 }}
@@ -436,6 +455,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                               className={`p-4 rounded-2xl transition-all duration-300 ${
                                 activeSection === section.label ||
                                 section.isLiveToggle ||
+                                section.isToastToggle ||
                                 section.navigateTo
                                   ? `bg-gradient-to-br ${section.color} shadow-lg`
                                   : theme === 'dark'
@@ -447,6 +467,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                 className={`w-6 h-6 transition-colors duration-300 ${
                                   activeSection === section.label ||
                                   section.isLiveToggle ||
+                                  section.isToastToggle ||
                                   section.navigateTo
                                     ? 'text-white'
                                     : theme === 'dark'
@@ -503,6 +524,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                     </>
                                   )}
                                 </div>
+                              ) : section.isToastToggle ? (
+                                <div className="flex items-center gap-2">
+                                  {toastPrefs.toastsEnabled ? (
+                                    <ToggleRight className="w-8 h-8 text-green-400" />
+                                  ) : (
+                                    <ToggleLeft className="w-8 h-8 text-red-400" />
+                                  )}
+                                </div>
                               ) : activeSection === section.label ? (
                                 <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
                               ) : (
@@ -556,6 +585,49 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                 {localMasterLive
                                   ? 'Users can control individual live update preferences'
                                   : 'All live updates are disabled system-wide'}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Toast Preference Indicator */}
+                          {section.isToastToggle && (
+                            <div
+                              className={`mt-4 p-3 rounded-xl border ${
+                                theme === 'dark'
+                                  ? 'bg-white/5 border-white/10'
+                                  : 'bg-gray-100 border-gray-200'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 text-sm">
+                                <div
+                                  className={`w-2 h-2 rounded-full ${
+                                    toastPrefs.toastsEnabled
+                                      ? 'bg-green-400 animate-pulse'
+                                      : 'bg-red-400'
+                                  }`}
+                                ></div>
+                                <span
+                                  className={`font-medium ${
+                                    theme === 'dark'
+                                      ? 'text-white/80'
+                                      : 'text-gray-800'
+                                  }`}
+                                >
+                                  {toastPrefs.toastsEnabled
+                                    ? 'Popup notifications on'
+                                    : 'Popup notifications off'}
+                                </span>
+                              </div>
+                              <p
+                                className={`text-xs mt-1 ${
+                                  theme === 'dark'
+                                    ? 'text-white/60'
+                                    : 'text-gray-600'
+                                }`}
+                              >
+                                {toastPrefs.toastsEnabled
+                                  ? 'Transient status messages appear on screen'
+                                  : 'Status messages are silenced; the notification center still records them'}
                               </p>
                             </div>
                           )}

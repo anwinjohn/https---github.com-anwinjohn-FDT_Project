@@ -1,78 +1,80 @@
+/* Push + notification-click handling for the FDT dashboard.
+ * Scope: delivered via push events; all data comes from the server payload.
+ */
+
+/* eslint-disable no-restricted-globals */
+const FALLBACK_ICON = '/ARIE_Logo.png';
+
 self.addEventListener('push', (event) => {
-  if (!event.data) {
-    return;
-  }
+  if (!event.data) return;
 
+  let payload = {};
   try {
-    const data = event.data.json();
-    const notificationTag = data.tag || `notification-${Date.now()}`;
-
-    const options = {
-      body: data.body || '',
-      icon: data.icon || '/icon.png',
-      badge: data.badge || '/badge.png',
-      tag: notificationTag,
-      requireInteraction: data.requireInteraction || false,
-      sound: data.sound || '/notification-tone.wav',
-      ...data.options,
-    };
-
-    event.waitUntil(
-      self.registration.showNotification(data.title, options)
-    );
-
-    const broadcast = new BroadcastChannel('push-notifications');
-    broadcast.postMessage({
-      type: 'notification-shown',
-      data: {
-        title: data.title,
-        body: data.body,
-        tag: notificationTag,
-        timestamp: Date.now(),
-      },
-    });
-    broadcast.close();
-  } catch (error) {
-    console.error('Error handling push notification:', error);
+    payload = event.data.json();
+  } catch (err) {
+    payload = { title: 'Notification', body: event.data.text() };
   }
+
+  const data = payload || {};
+  const title = data.title || 'Fraud Detection Tool';
+  const tag = data.tag || data.notification_id || `push-${Date.now()}`;
+
+  const options = {
+    body: data.body || data.message || '',
+    icon: data.icon || FALLBACK_ICON,
+    badge: data.badge || FALLBACK_ICON,
+    tag,
+    renotify: Boolean(data.renotify),
+    requireInteraction: Boolean(data.require_interaction),
+    data: {
+      link: data.link || null,
+      notification_id: data.notification_id || null,
+      tag,
+    },
+  };
+
+  event.waitUntil(
+    (async () => {
+      await self.registration.showNotification(title, options);
+
+      // Tell any open app window so the in-app list refreshes without a poll.
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      clientList.forEach((client) => {
+        client.postMessage({
+          type: 'PUSH_RECEIVED',
+          notification: {
+            notification_id: data.notification_id || tag,
+            title,
+            message: options.body,
+            notification_type: data.notification_type || 'info',
+            created_at: data.created_at || new Date().toISOString(),
+            link: data.link || null,
+          },
+        });
+      });
+    })()
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  const broadcast = new BroadcastChannel('push-notifications');
-  broadcast.postMessage({
-    type: 'notification-clicked',
-    data: {
-      tag: event.notification.tag,
-      timestamp: Date.now(),
-    },
-  });
-  broadcast.close();
+  const target = (event.notification.data && event.notification.data.link) || '/dashboard';
 
   event.waitUntil(
-    clients.matchAll({ type: 'window' }).then((clientList) => {
-      for (let i = 0; i < clientList.length; i++) {
-        const client = clientList[i];
-        if (client.url === '/' && 'focus' in client) {
-          return client.focus();
-        }
+    (async () => {
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const appClient = clientList.find((c) => 'focus' in c);
+      if (appClient) {
+        await appClient.focus();
+        appClient.postMessage({
+          type: 'NOTIFICATION_CLICKED',
+          link: target,
+          notification_id: event.notification.data?.notification_id || null,
+        });
+        return;
       }
-      if (clients.openWindow) {
-        return clients.openWindow('/');
-      }
-    })
+      await self.clients.openWindow(target);
+    })()
   );
-});
-
-self.addEventListener('notificationclose', (event) => {
-  const broadcast = new BroadcastChannel('push-notifications');
-  broadcast.postMessage({
-    type: 'notification-closed',
-    data: {
-      tag: event.notification.tag,
-      timestamp: Date.now(),
-    },
-  });
-  broadcast.close();
 });

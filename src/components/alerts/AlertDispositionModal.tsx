@@ -56,6 +56,15 @@ import { AlertSummary, AlertDisposition } from '../../types/alerts';
 import { logger } from '../../utils/logger';
 import { appConfig as config } from '../../config/runtime-config';
 import apiClient from '../../utils/apiClient';
+import type { AlertAttachment } from '../../services/alertAttachmentsService';
+import {
+  alertAttachmentsService,
+  ALLOWED_EXT,
+  MAX_FILE_MB,
+  MAX_STAGED_FILES,
+  validateFile,
+  fmtSize,
+} from '../../services/alertAttachmentsService';
 
 /* ------------------------------------------------------------------ */
 /*  Config & types                                                     */
@@ -72,29 +81,10 @@ const DISPOSITION_LABELS = {
   X: 'External Escalation',
 };
 
-const apiBaseUrl = config.api.baseUrl;
 const aiURL = config.api.aisuggestions;
+const apiBaseUrl = config.api.baseUrl;
 
 const RISK_CATEGORIES = ['HIGH', 'MEDIUM', 'LOW'];
-
-// Attachment rules (mirror these on the server - never trust the client alone)
-const MAX_FILE_MB = 10;
-const MAX_STAGED_FILES = 10;
-const ALLOWED_EXT = [
-  'pdf',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'csv',
-  'txt',
-  'png',
-  'jpg',
-  'jpeg',
-  'msg',
-  'eml',
-  'zip',
-];
 
 interface AISuggestion {
   findings: string;
@@ -132,16 +122,6 @@ interface AlertNote {
   created_at: string;
   updated_at?: string | null;
 }
-interface AlertAttachment {
-  attachment_id: string;
-  alert_id: string;
-  file_name: string;
-  file_size: number;
-  content_type?: string;
-  description?: string;
-  uploaded_by: string;
-  uploaded_at: string;
-}
 interface AlertLock {
   is_locked: boolean;
   locked_by?: string | null;
@@ -157,39 +137,6 @@ type Notify = (
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-class ApiError extends Error {
-  status: number;
-  body: any;
-  constructor(message: string, status: number, body: any) {
-    super(message);
-    this.status = status;
-    this.body = body;
-  }
-}
-
-async function postJson<T = any>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${apiBaseUrl}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  let parsed: any = null;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    parsed = null;
-  }
-  if (!res.ok) {
-    throw new ApiError(
-      `HTTP ${res.status}: ${res.statusText}`,
-      res.status,
-      parsed
-    );
-  }
-  return (parsed ?? {}) as T;
-}
 
 const pad = (n: number) => String(n).padStart(2, '0');
 // Local-date string. toISOString() is UTC and returns "yesterday" early in the
@@ -207,12 +154,6 @@ const fmtDateTime = (iso?: string | null) => {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
 };
-const fmtSize = (bytes: number) => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-};
-const extOf = (name: string) => name.split('.').pop()?.toLowerCase() || '';
 
 const getStyles = (theme: string) => {
   const d = theme === 'dark';
@@ -844,6 +785,7 @@ function useAlertLock(
   const [checking, setChecking] = useState(false);
   const [statusFailed, setStatusFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { addNotification } = useNotifications();
 
   const refresh = useCallback(async () => {
     if (!alertId) return;
@@ -876,10 +818,24 @@ function useAlertLock(
     if (!alertId || !username) return false;
     setBusy(true);
     try {
-      const data = await postJson<AlertLock>('/alert-lock/acquire', {
+      const res = await apiClient.post<AlertLock>('alert-lock/acquire', {
         alert_id: alertId,
         username,
       });
+      if (!res.success) {
+        if (res.status === 409) {
+          const body = (res as any).data ?? null;
+          if (body) setLock({ is_locked: true, ...body });
+          notify(
+            `This alert is already being worked on by ${body?.locked_by_name || body?.locked_by || 'another user'}`,
+            'warning'
+          );
+        } else {
+          notify('Could not mark the alert as WIP', 'error');
+        }
+        return false;
+      }
+      const data = res.data as AlertLock | undefined;
       setLock(
         data?.is_locked
           ? data
@@ -892,15 +848,7 @@ function useAlertLock(
       notify('Alert marked as WIP - it is now locked to you', 'success');
       return true;
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        if (err.body) setLock({ is_locked: true, ...err.body });
-        notify(
-          `This alert is already being worked on by ${err.body?.locked_by_name || err.body?.locked_by || 'another user'}`,
-          'warning'
-        );
-      } else {
-        notify('Could not mark the alert as WIP', 'error');
-      }
+      notify('Could not mark the alert as WIP', 'error');
       return false;
     } finally {
       setBusy(false);
@@ -911,7 +859,10 @@ function useAlertLock(
     if (!alertId || !username) return false;
     setBusy(true);
     try {
-      await postJson('/alert-lock/release', { alert_id: alertId, username });
+      await apiClient.post('alert-lock/release', {
+        alert_id: alertId,
+        username,
+      });
       setLock({ is_locked: false });
       notify('Alert released - other analysts can pick it up', 'info');
       return true;
@@ -1132,7 +1083,7 @@ const NotesPanel: React.FC<{
     }
     setBusyId(n.note_id);
     try {
-      await postJson('/alert-notes/update', {
+      await apiClient.post('alert-notes/update', {
         note_id: n.note_id,
         alert_id: alertId,
         username,
@@ -1155,7 +1106,7 @@ const NotesPanel: React.FC<{
   const toggleDone = async (n: AlertNote) => {
     setBusyId(n.note_id);
     try {
-      await postJson('/alert-notes/update', {
+      await apiClient.post('alert-notes/update', {
         note_id: n.note_id,
         alert_id: alertId,
         username,
@@ -1172,7 +1123,7 @@ const NotesPanel: React.FC<{
   const deleteNote = async (n: AlertNote) => {
     setBusyId(n.note_id);
     try {
-      await postJson('/alert-notes/delete', {
+      await apiClient.post('alert-notes/delete', {
         note_id: n.note_id,
         alert_id: alertId,
         username,
@@ -1566,12 +1517,7 @@ const AttachmentsPanel: React.FC<{
     async (silent = false) => {
       if (!silent) setLoading(true);
       try {
-        const data = await postJson<any>('/alert-attachments/list', {
-          alert_id: alertId,
-        });
-        const list: AlertAttachment[] = Array.isArray(data)
-          ? data
-          : (data.attachments ?? []);
+        const list = await alertAttachmentsService.list(alertId);
         list.sort(
           (a, b) =>
             new Date(b.uploaded_at).getTime() -
@@ -1611,12 +1557,9 @@ const AttachmentsPanel: React.FC<{
     const rejected: string[] = [];
     const accepted: StagedFile[] = [];
     Array.from(list).forEach((file) => {
-      if (!ALLOWED_EXT.includes(extOf(file.name))) {
-        rejected.push(`${file.name} (type not allowed)`);
-      } else if (file.size > MAX_FILE_MB * 1024 * 1024) {
-        rejected.push(`${file.name} (over ${MAX_FILE_MB} MB)`);
-      } else if (file.size === 0) {
-        rejected.push(`${file.name} (empty file)`);
+      const problem = validateFile(file);
+      if (problem) {
+        rejected.push(`${file.name} (${problem})`);
       } else {
         accepted.push({
           id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1651,16 +1594,12 @@ const AttachmentsPanel: React.FC<{
         )
       );
       try {
-        const fd = new FormData();
-        fd.append('alert_id', alertId);
-        fd.append('uploaded_by', username);
-        fd.append('description', sf.description.trim());
-        fd.append('file', sf.file, sf.file.name);
-        const res = await fetch(`${apiBaseUrl}/alert-attachments/upload`, {
-          method: 'POST',
-          body: fd, // let the browser set the multipart boundary
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await alertAttachmentsService.upload(
+          alertId,
+          username,
+          sf.description,
+          sf.file
+        );
         okCount++;
         setStaged((prev) => prev.filter((p) => p.id !== sf.id));
       } catch (err) {
@@ -1689,11 +1628,7 @@ const AttachmentsPanel: React.FC<{
   const deleteItem = async (a: AlertAttachment) => {
     setBusyId(a.attachment_id);
     try {
-      await postJson('/alert-attachments/delete', {
-        attachment_id: a.attachment_id,
-        alert_id: alertId,
-        username,
-      });
+      await alertAttachmentsService.delete(a.attachment_id, alertId, username);
       setConfirmDeleteId(null);
       notify('Attachment deleted', 'success');
       await load(true);
@@ -1942,15 +1877,23 @@ const AttachmentsPanel: React.FC<{
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <a
-                        href={`${apiBaseUrl}/alert-attachments/download/${encodeURIComponent(a.attachment_id)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
                         aria-label={`Download ${a.file_name}`}
+                        onClick={async () => {
+                          try {
+                            await alertAttachmentsService.download(a);
+                          } catch {
+                            notify(
+                              `Failed to download ${a.file_name}`,
+                              'error'
+                            );
+                          }
+                        }}
                         className={s.ghostBtn}
                       >
                         <Download className="w-3.5 h-3.5" />
-                      </a>
+                      </button>
                       {mine && canEdit && (
                         <button
                           type="button"
@@ -2108,26 +2051,47 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
   }, [isOpen]);
 
   const fetchAlertDetails = useCallback(
-    async (id: string) => {
+    async (alertId: string) => {
       try {
         setLoading(true);
         setError(null);
-        const data = await postJson('/open-alerts-details', { alert_id: id });
-        setSelectedAlertDetails(data);
-        logger.info(`Alert details fetched for ID: ${id}`, user?.full_name, {
-          alertId: id,
+
+        const response = await fetch(`${apiBaseUrl}/open-alerts-details`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ alert_id: alertId }),
         });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        setSelectedAlertDetails(data);
+
+        // Log the successful fetch
+        logger.info(
+          `Alert details fetched for ID: ${alertId}`,
+          user?.full_name,
+          { alertId }
+        );
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : 'Failed to fetch alert details';
         setError(errorMessage);
         console.error('Error fetching alert details:', err);
+
+        // Log the error
         logger.error(
           'Failed to fetch alert details',
           user?.full_name,
-          { alertId: id, error: errorMessage },
+          { alertId, error: errorMessage },
           err instanceof Error ? err : new Error(errorMessage)
         );
+
+        // Show notification
         addNotification('Failed to load alert details', 'error');
       } finally {
         setLoading(false);
@@ -2277,16 +2241,15 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
         ruleRemarks: alert.rule_remarks,
         branch_name: alert.branch_name,
       };
-      const response = await fetch(`${aiURL}/generate_suggestions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          accept: 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const data = await response.json();
+      const res = await apiClient.post<AISuggestion>(
+        `${aiURL}/generate_suggestions`,
+        payload,
+        { skipBodyEncryption: true }
+      );
+      if (!res.success || !res.data) {
+        throw new Error(res.error || 'Failed to generate Suggestions');
+      }
+      const data = res.data;
       setAiSuggestion(data);
 
       logger.info('AI suggestion generated', user?.full_name, {
