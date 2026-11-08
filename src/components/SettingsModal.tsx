@@ -24,14 +24,10 @@ import {
 } from 'lucide-react';
 import { logger } from '../utils/logger';
 import { useSystemSettings } from '../hooks/useSystemSettings';
-import { useNotifications } from './notifications';
 import { useTheme } from '../context/ThemeContext';
-import {
-  loadNotificationPrefs,
-  saveNotificationPrefs,
-  notifyPrefsChanged,
-} from '../utils/preferencesStore';
 import { useNavigate } from 'react-router-dom';
+import { toast } from '../utils/toastBus';
+import { pushService } from '../services/pushService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -57,14 +53,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [localMasterLive, setLocalMasterLive] = useState(masterLiveEnabled);
-  const [toastPrefs, setToastPrefs] = useState(() => loadNotificationPrefs());
+  const [pushEnabled, setPushEnabled] = useState(
+    () => pushService.getState() === 'granted'
+  );
+  const [pushBusy, setPushBusy] = useState(false);
 
   const {
     getSetting,
     updateSetting,
     loading: settingsLoading,
   } = useSystemSettings();
-  const { addNotification } = useNotifications();
   const { theme } = useTheme();
   const navigate = useNavigate();
 
@@ -76,6 +74,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       onMasterLiveChange(systemMasterLive);
     }
   }, [settingsLoading, getSetting, onMasterLiveChange]);
+
+  // Keep the toggle in sync if push permission changes elsewhere.
+  useEffect(() => {
+    if (!pushBusy) setPushEnabled(pushService.getState() === 'granted');
+  }, [pushBusy, isOpen]);
 
   const settingsSections = [
     {
@@ -175,9 +178,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       const success = await updateSetting('master_live_enabled', newValue);
       if (success) {
         onMasterLiveChange(newValue);
-        addNotification(
-          `Master live updates ${newValue ? 'enabled' : 'disabled'} successfully`,
-          'success'
+        toast.success(
+          `Master live updates ${newValue ? 'enabled' : 'disabled'} successfully`
         );
         logger.info(
           `Master live updates ${newValue ? 'enabled' : 'disabled'}`,
@@ -186,20 +188,45 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       } else {
         // Revert on failure
         setLocalMasterLive(!newValue);
-        addNotification('Failed to update master live setting', 'error');
+        toast.error('Failed to update master live setting');
       }
     } catch (error) {
       // Revert on error
       setLocalMasterLive(!newValue);
-      addNotification('Error updating master live setting', 'error');
+      toast.error('Error updating master live setting');
     }
   };
 
-  const handleToggleToasts = () => {
-    const next = { ...toastPrefs, toastsEnabled: !toastPrefs.toastsEnabled };
-    setToastPrefs(next);
-    saveNotificationPrefs(next);
-    notifyPrefsChanged(next);
+  const handleTogglePush = async () => {
+    if (pushBusy || !user?.username) return;
+    setPushBusy(true);
+    try {
+      if (pushEnabled) {
+        await pushService.disable(user.username);
+        setPushEnabled(false);
+        toast.info('Push notifications turned off for this device');
+        logger.info(
+          'Push notifications disabled',
+          user?.full_name || 'Unknown User'
+        );
+      } else {
+        const result = await pushService.enableFromUserGesture(user.username);
+        if (result.ok) {
+          setPushEnabled(true);
+          toast.success('Push notifications enabled for this device');
+          logger.info(
+            'Push notifications enabled',
+            user?.full_name || 'Unknown User'
+          );
+        } else {
+          toast.warning(result.error || 'Could not enable push notifications');
+        }
+      }
+    } catch (error) {
+      toast.error('Failed to update push notification setting');
+    } finally {
+      setPushBusy(false);
+    }
   };
 
   const handleSectionClick = (section: (typeof settingsSections)[0]) => {
@@ -209,7 +236,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     }
 
     if (section.isToastToggle) {
-      handleToggleToasts();
+      handleTogglePush();
       return;
     }
 
@@ -526,7 +553,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                 </div>
                               ) : section.isToastToggle ? (
                                 <div className="flex items-center gap-2">
-                                  {toastPrefs.toastsEnabled ? (
+                                  {pushBusy ? (
+                                    <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                                  ) : pushEnabled ? (
                                     <ToggleRight className="w-8 h-8 text-green-400" />
                                   ) : (
                                     <ToggleLeft className="w-8 h-8 text-red-400" />
@@ -589,7 +618,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                             </div>
                           )}
 
-                          {/* Toast Preference Indicator */}
+                          {/* Push Preference Indicator */}
                           {section.isToastToggle && (
                             <div
                               className={`mt-4 p-3 rounded-xl border ${
@@ -601,7 +630,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                               <div className="flex items-center gap-2 text-sm">
                                 <div
                                   className={`w-2 h-2 rounded-full ${
-                                    toastPrefs.toastsEnabled
+                                    pushEnabled
                                       ? 'bg-green-400 animate-pulse'
                                       : 'bg-red-400'
                                   }`}
@@ -613,9 +642,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                       : 'text-gray-800'
                                   }`}
                                 >
-                                  {toastPrefs.toastsEnabled
-                                    ? 'Popup notifications on'
-                                    : 'Popup notifications off'}
+                                  {pushEnabled
+                                    ? 'Push notifications on'
+                                    : 'Push notifications off'}
                                 </span>
                               </div>
                               <p
@@ -625,9 +654,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                     : 'text-gray-600'
                                 }`}
                               >
-                                {toastPrefs.toastsEnabled
-                                  ? 'Transient status messages appear on screen'
-                                  : 'Status messages are silenced; the notification center still records them'}
+                                {pushEnabled
+                                  ? 'Alert notifications are delivered to this device even when the app is closed'
+                                  : 'No device alerts; in-app notifications always remain active'}
                               </p>
                             </div>
                           )}

@@ -18,7 +18,7 @@ import React, {
   useState,
 } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { useNotifications as useToasts } from '../notifications';
+import { useNotifications as useToasts } from './NotificationContext';
 import {
   AppNotification,
   NotificationType,
@@ -57,9 +57,9 @@ const mapType = (raw?: string | null): NotificationType => {
   return 'info';
 };
 
-export const NotificationCenterProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
+export const NotificationCenterProvider: React.FC<{
+  children: React.ReactNode;
+}> = ({ children }) => {
   const { user, isAuthenticated } = useAuth();
   const toast = useToasts();
   const [items, setItems] = useState<AppNotification[]>([]);
@@ -90,7 +90,9 @@ export const NotificationCenterProvider: React.FC<{ children: React.ReactNode }>
       setItems(list);
       setUnreadCount(count);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load notifications');
+      setError(
+        err instanceof Error ? err.message : 'Failed to load notifications'
+      );
     } finally {
       setLoading(false);
     }
@@ -114,7 +116,12 @@ export const NotificationCenterProvider: React.FC<{ children: React.ReactNode }>
       };
       setItems((prev) => [mapped, ...prev].slice(0, 100));
       setUnreadCount((c) => c + 1);
-      toast.addNotification(live.message, mapType(live.notification_type) as 'info', 8000, live.title);
+      toast.addNotification(
+        live.message,
+        mapType(live.notification_type) as 'info',
+        8000,
+        live.title
+      );
     },
     [toast, username]
   );
@@ -165,7 +172,10 @@ export const NotificationCenterProvider: React.FC<{ children: React.ReactNode }>
     const result = await pushService.enableFromUserGesture(username);
     setPermission(result.state);
     if (result.ok) {
-      toast.addNotification('Push notifications enabled for this device', 'success');
+      toast.addNotification(
+        'Push notifications enabled for this device',
+        'success'
+      );
     } else if (result.error) {
       toast.addNotification(result.error, 'warning');
     }
@@ -174,14 +184,19 @@ export const NotificationCenterProvider: React.FC<{ children: React.ReactNode }>
   const disablePush = useCallback(async () => {
     if (!username) return;
     await pushService.disable(username);
-    toast.addNotification('Push notifications turned off for this device', 'info');
+    toast.addNotification(
+      'Push notifications turned off for this device',
+      'info'
+    );
   }, [username, toast]);
 
   const markRead = useCallback(
     async (id: string) => {
       if (!username) return;
       setItems((prev) =>
-        prev.map((n) => (n.notification_id === id ? { ...n, is_read: true } : n))
+        prev.map((n) =>
+          n.notification_id === id ? { ...n, is_read: true } : n
+        )
       );
       setUnreadCount((c) => Math.max(0, c - 1));
       try {
@@ -208,7 +223,9 @@ export const NotificationCenterProvider: React.FC<{ children: React.ReactNode }>
   const remove = useCallback(
     async (id: string) => {
       if (!username) return;
-      const wasUnread = items.find((n) => n.notification_id === id && !n.is_read);
+      const wasUnread = items.find(
+        (n) => n.notification_id === id && !n.is_read
+      );
       setItems((prev) => prev.filter((n) => n.notification_id !== id));
       if (wasUnread) setUnreadCount((c) => Math.max(0, c - 1));
       try {
@@ -259,7 +276,9 @@ export const NotificationCenterProvider: React.FC<{ children: React.ReactNode }>
 export const useNotificationCenter = (): NotificationCenterContextValue => {
   const ctx = useContext(NotificationCenterContext);
   if (!ctx) {
-    throw new Error('useNotificationCenter must be used within NotificationCenterProvider');
+    throw new Error(
+      'useNotificationCenter must be used within NotificationCenterProvider'
+    );
   }
   return ctx;
 };

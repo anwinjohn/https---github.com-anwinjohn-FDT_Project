@@ -7,3 +7,5 @@ export {
   useNotificationCenter,
 } from './NotificationCenterContext';
 export { NotificationCenterPanel } from './NotificationCenterPanel';
+export { toast } from '../../utils/toastBus';
+export type { ToastPayload, ToastType } from '../../utils/toastBus';

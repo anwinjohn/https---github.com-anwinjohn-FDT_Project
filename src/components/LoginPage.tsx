@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
-import { useNotifications } from '../components/notifications';
 import { appConfig as config } from '../config/runtime-config';
 import {
   Shield,
@@ -26,6 +25,7 @@ import {
 import FaceIdLogin from './FaceIdLogin';
 import { useLocalMachine } from '../context/DeviceInfoContext';
 import { useSystemSettings } from '../hooks/useSystemSettings';
+import { toast } from '../utils/toastBus';
 
 const LoginPage = () => {
   const navigate = useNavigate();
@@ -82,8 +82,6 @@ const LoginPage = () => {
   const [step, setStep] = useState('login');
   const [showFaceId, setShowFaceId] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
-  const { addNotification } = useNotifications();
-
   // Show a "session expired" notice if the user was bounced here by the
   // API layer after a failed token refresh, then clear the flag.
   useEffect(() => {
@@ -147,9 +145,8 @@ const LoginPage = () => {
         }, 2000);
       }
     } catch (err) {
-      addNotification(
+      toast.error(
         'Unable to connect to authentication service. Please try again.',
-        'error',
         6000,
         'Connection Error'
       );

@@ -6,7 +6,6 @@ import React, {
   useRef,
 } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useNotifications } from '../components/notifications';
 import { appConfig as config } from '../config/runtime-config';
 import CryptoJS from 'crypto-js';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -15,6 +14,7 @@ import { add } from 'date-fns';
 import type { LocalMachineInfo } from '../utils/machineInfoStore';
 import apiClient from '../utils/apiClient';
 import { jwtDecode } from 'jwt-decode';
+import { toast } from '../utils/toastBus';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -219,8 +219,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
-  const { addNotification } = useNotifications();
-
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const warningTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Separate timer for "warning period elapsed without action". It must NOT
@@ -301,7 +299,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     // Clear any existing notifications
     if (reason) {
-      addNotification(reason, 'warning', 5000, 'Session Expired');
+      toast.warning(reason, 5000, 'Session Expired');
     }
 
     // Navigate to login and replace history to prevent back navigation
@@ -651,18 +649,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           'Login failed:',
           decryptedResponse.detail || 'Unknown error'
         );
-        addNotification(
+        toast.error(
           decryptedResponse.detail || 'Login failed. Please try again.',
-          'error',
           5000,
           'Login Error'
         );
         return false;
       }
     } catch (error) {
-      addNotification(
+      toast.error(
         'An error occurred during login. Please try again.',
-        'error',
         5000,
         'Login Error'
       );
@@ -734,11 +730,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       return true;
     } catch (error) {
       console.error('Face ID login error:', error);
-      addNotification(
+      toast.error(
         error instanceof Error
           ? error.message
           : 'Face ID sign in failed. Please try again.',
-        'error',
         5000,
         'Login Error'
       );
