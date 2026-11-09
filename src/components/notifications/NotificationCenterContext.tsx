@@ -147,8 +147,7 @@ export const NotificationCenterProvider: React.FC<{
   // Live socket + service-worker bridge.
   useEffect(() => {
     if (!isAuthenticated) return;
-    const token = localStorage.getItem('authToken');
-    if (token) notificationRealtime.start(username ?? '', token);
+    notificationRealtime.start(username ?? '');
     const offNotification = notificationRealtime.onNotification(handleIncoming);
     const offCount = notificationRealtime.onUnreadCount(setUnreadCount);
 

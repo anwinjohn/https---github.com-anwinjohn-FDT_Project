@@ -43,6 +43,12 @@ Setup once per environment:
        derived and served by /vapid-public-key.
     3. Run notifications.sql once to create the tables.
 Requires: pywebpush  (pip install pywebpush)
+
+Public key: BCGG_ahzAFrVqnrZ6NEmkliaXOGxnvdW92-JLOTjXVSs5eAOu5DhpRHfxmJqk0aS7vqmOkYHXccthhnwxSqQgto
+Used in the browser when subscribing to push notifications.
+
+Private key: W2lB_JzMQgSzqkDbcpWTLQdFoD-b0b06Rn7_F7wM_MY
+Keep secret! Used on your server to sign push notification requests.
 """
 
 from __future__ import annotations
@@ -78,7 +84,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/fdt")
 JWT_SECRET = os.environ.get("JWT_SECRET", "change-me")
 
 VAPID_PRIVATE_KEY = os.environ.get("NOTIFICATIONS_VAPID_PRIVATE_KEY", "")
-VAPID_SUBJECT = os.environ.get("NOTIFICATIONS_VAPID_SUBJECT", "mailto:admin@example.com")
+VAPID_SUBJECT = os.environ.get(
+    "NOTIFICATIONS_VAPID_SUBJECT", "mailto:admin@example.com"
+)
 
 MAX_LIST_LIMIT = 200
 
@@ -93,16 +101,23 @@ router = APIRouter()
 # Models (run notifications.sql once, or Base.metadata.create_all(engine))
 # ---------------------------------------------------------------------------
 
+
 class Notification(Base):
     __tablename__ = "app_notifications"
 
     notification_id = Column(String(36), primary_key=True)
     user_id = Column(String(100), nullable=False, index=True)
-    type = Column(String(20), nullable=False, default="info")  # alert|system|success|warning|info
+    type = Column(
+        String(20), nullable=False, default="info"
+    )  # alert|system|success|warning|info
     title = Column(String(255), nullable=False)
     message = Column(Text, nullable=False)
     is_read = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
     link = Column(String(512), nullable=True)
     meta_json = Column(Text, nullable=True)  # JSON-encoded metadata
 
@@ -117,13 +132,18 @@ class PushSubscription(Base):
     p256dh = Column(String(255), nullable=False)
     auth = Column(String(255), nullable=False)
     machine_info = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
     last_used_at = Column(DateTime(timezone=True), nullable=True)
 
 
 # ---------------------------------------------------------------------------
 # Auth: same pattern as alert_attachments.py
 # ---------------------------------------------------------------------------
+
 
 def get_current_user(request: Request) -> str:
     """Return the username from the Bearer token. Must reject invalid tokens."""
@@ -154,6 +174,7 @@ def get_db():
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class ListBody(BaseModel):
     username: str = ""
@@ -221,7 +242,9 @@ def _serialize(row: Notification) -> dict:
 def _require_own_user(body_username: str, token_user: str) -> str:
     """The token always wins: users can never touch someone else's data."""
     if body_username and body_username.strip().lower() != token_user.strip().lower():
-        raise HTTPException(status_code=403, detail="Cannot access another user's notifications")
+        raise HTTPException(
+            status_code=403, detail="Cannot access another user's notifications"
+        )
     return token_user
 
 
@@ -249,6 +272,7 @@ def _vapid_public_key() -> Optional[str]:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.post("/list")
 def list_notifications(
     body: ListBody,
@@ -269,7 +293,9 @@ def list_notifications(
 
 
 @router.post("/unread-count")
-def unread_count(body: UserBody, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
+def unread_count(
+    body: UserBody, user: str = Depends(get_current_user), db: Session = Depends(get_db)
+):
     username = _require_own_user(body.username, user)
     count = db.scalar(
         select(func.count())
@@ -280,7 +306,11 @@ def unread_count(body: UserBody, user: str = Depends(get_current_user), db: Sess
 
 
 @router.post("/mark-read")
-def mark_read(body: MarkReadBody, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
+def mark_read(
+    body: MarkReadBody,
+    user: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     username = _require_own_user(body.username, user)
     stmt = (
         update(Notification)
@@ -295,7 +325,11 @@ def mark_read(body: MarkReadBody, user: str = Depends(get_current_user), db: Ses
 
 
 @router.post("/delete")
-def delete_notification(body: DeleteBody, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
+def delete_notification(
+    body: DeleteBody,
+    user: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     username = _require_own_user(body.username, user)
     result = db.execute(
         sa_delete(Notification).where(
@@ -313,22 +347,30 @@ def delete_notification(body: DeleteBody, user: str = Depends(get_current_user),
 def vapid_public_key(user: str = Depends(get_current_user)):
     key = _vapid_public_key()
     if not key:
-        raise HTTPException(status_code=503, detail="Push not configured on this server")
+        raise HTTPException(
+            status_code=503, detail="Push not configured on this server"
+        )
     return {"public_key": key}
 
 
 @router.post("/subscribe")
-def subscribe(body: SubscriptionBody, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
+def subscribe(
+    body: SubscriptionBody,
+    user: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     username = _require_own_user(body.username, user)
     endpoint = str(body.subscription.get("endpoint", "")).strip()
     if not endpoint.startswith("https://"):
         raise HTTPException(status_code=400, detail="Invalid subscription endpoint")
-    keys = (body.subscription.get("keys") or {})
+    keys = body.subscription.get("keys") or {}
     p256dh, auth = str(keys.get("p256dh", "")), str(keys.get("auth", ""))
     if not p256dh or not auth:
         raise HTTPException(status_code=400, detail="Subscription keys missing")
 
-    existing = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == endpoint))
+    existing = db.scalar(
+        select(PushSubscription).where(PushSubscription.endpoint == endpoint)
+    )
     if existing:
         existing.user_id = username
         existing.p256dh, existing.auth = p256dh, auth
@@ -341,7 +383,9 @@ def subscribe(body: SubscriptionBody, user: str = Depends(get_current_user), db:
                 endpoint=endpoint[:1024],
                 p256dh=p256dh[:255],
                 auth=auth[:255],
-                machine_info=json.dumps(body.machine_info)[:4000] if body.machine_info else None,
+                machine_info=(
+                    json.dumps(body.machine_info)[:4000] if body.machine_info else None
+                ),
                 created_at=datetime.now(timezone.utc),
             )
         )
@@ -350,7 +394,11 @@ def subscribe(body: SubscriptionBody, user: str = Depends(get_current_user), db:
 
 
 @router.post("/unsubscribe")
-def unsubscribe(body: UnsubscribeBody, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
+def unsubscribe(
+    body: UnsubscribeBody,
+    user: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     username = _require_own_user(body.username, user)
     db.execute(
         sa_delete(PushSubscription).where(
@@ -366,6 +414,7 @@ def unsubscribe(body: UnsubscribeBody, user: str = Depends(get_current_user), db
 # Sending (called by backend code that creates alerts)
 # ---------------------------------------------------------------------------
 
+
 async def send_push_to_user(db: Session, username: str, payload: Dict[str, Any]) -> int:
     """
     Send a Web Push message to every device registered for `username`.
@@ -377,7 +426,9 @@ async def send_push_to_user(db: Session, username: str, payload: Dict[str, Any])
 
     from pywebpush import WebPushException, webpush
 
-    rows = db.scalars(select(PushSubscription).where(PushSubscription.user_id == username)).all()
+    rows = db.scalars(
+        select(PushSubscription).where(PushSubscription.user_id == username)
+    ).all()
     sent = 0
     for row in rows:
         try:
@@ -395,7 +446,9 @@ async def send_push_to_user(db: Session, username: str, payload: Dict[str, Any])
         except WebPushException as exc:
             # 404/410 => the browser no longer knows this subscription; drop it.
             if exc.response and exc.response.status_code in (404, 410):
-                db.execute(sa_delete(PushSubscription).where(PushSubscription.id == row.id))
+                db.execute(
+                    sa_delete(PushSubscription).where(PushSubscription.id == row.id)
+                )
         except Exception:
             continue
     db.commit()
@@ -439,13 +492,17 @@ def create_notification(
             import asyncio
 
             asyncio.get_event_loop().run_until_complete(
-                send_push_to_user(db, username, {
-                    "title": title,
-                    "body": message,
-                    "notification_id": row.notification_id,
-                    "notification_type": notification_type,
-                    "link": link,
-                })
+                send_push_to_user(
+                    db,
+                    username,
+                    {
+                        "title": title,
+                        "body": message,
+                        "notification_id": row.notification_id,
+                        "notification_type": notification_type,
+                        "link": link,
+                    },
+                )
             )
         except RuntimeError:
             # Already inside a running loop (e.g. FastAPI async route): use await

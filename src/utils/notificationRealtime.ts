@@ -1,7 +1,3 @@
-/**
- * Real-time notification transport: WebSocket with automatic reconnect and an
- * exponential backoff. The connection hits the API service, never the DB.
- */
 export interface LiveNotification {
   notification_id: string;
   title: string;
@@ -28,13 +24,11 @@ class NotificationRealtimeService {
   private reconnectTimer: number | null = null;
   private reconnectDelay = 5000;
   private closedByUs = false;
-  private token: string | null = null;
   private unread = 0;
 
-  start(username: string, token: string | null): void {
-    this.token = token;
+  start(username: string): void {
     this.closedByUs = false;
-    void username; // kept for future per-user channels; token already scopes the user
+    void username;
     this.connect();
   }
 
@@ -76,9 +70,12 @@ class NotificationRealtimeService {
 
   private connect(): void {
     const base = (window.__APP_CONFIG__?.api?.baseUrl ?? '') as string;
-    if (this.socket || !base || !this.token) return;
+    if (this.socket || !base) return;
 
-    const wsUrl = `${base.replace(/^http/, 'ws')}/ws/notifications?token=${encodeURIComponent(this.token)}`;
+    const token = localStorage.getItem('authToken');
+    if (!token) return;
+
+    const wsUrl = `${base.replace(/^http/, 'ws')}/ws/notifications?token=${encodeURIComponent(token)}`;
     try {
       this.socket = new WebSocket(wsUrl);
     } catch {
@@ -94,8 +91,13 @@ class NotificationRealtimeService {
       try {
         const msg = JSON.parse(String(event.data)) as ServerMessage;
         if (msg.type === 'notification' && msg.notification) {
-          this.notificationListeners.forEach((listener) => listener(msg.notification!));
-        } else if (msg.type === 'unread_count' && typeof msg.count === 'number') {
+          this.notificationListeners.forEach((listener) =>
+            listener(msg.notification!)
+          );
+        } else if (
+          msg.type === 'unread_count' &&
+          typeof msg.count === 'number'
+        ) {
           this.setUnread(msg.count);
         }
       } catch {
