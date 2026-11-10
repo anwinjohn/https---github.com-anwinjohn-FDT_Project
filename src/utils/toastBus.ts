@@ -13,6 +13,9 @@ export interface ToastPayload {
   duration?: number;
   title?: string;
   onClick?: () => void;
+  /** Inline action button rendered inside the toast (e.g. "Close anyway"). */
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 type Listener = (payload: ToastPayload) => void;

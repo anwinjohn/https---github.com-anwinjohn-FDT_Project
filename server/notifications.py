@@ -5,11 +5,19 @@ Drop-in FastAPI router for the fraud-detection backend. Mount it on the main
 app (the service that already serves /open-alerts-details, /alert-lock/*,
 /alert-notes/*, /alert-attachments/*):
 
+    import asyncio
     from fastapi import FastAPI
-    from notifications import router as notifications_router
+    from notifications import router as notifications_router, set_notification_loop
 
     app = FastAPI()
     app.include_router(notifications_router, prefix="/notifications")
+
+    @app.on_event("startup")
+    async def _capture_loop():
+        set_notification_loop(asyncio.get_running_loop())
+
+    # If you skip the startup hook it still works: the loop is captured the
+    # first time a browser opens the /ws socket.
 
 Contract (matches the frontend notificationService):
     POST /notifications/list            {username, unread_only?, limit?}  -> [Notification]
@@ -19,6 +27,20 @@ Contract (matches the frontend notificationService):
     GET  /notifications/vapid-public-key                                  -> {"public_key": "..."}
     POST /notifications/subscribe       {username, subscription, machine_info?} -> {"success": true}
     POST /notifications/unsubscribe     {username, endpoint}              -> {"success": true}
+
+Live socket (same router):
+    WS   /notifications/ws?token=<jwt>                                    -> live pushes
+
+    Server -> client frames:
+        {"type": "unread_count", "count": n}     on connect and on "sync"
+        {"type": "notification", "notification": {...}}    new notification
+        {"type": "pong"}                          reply to client "ping"
+    Client -> server frames:
+        {"type": "sync"}                          ask for current unread count
+        {"type": "ping"}                          keepalive (client heartbeats)
+
+    Every new notification created via create_notification() is pushed to the
+    user's open sockets automatically; no polling is needed.
 
 Security notes:
     - Every route requires a valid Bearer token (same JWT as the rest of the
@@ -59,7 +81,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Boolean,
@@ -145,22 +175,27 @@ class PushSubscription(Base):
 # ---------------------------------------------------------------------------
 
 
-def get_current_user(request: Request) -> str:
-    """Return the username from the Bearer token. Must reject invalid tokens."""
+def _decode_token_username(token: str) -> Optional[str]:
+    """Decode a JWT and return the username, or None if invalid/expired."""
     import jwt  # PyJWT - use the same secret/algorithm as the rest of the app
 
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = auth.removeprefix("Bearer ").strip()
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return None
     username = payload.get("username") or payload.get("sub")
+    return str(username) if username else None
+
+
+def get_current_user(request: Request) -> str:
+    """Return the username from the Bearer token. Must reject invalid tokens."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = _decode_token_username(auth.removeprefix("Bearer ").strip())
     if not username:
-        raise HTTPException(status_code=401, detail="Token has no user")
-    return str(username)
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return username
 
 
 def get_db():
@@ -169,6 +204,86 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Live socket: per-user connection registry + broadcast helpers
+# ---------------------------------------------------------------------------
+
+
+class _SocketManager:
+    """Tracks the open notification WebSockets per username."""
+
+    def __init__(self) -> None:
+        self._connections: Dict[str, Set[WebSocket]] = {}
+        self._lock = asyncio.Lock()
+
+    async def connect(self, username: str, ws: WebSocket) -> None:
+        async with self._lock:
+            self._connections.setdefault(username, set()).add(ws)
+
+    async def disconnect(self, username: str, ws: WebSocket) -> None:
+        async with self._lock:
+            conns = self._connections.get(username)
+            if conns is not None:
+                conns.discard(ws)
+                if not conns:
+                    self._connections.pop(username, None)
+
+    async def broadcast(self, username: str, message: Dict[str, Any]) -> None:
+        async with self._lock:
+            conns = list(self._connections.get(username, ()))
+        for ws in conns:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                await self.disconnect(username, ws)
+
+
+socket_manager = _SocketManager()
+
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def set_notification_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Capture the app's main event loop so sync code can broadcast to it.
+
+    Call from a FastAPI startup hook; also captured automatically the first
+    time a browser opens the /ws socket.
+    """
+    global _main_loop
+    _main_loop = loop
+
+
+def _unread_count_sync(username: str) -> int:
+    db = SessionLocal()
+    try:
+        count = db.scalar(
+            select(func.count())
+            .select_from(Notification)
+            .where(Notification.user_id == username, Notification.is_read.is_(False))
+        )
+        return int(count or 0)
+    finally:
+        db.close()
+
+
+def _schedule_socket_broadcast(username: str, payload: Dict[str, Any]) -> None:
+    """Fire notify_user_socket on the main loop from sync or async context."""
+    if _main_loop is None or _main_loop.is_closed():
+        return
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    coro = socket_manager.broadcast(
+        username,
+        {"type": "notification", "notification": payload},
+    )
+    if running is _main_loop:
+        asyncio.ensure_future(coro)
+    else:
+        asyncio.run_coroutine_threadsafe(coro, _main_loop)
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +412,44 @@ def unread_count(
     body: UserBody, user: str = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     username = _require_own_user(body.username, user)
-    count = db.scalar(
-        select(func.count())
-        .select_from(Notification)
-        .where(Notification.user_id == username, Notification.is_read.is_(False))
-    )
-    return {"count": int(count or 0)}
+    return {"count": _unread_count_sync(username)}
+
+
+@router.websocket("/ws")
+async def notifications_ws(websocket: WebSocket, token: str = Query(default="")):
+    """Live notification socket for one signed-in user.
+
+    Auth is the same JWT as the REST routes, passed as ?token= because the
+    browser WebSocket API cannot set headers.
+    """
+    username = _decode_token_username(token)
+    if not username:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    set_notification_loop(asyncio.get_running_loop())
+    await socket_manager.connect(username, websocket)
+
+    async def _send_unread() -> None:
+        count = await asyncio.to_thread(_unread_count_sync, username)
+        await websocket.send_json({"type": "unread_count", "count": count})
+
+    try:
+        await _send_unread()
+        while True:
+            msg = await websocket.receive_json()
+            mtype = str(msg.get("type", ""))
+            if mtype == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif mtype == "sync":
+                await _send_unread()
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    except Exception:
+        pass
+    finally:
+        await socket_manager.disconnect(username, websocket)
 
 
 @router.post("/mark-read")
@@ -487,22 +634,23 @@ def create_notification(
     )
     db.add(row)
     db.commit()
+
+    live_payload = {
+        "title": title,
+        "body": message,
+        "notification_id": row.notification_id,
+        "notification_type": notification_type,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "link": link,
+        "meta": meta,
+    }
+    # Push to any open browser sockets (cheap, no HTTP round-trip for clients).
+    _schedule_socket_broadcast(username, live_payload)
+
     if push:
         try:
-            import asyncio
-
             asyncio.get_event_loop().run_until_complete(
-                send_push_to_user(
-                    db,
-                    username,
-                    {
-                        "title": title,
-                        "body": message,
-                        "notification_id": row.notification_id,
-                        "notification_type": notification_type,
-                        "link": link,
-                    },
-                )
+                send_push_to_user(db, username, live_payload)
             )
         except RuntimeError:
             # Already inside a running loop (e.g. FastAPI async route): use await

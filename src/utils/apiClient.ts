@@ -87,6 +87,10 @@ class SecureApiClient {
             !(request as any).skipBodyEncryption &&
             request.data !== undefined &&
             request.data !== null &&
+            // FormData (multipart uploads) must go through untouched:
+            // JSON.stringify(FormData) is "{}", so encrypting it would
+            // replace the file with an encrypted empty object.
+            !(request.data instanceof FormData) &&
             !(request as any)._machineInfoEnriched
           ) {
             const body = request.data;
@@ -476,7 +480,9 @@ class SecureApiClient {
         formData,
         {
           headers: { 'Content-Type': 'multipart/form-data' },
-        }
+          // Belt-and-braces with the FormData check in the interceptor.
+          skipBodyEncryption: true,
+        } as ApiRequestConfig
       );
       return { success: true, data: response.data };
     } catch (error) {

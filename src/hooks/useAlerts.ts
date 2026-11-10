@@ -10,6 +10,7 @@ import apiClient from '../utils/apiClient';
 import { useNotifications } from '../components/notifications';
 import { appConfig as config } from '../config/runtime-config';
 import FilterOptionsAPI from './FilterOptionsAPI';
+import { useAuth } from '../context/AuthContext';
 
 interface AlertsResponse {
   total: number;
@@ -101,7 +102,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
     branches: [],
     nationalities: [],
   });
-
+  const { user } = useAuth();
   const { addNotification } = useNotifications();
 
   const buildQueryParams = useCallback(() => {
@@ -110,6 +111,7 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
     // Pagination parameters (always required)
     queryParams.append('page', currentPage.toString());
     queryParams.append('page_size', pageSize.toString());
+    queryParams.append('assigned_to', user?.username || '');
 
     // Search filter
     if (filters.search && filters.search.trim()) {

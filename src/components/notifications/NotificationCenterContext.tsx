@@ -30,6 +30,12 @@ import {
   notificationRealtime,
 } from '../../utils/notificationRealtime';
 
+// Safety net for socket outages: one tiny unread-count call per interval, and
+// a full refresh only when the count actually changed. Throttled so a hidden
+// or background tab never generates meaningful traffic.
+const SAFETY_NET_POLL_MS = 60000;
+const VISIBILITY_REFRESH_MIN_MS = 30000;
+
 interface NotificationCenterContextValue {
   items: AppNotification[];
   unreadCount: number;
@@ -56,6 +62,35 @@ const mapType = (raw?: string | null): NotificationType => {
   if (t.includes('system')) return 'system';
   return 'info';
 };
+
+/**
+ * Shows the OS-level notification (visible over other tabs and a minimized
+ * window) for a live notification that arrived while the tab is hidden.
+ * The tag matches the service worker's push tag, so if Web Push delivered
+ * the same notification the two never duplicate.
+ */
+async function showOsNotificationWhenHidden(
+  notification: AppNotification
+): Promise<void> {
+  if (document.visibilityState === 'visible') return;
+  if (pushService.getState() !== 'granted') return;
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    if (!registration) return;
+    await registration.showNotification(notification.title, {
+      body: notification.message,
+      icon: '/ARIE_Logo.png',
+      badge: '/ARIE_Logo.png',
+      tag: notification.notification_id,
+      data: {
+        link: notification.link,
+        notification_id: notification.notification_id,
+      },
+    });
+  } catch {
+    /* OS notification is best-effort */
+  }
+}
 
 export const NotificationCenterProvider: React.FC<{
   children: React.ReactNode;
@@ -122,6 +157,7 @@ export const NotificationCenterProvider: React.FC<{
         8000,
         live.title
       );
+      void showOsNotificationWhenHidden(mapped);
     },
     [toast, username]
   );
@@ -144,12 +180,50 @@ export const NotificationCenterProvider: React.FC<{
       .catch(() => setPermission(pushService.getState()));
   }, [isAuthenticated, username, refresh]);
 
+  // Safety net: while the socket is down, poll the tiny unread-count endpoint
+  // and escalate to a full refresh only when the count changed. Also refresh
+  // (throttled) when the tab becomes visible again.
+  useEffect(() => {
+    if (!isAuthenticated || !username) return;
+
+    let lastCount = notificationRealtime.getUnread();
+    let lastVisibilityRefresh = 0;
+
+    const pollTimer = window.setInterval(async () => {
+      if (notificationRealtime.isConnected()) return;
+      const count = await notificationService.unreadCount(username);
+      if (count !== lastCount) {
+        lastCount = count;
+        void refresh();
+      }
+    }, SAFETY_NET_POLL_MS);
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastVisibilityRefresh < VISIBILITY_REFRESH_MIN_MS) return;
+      lastVisibilityRefresh = now;
+      void refresh();
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(pollTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [isAuthenticated, username, refresh]);
+
   // Live socket + service-worker bridge.
   useEffect(() => {
     if (!isAuthenticated) return;
     notificationRealtime.start(username ?? '');
     const offNotification = notificationRealtime.onNotification(handleIncoming);
     const offCount = notificationRealtime.onUnreadCount(setUnreadCount);
+    // After any reconnect the server may have queued notifications we missed;
+    // one catch-up fetch makes the list authoritative again.
+    const offReconnected = notificationRealtime.onReconnected(() => {
+      void refresh();
+    });
 
     const onSwMessage = (event: MessageEvent) => {
       if (event.data?.type === 'PUSH_RECEIVED' && event.data.notification) {
@@ -161,10 +235,11 @@ export const NotificationCenterProvider: React.FC<{
     return () => {
       offNotification();
       offCount();
+      offReconnected();
       navigator.serviceWorker?.removeEventListener('message', onSwMessage);
       notificationRealtime.stop();
     };
-  }, [isAuthenticated, username, handleIncoming]);
+  }, [isAuthenticated, username, handleIncoming, refresh]);
 
   const enablePush = useCallback(async () => {
     if (!username) return;

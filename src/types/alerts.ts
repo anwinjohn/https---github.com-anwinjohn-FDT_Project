@@ -16,6 +16,9 @@ export interface AlertSummary {
   cust_nationality: string;
   customer_type?: string | null;
   remarks?: string | null;
+  status_code?: string | null;
+  cashier?: string | null;
+  wip: boolean;
 }
 export interface AlertDetailsResponse {
   beneficiaries: number;

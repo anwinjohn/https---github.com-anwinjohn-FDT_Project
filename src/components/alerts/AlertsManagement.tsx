@@ -1,8 +1,15 @@
-import React, { useState } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   AlertTriangle,
-  Filter,
+  SlidersHorizontal,
   RefreshCw,
   Eye,
   Clock,
@@ -16,11 +23,16 @@ import {
   Lock,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   CheckCircle,
   AlertCircle,
+  Search,
+  X,
+  ClipboardList,
+  Loader2,
+  Info,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
-import { usePermissions } from '../../hooks/usePermissions';
 import { useMenuIds } from '../../hooks/useMenuIds';
 import { useNotifications } from '../notifications';
 import { useAlerts } from '../../hooks/useAlerts';
@@ -36,12 +48,348 @@ import {
   exportAllAlerts,
 } from '../../utils/alertsCsvExport';
 
-const AlertsManagement: React.FC = () => {
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
+interface AlertsManagementProps {
+  /**
+   * Id of the signed-in user (wire from your auth context). It is sent to the
+   * back-end together with the WIP flag. The back-end must still resolve the
+   * real user from the session token — treat this value as a hint only.
+   */
+  currentUserId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Constants & helpers
+// ---------------------------------------------------------------------------
+
+const PAGE_SIZES = [10, 20, 50, 100];
+const DENSITY_KEY = 'alerts.management.density';
+type Density = 'comfortable' | 'compact';
+
+// z-index ladder — every floating layer is portaled to <body>, so ordering is
+// decided here and not by whichever ancestor happens to create a stacking
+// context (blurred / transformed panels were the cause of the overlap bug).
+const Z_DRAWER = 'z-[90]';
+const Z_MODALS = 'z-[100]';
+
+const EMPTY_FILTERS = {
+  search: '',
+  service_type: [],
+  rule_id: [],
+  status: [],
+  priority: [],
+  date_range: { from: '', to: '' },
+  assigned_to: [],
+  branch_name: [],
+  cust_nationality: [],
+};
+
+function useDebouncedValue<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+// Shared, counter-based body scroll lock (safe with several overlays).
+let lockCount = 0;
+let lockPrev = '';
+function useBodyScrollLock() {
+  useEffect(() => {
+    if (lockCount === 0) {
+      lockPrev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+    lockCount++;
+    return () => {
+      lockCount--;
+      if (lockCount === 0) document.body.style.overflow = lockPrev;
+    };
+  }, []);
+}
+
+// Esc to close, focus in, Tab trapped, focus restored on close.
+function useDialog(onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    ref.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeRef.current();
+        return;
+      }
+      if (e.key === 'Tab' && ref.current) {
+        const f = ref.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (!f.length) return;
+        const first = f[0];
+        const last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      prev?.focus?.();
+    };
+  }, []);
+  return ref;
+}
+
+const Portal: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+  typeof document === 'undefined'
+    ? null
+    : createPortal(children, document.body);
+
+const tokens = (dark: boolean) => ({
+  text: dark ? 'text-white' : 'text-gray-900',
+  body: dark ? 'text-white/80' : 'text-gray-700',
+  muted: dark ? 'text-white/60' : 'text-gray-600',
+  faint: dark ? 'text-white/40' : 'text-gray-400',
+  line: dark ? 'border-white/10' : 'border-gray-100',
+  panel: dark ? 'bg-white/5 border-white/15' : 'bg-white border-gray-200',
+  surface: dark ? 'bg-slate-900 border-white/15' : 'bg-white border-gray-200',
+  hover: dark ? 'hover:bg-white/5' : 'hover:bg-gray-50',
+  input: dark
+    ? 'bg-white/10 border border-white/20 text-white placeholder-white/40'
+    : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-400',
+  btn: dark
+    ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
+    : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300',
+});
+
+// Risk badge — same mapping as before, with light-theme-safe colours.
+const getRiskBadge = (rule_priority: string, dark: boolean) => {
+  const priority = rule_priority?.toUpperCase() || 'LOW';
+  switch (priority) {
+    case 'HIGH':
+    case 'CRITICAL':
+      return {
+        level: 'HIGH' as const,
+        color: dark
+          ? 'bg-red-500/20 text-red-300 border-red-500/30'
+          : 'bg-red-50 text-red-700 border-red-200',
+        icon: AlertTriangle,
+      };
+    case 'MEDIUM':
+    case 'MODERATE':
+      return {
+        level: 'MEDIUM' as const,
+        color: dark
+          ? 'bg-orange-500/20 text-orange-300 border-orange-500/30'
+          : 'bg-orange-50 text-orange-700 border-orange-200',
+        icon: AlertCircle,
+      };
+    default:
+      return {
+        level: 'LOW' as const,
+        color: dark
+          ? 'bg-green-500/20 text-green-300 border-green-500/30'
+          : 'bg-green-50 text-green-700 border-green-200',
+        icon: CheckCircle,
+      };
+  }
+};
+
+const getServiceTypeIcon = (serviceType: string) => {
+  switch ((serviceType || '').toUpperCase()) {
+    case 'OUTWARD':
+      return <TrendingUp className="w-4 h-4" />;
+    case 'INWARD':
+      return <BarChart3 className="w-4 h-4" />;
+    case 'CASHIER-RULE':
+      return <User className="w-4 h-4" />;
+    case 'CUSTOMER-ONBOARDING':
+    case 'CUSTOMER-ONBAORDING':
+      return <Shield className="w-4 h-4" />;
+    case 'TRANSACTION':
+      return <CreditCard className="w-4 h-4" />;
+    case 'KYC':
+      return <FileText className="w-4 h-4" />;
+    default:
+      return <AlertTriangle className="w-4 h-4" />;
+  }
+};
+
+const getInitials = (name?: string) => {
+  if (!name) return '?';
+  const initials = name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join('');
+  return initials || '?';
+};
+
+const isValid = (s?: string) => !!s && !Number.isNaN(new Date(s).getTime());
+
+// const formatRelativeDate = (timestamp: string) => {
+//   if (!isValid(timestamp)) return '—';
+//   const date = new Date(timestamp);
+//   const now = new Date();
+//   const yesterday = new Date(now);
+//   yesterday.setDate(now.getDate() - 1);
+//   if (date.toDateString() === now.toDateString()) return 'Today';
+//   if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+//   return date.toLocaleDateString();
+// };
+const formatRelativeDate = (timestamp: string) => {
+  // 1. Validate the timestamp payload
+  if (!timestamp || isNaN(Date.parse(timestamp))) return '—';
+
+  const date = new Date(timestamp);
+  const now = new Date();
+
+  // 2. Clear out time components to ensure pure date comparison
+  const dString = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  ).toDateString();
+  const todayString = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  ).toDateString();
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const yesterdayString = new Date(
+    yesterday.getFullYear(),
+    yesterday.getMonth(),
+    yesterday.getDate()
+  ).toDateString();
+
+  // 3. Evaluate relative matches
+  if (dString === todayString) return 'Today';
+  if (dString === yesterdayString) return 'Yesterday';
+
+  // 4. Construct the custom dd-MMM-yy layout using Intl
+  // This extracts pieces independently so we can join them explicitly with dashes
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: '2-digit',
+  });
+
+  const parts = formatter.formatToParts(date);
+  const day = parts.find((p) => p.type === 'day')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const year = parts.find((p) => p.type === 'year')?.value;
+
+  return `${day}-${month}-${year}`;
+};
+
+const formatClock = (timestamp: string) =>
+  isValid(timestamp)
+    ? new Date(timestamp).toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '';
+
+const truncate = (s: string | null | undefined, n: number) => {
+  const v = s ?? '';
+  return v.length > n ? `${v.slice(0, n)}...` : v;
+};
+
+// ---------------------------------------------------------------------------
+// Filters drawer — hosts the existing AlertFiltersPanel unchanged, but in a
+// portaled, modal-style layer so it can never float over another dialog.
+// ---------------------------------------------------------------------------
+
+const FiltersDrawer: React.FC<{
+  dark: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}> = ({ dark, onClose, children }) => {
+  const t = tokens(dark);
+  const ref = useDialog(onClose);
+  useBodyScrollLock();
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={onClose}
+      className={`fixed inset-0 ${Z_DRAWER} bg-black/50 backdrop-blur-[2px]`}
+    >
+      <motion.aside
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Alert filters"
+        tabIndex={-1}
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        transition={{ type: 'spring', stiffness: 320, damping: 34 }}
+        onClick={(e) => e.stopPropagation()}
+        className={`absolute right-0 top-0 h-full w-full sm:w-[480px] border-l shadow-2xl flex flex-col outline-none ${t.surface}`}
+      >
+        <div
+          className={`px-5 py-4 border-b flex items-center justify-between shrink-0 ${t.line}`}
+        >
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className={`w-4 h-4 ${t.muted}`} />
+            <h3 className={`text-base font-bold ${t.text}`}>Filters</h3>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close filters"
+            className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/10 text-white/70' : 'hover:bg-gray-100 text-gray-500'}`}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4">
+          {children}
+        </div>
+        <div
+          className={`px-5 py-3 border-t flex justify-end shrink-0 ${t.line}`}
+        >
+          <button
+            onClick={onClose}
+            className="px-5 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white"
+          >
+            Done
+          </button>
+        </div>
+      </motion.aside>
+    </motion.div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
+const AlertsManagement: React.FC<AlertsManagementProps> = ({
+  currentUserId,
+}) => {
   const { theme } = useTheme();
+  const dark = theme === 'dark';
+  const t = tokens(dark);
   const { getMenuId } = useMenuIds();
   const { addNotification } = useNotifications();
 
-  // Use the useAlerts hook instead of managing state directly
   const {
     alerts,
     selectedAlert,
@@ -58,7 +406,6 @@ const AlertsManagement: React.FC = () => {
     pageSize,
     filters,
     filterOptions,
-    fetchAlerts,
     fetchAlertDetails,
     disposeAlert,
     updateFilters,
@@ -73,42 +420,113 @@ const AlertsManagement: React.FC = () => {
   const [showDispositionModal, setShowDispositionModal] = useState(false);
   const [selectedAlertForDisposition, setSelectedAlertForDisposition] =
     useState<AlertSummary | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] =
     useState<AlertsExportProgress | null>(null);
+  const [showInsights, setShowInsights] = useState(false);
+  const [density, setDensity] = useState<Density>(() => {
+    try {
+      return localStorage.getItem(DENSITY_KEY) === 'compact'
+        ? 'compact'
+        : 'comfortable';
+    } catch {
+      return 'comfortable';
+    }
+  });
+  const compact = density === 'compact';
 
-  // Get menu IDs for permission checks
   const ALERTS_MANAGEMENT_MENU_ID = getMenuId('alerts_management');
 
-  // Clear filters on initial load
-  React.useEffect(() => {
+  // `wip` / `user_id` are new filter keys (see hook/type patch). They are read
+  // and written through these helpers so the filters object stays the single
+  // source of truth for fetching AND for exportAllAlerts.
+  const isWip = Boolean((filters as { wip?: boolean }).wip);
+  const canUseWip = !!currentUserId;
+  const patchFilters = useCallback(
+    (patch: Record<string, unknown>) =>
+      updateFilters({ ...filters, ...patch } as typeof filters),
+    [filters, updateFilters]
+  );
+
+  // Clear filters on initial load (existing behaviour, now WIP-aware).
+  useEffect(() => {
     updateFilters({
-      search: '',
-      service_type: [],
-      rule_id: [],
-      status: [],
-      priority: [],
-      date_range: { from: '', to: '' },
-      assigned_to: [],
-      branch_name: [],
-      cust_nationality: [],
-    });
+      ...EMPTY_FILTERS,
+      wip: false,
+      user_id: currentUserId,
+    } as unknown as typeof filters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ---- Search (debounced; stays in sync with the filters panel) -------------
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 400);
+  const lastSentSearch = useRef('');
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (debouncedSearch !== (filters.search || '')) {
+      lastSentSearch.current = debouncedSearch;
+      patchFilters({ search: debouncedSearch });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    // external change (filters panel / clear) -> mirror into the input
+    if ((filters.search || '') === lastSentSearch.current) return;
+    setSearch(filters.search || '');
+    lastSentSearch.current = filters.search || '';
+  }, [filters.search]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (
+        e.key !== '/' ||
+        showFilters ||
+        showDetailsModal ||
+        showDispositionModal
+      )
+        return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [showFilters, showDetailsModal, showDispositionModal]);
+
+  // ---- Actions ---------------------------------------------------------------
+  // Only one overlay at a time: opening a record always dismisses the filters.
   const handleViewDetails = async (alert: AlertSummary) => {
+    if (openingId) return;
+    setShowFilters(false);
     setSelectedAlertId(alert.alert_id);
-    await fetchAlertDetails(alert.alert_id, alert.rule_id);
-    setShowDetailsModal(true);
+    setOpeningId(alert.alert_id);
+    try {
+      await fetchAlertDetails(alert.alert_id, alert.rule_id);
+      setShowDetailsModal(true);
+    } catch (e) {
+      console.error('Error loading alert details:', e);
+      addNotification(
+        'Could not load alert details. Please try again.',
+        'error'
+      );
+    } finally {
+      setOpeningId(null);
+    }
   };
 
   const handleDisposeAlert = (alert: AlertSummary) => {
+    setShowFilters(false);
     setSelectedAlertForDisposition(alert);
     setShowDispositionModal(true);
   };
 
   const handleExport = async (format: ExportFormat) => {
     if (exporting) return;
-
     setExporting(true);
     setExportProgress({
       progress: 0,
@@ -116,7 +534,6 @@ const AlertsManagement: React.FC = () => {
       exportedCount: 0,
       totalCount: 0,
     });
-
     try {
       const { exportedCount } = await exportAllAlerts(
         filters,
@@ -130,7 +547,6 @@ const AlertsManagement: React.FC = () => {
         );
         return;
       }
-
       addNotification(
         `${formatNumber(exportedCount)} alerts exported as ${format.toUpperCase()} successfully`,
         'success'
@@ -143,89 +559,35 @@ const AlertsManagement: React.FC = () => {
     }
   };
 
-  const getRiskBadge = (rule_priority: string) => {
-    const priority = rule_priority?.toUpperCase() || 'LOW';
-    switch (priority) {
-      case 'HIGH':
-      case 'CRITICAL':
-        return {
-          level: 'HIGH' as const,
-          color: 'bg-red-500/20 text-red-300 border-red-500/30',
-          dot: 'bg-red-500',
-          icon: AlertTriangle,
-        };
-      case 'MEDIUM':
-      case 'MODERATE':
-        return {
-          level: 'MEDIUM' as const,
-          color: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
-          dot: 'bg-orange-500',
-          icon: AlertCircle,
-        };
-      case 'LOW':
-      default:
-        return {
-          level: 'LOW' as const,
-          color: 'bg-green-500/20 text-green-300 border-green-500/30',
-          dot: 'bg-green-500',
-          icon: CheckCircle,
-        };
+  const setView = (wip: boolean) => {
+    if (wip && !canUseWip) return;
+    patchFilters({ wip, user_id: currentUserId });
+  };
+
+  const clearAll = () => {
+    setSearch('');
+    lastSentSearch.current = '';
+    updateFilters({
+      ...EMPTY_FILTERS,
+      wip: false,
+      user_id: currentUserId,
+    } as unknown as typeof filters);
+  };
+
+  const toggleDensity = (d: Density) => {
+    setDensity(d);
+    try {
+      localStorage.setItem(DENSITY_KEY, d);
+    } catch {
+      /* ignore */
     }
   };
 
-  const getServiceTypeIcon = (serviceType: string) => {
-    const type = serviceType?.toUpperCase() || '';
-
-    switch (type) {
-      case 'OUTWARD':
-        return <TrendingUp className="w-4 h-4" />;
-      case 'INWARD':
-        return <BarChart3 className="w-4 h-4" />;
-      case 'CASHIER-RULE':
-        return <User className="w-4 h-4" />;
-      case 'CUSTOMER-ONBOARDING':
-      case 'CUSTOMER-ONBAORDING':
-        return <Shield className="w-4 h-4" />;
-      case 'TRANSACTION':
-        return <CreditCard className="w-4 h-4" />;
-      case 'KYC':
-        return <FileText className="w-4 h-4" />;
-      default:
-        return <AlertTriangle className="w-4 h-4" />;
-    }
-  };
-
-  // Presentation-only helpers — derived purely from data already on the
-  // page, no new data fetching or business rules.
-  const getInitials = (name?: string) => {
-    if (!name) return '?';
-    const parts = name.trim().split(/\s+/);
-    const initials = parts
-      .slice(0, 2)
-      .map((p) => p[0]?.toUpperCase())
-      .join('');
-    return initials || '?';
-  };
-
-  const formatRelativeDate = (timestamp: string) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const yesterday = new Date(now);
-    yesterday.setDate(now.getDate() - 1);
-
-    if (date.toDateString() === now.toDateString()) return 'Today';
-    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
-    return date.toLocaleDateString();
-  };
-
-  const priorityBreakdown = React.useMemo(() => {
-    const counts: Record<'HIGH' | 'MEDIUM' | 'LOW', number> = {
-      HIGH: 0,
-      MEDIUM: 0,
-      LOW: 0,
-    };
+  // ---- Derived ---------------------------------------------------------------
+  const priorityBreakdown = useMemo(() => {
+    const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
     alerts.forEach((a) => {
-      counts[getRiskBadge(a.rule_priority).level] += 1;
+      counts[getRiskBadge(a.rule_priority, dark).level] += 1;
     });
     const total = alerts.length || 1;
     return [
@@ -234,26 +596,26 @@ const AlertsManagement: React.FC = () => {
         count: counts.HIGH,
         pct: (counts.HIGH / total) * 100,
         bar: 'bg-red-500',
-        text: 'text-red-400',
+        text: 'text-red-500',
       },
       {
         level: 'MEDIUM',
         count: counts.MEDIUM,
         pct: (counts.MEDIUM / total) * 100,
         bar: 'bg-orange-500',
-        text: 'text-orange-400',
+        text: 'text-orange-500',
       },
       {
         level: 'LOW',
         count: counts.LOW,
         pct: (counts.LOW / total) * 100,
         bar: 'bg-green-500',
-        text: 'text-green-400',
+        text: 'text-green-500',
       },
     ];
-  }, [alerts]);
+  }, [alerts, dark]);
 
-  const serviceTypeBreakdown = React.useMemo(() => {
+  const serviceTypeBreakdown = useMemo(() => {
     const counts: Record<string, number> = {};
     alerts.forEach((a) => {
       const key = a.service_type || 'UNKNOWN';
@@ -266,71 +628,73 @@ const AlertsManagement: React.FC = () => {
       .map(([type, count]) => ({ type, count, pct: (count / total) * 100 }));
   }, [alerts]);
 
-  const stats = [
+  // Filter chips (what the Filters badge counts, made visible & removable)
+  const chips = useMemo(() => {
+    const c: { key: string; label: string; clear: Record<string, unknown> }[] =
+      [];
+    const addList = (k: string, label: string, v?: string[]) => {
+      if (v && v.length > 0)
+        c.push({
+          key: k,
+          label: `${label}: ${v.length > 2 ? `${v.slice(0, 2).join(', ')} +${v.length - 2}` : v.join(', ')}`,
+          clear: { [k]: [] },
+        });
+    };
+    addList('service_type', 'Source', filters.service_type);
+    addList('rule_id', 'Rule', filters.rule_id);
+    addList('status', 'Status', filters.status);
+    addList('priority', 'Priority', filters.priority);
+    addList('assigned_to', 'Assigned', filters.assigned_to);
+    addList('branch_name', 'Branch', filters.branch_name);
+    addList('cust_nationality', 'Nationality', filters.cust_nationality);
+    if (filters.date_range?.from || filters.date_range?.to)
+      c.push({
+        key: 'date_range',
+        label: `Date: ${filters.date_range.from || '…'} → ${filters.date_range.to || '…'}`,
+        clear: { date_range: { from: '', to: '' } },
+      });
+    return c;
+  }, [filters]);
+
+  const anyActive = chips.length > 0 || !!search || isWip;
+  const pad = compact ? 'py-2' : 'py-3.5';
+  const rangeFrom = alerts.length > 0 ? (currentPage - 1) * pageSize + 1 : 0;
+  const rangeTo = Math.min(currentPage * pageSize, totalCount);
+
+  // Page numbers (same windowing logic as before)
+  const pageNumbers = Array.from(
+    { length: Math.min(5, totalPages) },
+    (_, i) => {
+      if (totalPages <= 5 || currentPage <= 3) return i + 1;
+      if (currentPage >= totalPages - 2) return totalPages - 4 + i;
+      return currentPage - 2 + i;
+    }
+  );
+
+  const kpis = [
     {
-      title: 'Total Individual Alerts',
+      label: 'Open',
       value: totalOpenAlerts,
-      icon: AlertTriangle,
-      color: 'from-red-500 to-red-600',
-      bgColor:
-        theme === 'dark'
-          ? 'from-red-500/20 to-red-500/10'
-          : 'from-red-100 to-red-50',
+      cls: dark ? 'text-red-300' : 'text-red-600',
     },
     {
-      title: 'High Priority Alerts',
+      label: 'High priority',
       value: totalHighPriorityAlerts,
-      icon: Shield,
-      color: 'from-orange-500 to-orange-600',
-      bgColor:
-        theme === 'dark'
-          ? 'from-orange-500/20 to-orange-500/10'
-          : 'from-orange-100 to-orange-50',
+      cls: dark ? 'text-orange-300' : 'text-orange-600',
     },
     {
-      title: 'Alerts Pending Review',
+      label: 'WIP',
       value: pendingReview,
-      icon: Clock,
-      color: 'from-blue-500 to-blue-600',
-      bgColor:
-        theme === 'dark'
-          ? 'from-blue-500/20 to-blue-500/10'
-          : 'from-blue-100 to-blue-50',
-    },
-    {
-      title: 'Unique Customers',
-      value: new Set(alerts.map((a) => a.cust_code)).size,
-      icon: User,
-      color: 'from-green-500 to-green-600',
-      bgColor:
-        theme === 'dark'
-          ? 'from-green-500/20 to-green-500/10'
-          : 'from-green-100 to-green-50',
+      cls: dark ? 'text-blue-300' : 'text-blue-600',
     },
   ];
-
-  const activeFilterCount = [
-    filters.search,
-    filters.service_type.length > 0,
-    filters.rule_id.length > 0,
-    filters.status.length > 0,
-    filters.priority.length > 0,
-    filters.assigned_to.length > 0,
-    filters.branch_name.length > 0,
-    filters.cust_nationality.length > 0,
-    filters.date_range.from || filters.date_range.to,
-  ].filter(Boolean).length;
 
   return (
     <PermissionGuard
       menuId={ALERTS_MANAGEMENT_MENU_ID}
       action="view"
       fallback={
-        <div
-          className={`text-center py-20 ${
-            theme === 'dark' ? 'text-white' : 'text-gray-900'
-          }`}
-        >
+        <div className={`text-center py-20 ${t.text}`}>
           <Shield className="w-16 h-16 mx-auto mb-4 text-red-400" />
           <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
           <p className="text-gray-500">
@@ -339,97 +703,73 @@ const AlertsManagement: React.FC = () => {
         </div>
       }
     >
-      <div className="space-y-6">
+      <div className="space-y-3">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="relative p-3 bg-gradient-to-br from-red-500 to-orange-600 rounded-xl shadow-lg">
-              <AlertTriangle className="w-6 h-6 text-white" />
+            <div className="relative p-2.5 bg-gradient-to-br from-red-500 to-orange-600 rounded-xl shadow-lg">
+              <AlertTriangle className="w-5 h-5 text-white" />
               {totalHighPriorityAlerts > 0 && (
-                <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-red-500 border-2 border-white/80 animate-pulse" />
+                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-red-500 border-2 border-white/80 animate-pulse" />
               )}
             </div>
             <div>
-              <h1
-                className={`text-2xl font-bold ${
-                  theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}
-              >
-                Fraud & Risk Alerts
+              <h1 className={`text-xl font-bold leading-tight ${t.text}`}>
+                Fraud &amp; Risk Alerts
               </h1>
               <p
-                className={`${
-                  theme === 'dark' ? 'text-red-200/70' : 'text-red-600'
-                }`}
+                className={`text-xs ${dark ? 'text-red-200/70' : 'text-red-600'}`}
               >
                 Alert disposition and case management
               </p>
             </div>
+            <div className="hidden md:flex items-center gap-2 ml-3">
+              {kpis.map((k) => (
+                <div
+                  key={k.label}
+                  className={`px-3 py-1 rounded-lg border text-xs ${t.panel}`}
+                >
+                  <span className={`font-bold text-sm tabular-nums ${k.cls}`}>
+                    {formatNumber(k.value ?? 0)}
+                  </span>{' '}
+                  <span className={t.muted}>{k.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => setShowFilters(!showFilters)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
-                showFilters
-                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                  : theme === 'dark'
-                    ? 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
-              }`}
-            >
-              <div className="relative">
-                <Filter className="w-4 h-4" />
-                {activeFilterCount > 0 && (
-                  <span className="absolute -top-2 -right-2 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
-                    {activeFilterCount > 9 ? '9+' : activeFilterCount}
-                  </span>
-                )}
-              </div>
-              Filters
-            </motion.button>
-
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+          <div className="flex items-center gap-2">
+            <button
               onClick={refreshAlerts}
               disabled={loading}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
-                theme === 'dark'
-                  ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300'
-              }`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${t.btn}`}
             >
               <RefreshCw
-                className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}
+                className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`}
               />
               Refresh
-            </motion.button>
+            </button>
 
             <PermissionGuard
               menuId={ALERTS_MANAGEMENT_MENU_ID}
               action="export"
               fallback={
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                <button
                   onClick={() =>
                     addNotification(
                       "You don't have permission to export alerts",
                       'warning'
                     )
                   }
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors border ${
-                    theme === 'dark'
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border ${
+                    dark
                       ? 'bg-white/5 text-white/40 border-white/10'
                       : 'bg-gray-50 text-gray-400 border-gray-200'
                   }`}
                 >
-                  <Lock className="w-4 h-4" />
+                  <Lock className="w-3.5 h-3.5" />
                   Download
-                </motion.button>
+                </button>
               }
             >
               <AlertsDownloadWidget
@@ -445,232 +785,265 @@ const AlertsManagement: React.FC = () => {
           </div>
         </div>
 
-        {/* Stats Cards */}
-        {/* <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {stats.map((stat, index) => (
-            <motion.div
-              key={stat.title}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.1 }}
-              whileHover={{ y: -3 }}
-              className={`p-6 rounded-2xl border backdrop-blur-xl transition-shadow hover:shadow-xl ${
-                theme === 'dark'
-                  ? `bg-gradient-to-br ${stat.bgColor} border-white/10`
-                  : `bg-gradient-to-br ${stat.bgColor} border-gray-200`
-              }`}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <div
-                  className={`p-3 rounded-xl bg-gradient-to-br ${stat.color} shadow-lg`}
-                >
-                  <stat.icon className="w-6 h-6 text-white" />
-                </div>
-              </div>
-              <div
-                className={`text-3xl font-bold mb-2 ${
-                  theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}
-              >
-                {formatNumber(stat.value)}
-              </div>
-              <div
-                className={`alerts-panel  ${
-                  theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                }`}
-              >
-                {stat.title}
-              </div>
-            </motion.div>
-          ))}
-        </div> */}
+        {/* Toolbar */}
+        <div className={`rounded-xl border p-3 ${t.panel}`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                ref={searchRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search alerts"
+                placeholder="Search alerts…   ( / )"
+                className={`w-full pl-9 pr-9 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${t.input}`}
+              />
+              {search !== debouncedSearch && (
+                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin" />
+              )}
+            </div>
 
-        {/* Visual Insights */}
-        {alerts.length > 0 && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* View switch */}
             <div
-              className={`p-6 rounded-2xl border backdrop-blur-xl ${
-                theme === 'dark'
-                  ? 'bg-white/5 border-white/10'
-                  : 'bg-white border-gray-200'
-              }`}
+              role="tablist"
+              aria-label="Alert view"
+              className={`inline-flex rounded-lg p-0.5 ${dark ? 'bg-white/10' : 'bg-gray-100'}`}
             >
-              <div className="flex items-center gap-2 mb-4">
-                <PieChart
-                  className={`w-4 h-4 ${
-                    theme === 'dark' ? 'text-white/50' : 'text-gray-400'
-                  }`}
-                />
-                <h3
-                  className={`text-sm font-semibold ${
-                    theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
-                >
-                  Priority mix
-                </h3>
-                <span
-                  className={`text-xs ${
-                    theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                  }`}
-                >
-                  · this page
+              <button
+                role="tab"
+                aria-selected={!isWip}
+                onClick={() => setView(false)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  !isWip
+                    ? dark
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white text-gray-900 shadow-sm'
+                    : dark
+                      ? 'text-white/60 hover:text-white'
+                      : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                All alerts
+              </button>
+              <button
+                role="tab"
+                aria-selected={isWip}
+                disabled={!canUseWip}
+                onClick={() => setView(true)}
+                title={
+                  canUseWip
+                    ? 'Alerts you are currently working on'
+                    : 'Your user could not be resolved'
+                }
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isWip
+                    ? dark
+                      ? 'bg-blue-500/30 text-blue-200'
+                      : 'bg-white text-blue-700 shadow-sm'
+                    : dark
+                      ? 'text-white/60 hover:text-white'
+                      : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <ClipboardList className="w-3.5 h-3.5" />
+                My WIP
+                {isWip && !loading && (
+                  <span className="px-1.5 rounded-full text-[11px] font-semibold bg-blue-500 text-white">
+                    {formatNumber(totalCount)}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setShowFilters(true)}
+              aria-haspopup="dialog"
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${t.btn}`}
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              Filters
+              {chips.length > 0 && (
+                <span className="px-1.5 rounded-full text-xs bg-red-500 text-white">
+                  {chips.length}
                 </span>
-              </div>
+              )}
+            </button>
 
-              <div className="flex h-3 rounded-full overflow-hidden mb-4">
-                {priorityBreakdown.map((p) => (
-                  <div
-                    key={p.level}
-                    className={`${p.bar} transition-all`}
-                    style={{ width: `${p.pct}%` }}
-                    title={`${p.level}: ${p.count}`}
-                  />
-                ))}
-              </div>
+            {anyActive && (
+              <button
+                onClick={clearAll}
+                className={`px-2 py-2 text-sm font-medium ${dark ? 'text-white/60 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}
+              >
+                Clear all
+              </button>
+            )}
+          </div>
 
-              <div className="space-y-2">
-                {priorityBreakdown.map((p) => (
-                  <div
-                    key={p.level}
-                    className="flex items-center justify-between text-sm"
+          {chips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+              {chips.map((c) => (
+                <span
+                  key={c.key}
+                  className={`inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full border text-xs font-medium ${
+                    dark
+                      ? 'bg-white/10 border-white/20 text-white/80'
+                      : 'bg-gray-100 border-gray-200 text-gray-700'
+                  }`}
+                >
+                  {c.label}
+                  <button
+                    onClick={() => patchFilters(c.clear)}
+                    aria-label={`Remove filter ${c.label}`}
+                    className={`p-0.5 rounded-full ${dark ? 'hover:bg-white/20' : 'hover:bg-gray-200'}`}
                   >
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${p.bar}`} />
-                      <span
-                        className={
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-600'
-                        }
-                      >
-                        {p.level}
-                      </span>
-                    </div>
-                    <span className={`font-medium ${p.text}`}>
-                      {p.count} · {Math.round(p.pct)}%
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div
-              className={`p-6 rounded-2xl border backdrop-blur-xl ${
-                theme === 'dark'
-                  ? 'bg-white/5 border-white/10'
-                  : 'bg-white border-gray-200'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <BarChart3
-                  className={`w-4 h-4 ${
-                    theme === 'dark' ? 'text-white/50' : 'text-gray-400'
-                  }`}
-                />
-                <h3
-                  className={`text-sm font-semibold ${
-                    theme === 'dark' ? 'text-white' : 'text-gray-900'
-                  }`}
-                >
-                  Top alert sources
-                </h3>
-                <span
-                  className={`text-xs ${
-                    theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                  }`}
-                >
-                  · this page
+                    <X className="w-3 h-3" />
+                  </button>
                 </span>
-              </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-              <div className="space-y-3">
-                {serviceTypeBreakdown.map((s) => (
-                  <div key={s.type}>
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span
-                        className={
-                          theme === 'dark' ? 'text-white/70' : 'text-gray-600'
-                        }
-                      >
-                        {s.type}
-                      </span>
-                      <span
-                        className={
-                          theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                        }
-                      >
-                        {s.count}
-                      </span>
+        {/* Insights (collapsed by default — they only describe the current page) */}
+        {alerts.length > 0 && (
+          <div className={`rounded-xl border ${t.panel}`}>
+            <button
+              onClick={() => setShowInsights((v) => !v)}
+              aria-expanded={showInsights}
+              className={`w-full flex items-center justify-between px-4 py-2 text-sm ${t.muted}`}
+            >
+              <span className="flex items-center gap-2">
+                <PieChart className="w-4 h-4" />
+                Page insights
+                <span className={`text-xs ${t.faint}`}>
+                  · priority mix &amp; top sources on this page
+                </span>
+              </span>
+              <ChevronDown
+                className={`w-4 h-4 transition-transform ${showInsights ? 'rotate-180' : ''}`}
+              />
+            </button>
+            <AnimatePresence initial={false}>
+              {showInsights && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div
+                    className={`grid grid-cols-1 lg:grid-cols-2 gap-6 px-4 pb-4 pt-2 border-t ${t.line}`}
+                  >
+                    <div>
+                      <div className="flex h-2.5 rounded-full overflow-hidden mb-3">
+                        {priorityBreakdown.map((p) => (
+                          <div
+                            key={p.level}
+                            className={p.bar}
+                            style={{ width: `${p.pct}%` }}
+                            title={`${p.level}: ${p.count}`}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-x-5 gap-y-1">
+                        {priorityBreakdown.map((p) => (
+                          <div
+                            key={p.level}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <span className={`w-2 h-2 rounded-full ${p.bar}`} />
+                            <span className={t.muted}>{p.level}</span>
+                            <span className={`font-medium ${p.text}`}>
+                              {p.count} · {Math.round(p.pct)}%
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div
-                      className={`h-1.5 rounded-full overflow-hidden ${
-                        theme === 'dark' ? 'bg-white/10' : 'bg-gray-100'
-                      }`}
-                    >
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400"
-                        style={{ width: `${s.pct}%` }}
-                      />
+                    <div className="space-y-2">
+                      {serviceTypeBreakdown.map((s) => (
+                        <div key={s.type}>
+                          <div className="flex items-center justify-between text-xs mb-0.5">
+                            <span className={t.muted}>{s.type}</span>
+                            <span className={t.faint}>{s.count}</span>
+                          </div>
+                          <div
+                            className={`h-1.5 rounded-full overflow-hidden ${dark ? 'bg-white/10' : 'bg-gray-100'}`}
+                          >
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400"
+                              style={{ width: `${s.pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
-        {/* Filters Panel */}
-        <AnimatePresence>
-          {showFilters && (
-            <AlertFiltersPanel
-              filters={filters}
-              filterOptions={filterOptions}
-              onFiltersChange={updateFilters}
-              onClose={() => setShowFilters(false)}
-            />
-          )}
-        </AnimatePresence>
-
-        {/* Alerts List */}
+        {/* Alerts list */}
         <div
-          className={`rounded-2xl border overflow-hidden ${
-            theme === 'dark'
-              ? 'bg-white/5 border-white/20'
-              : 'bg-white border-gray-200'
-          } backdrop-blur-xl shadow-2xl`}
+          className={`rounded-xl border overflow-hidden shadow-xl ${t.panel}`}
         >
           <div
-            className={`p-6 border-b ${
-              theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-            }`}
+            className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b ${t.line}`}
           >
-            <div className="flex justify-between items-center">
-              <h2
-                className={`text-xl font-bold ${
-                  theme === 'dark' ? 'text-white' : 'text-gray-900'
-                }`}
-              >
-                Open Alerts
+            <div className="flex items-center gap-3">
+              <h2 className={`text-base font-bold ${t.text}`}>
+                {isWip ? 'My Work in Progress' : 'Open Alerts'}
               </h2>
+              <span className={`text-xs ${t.muted}`}>
+                Showing {formatNumber(rangeFrom)}–{formatNumber(rangeTo)} of{' '}
+                {formatNumber(totalCount)}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              {isWip && (
+                <span
+                  className={`hidden sm:inline-flex items-center gap-1.5 text-xs ${t.muted}`}
+                >
+                  <Info className="w-3.5 h-3.5" />
+                  Items assigned to you, across all dates
+                </span>
+              )}
               <div
-                className={`text-sm ${
-                  theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                }`}
+                role="group"
+                aria-label="Row density"
+                className={`inline-flex rounded-lg p-0.5 ${dark ? 'bg-white/10' : 'bg-gray-100'}`}
               >
-                Showing{' '}
-                {alerts.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} to{' '}
-                {Math.min(currentPage * pageSize, totalCount)} of {totalCount}{' '}
-                alerts
+                {(['comfortable', 'compact'] as Density[]).map((d) => (
+                  <button
+                    key={d}
+                    aria-pressed={density === d}
+                    onClick={() => toggleDensity(d)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium capitalize transition-colors ${
+                      density === d
+                        ? dark
+                          ? 'bg-white/20 text-white'
+                          : 'bg-white text-gray-900 shadow-sm'
+                        : dark
+                          ? 'text-white/60 hover:text-white'
+                          : 'text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
           {loading ? (
-            <div className="p-6 space-y-3">
-              {Array.from({ length: 6 }).map((_, i) => (
+            <div className="p-4 space-y-2">
+              {Array.from({ length: compact ? 10 : 6 }).map((_, i) => (
                 <div
                   key={i}
-                  className={`h-16 rounded-xl animate-pulse ${
-                    theme === 'dark' ? 'bg-white/5' : 'bg-gray-100'
-                  }`}
+                  className={`${compact ? 'h-10' : 'h-14'} rounded-lg animate-pulse ${dark ? 'bg-white/5' : 'bg-gray-100'}`}
                   style={{ animationDelay: `${i * 60}ms` }}
                 />
               ))}
@@ -678,87 +1051,66 @@ const AlertsManagement: React.FC = () => {
           ) : error ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
-                <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-                <p
-                  className={`text-lg font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}
-                >
+                <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-3" />
+                <p className={`text-lg font-medium ${t.text}`}>
                   Failed to load alerts
                 </p>
-                <p
-                  className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'}`}
+                <p className={`text-sm mb-3 ${t.muted}`}>{error}</p>
+                <button
+                  onClick={refreshAlerts}
+                  className="px-4 py-1.5 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white"
                 >
-                  {error}
-                </p>
+                  Retry
+                </button>
               </div>
             </div>
           ) : alerts.length === 0 ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
-                <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-4" />
-                <p
-                  className={`text-lg font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}
-                >
-                  No alerts found
+                <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-3" />
+                <p className={`text-lg font-medium ${t.text}`}>
+                  {isWip ? 'Your queue is clear' : 'No alerts found'}
                 </p>
-                <p
-                  className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'}`}
-                >
-                  All alerts have been processed or no alerts match your filters
+                <p className={`text-sm mb-3 ${t.muted}`}>
+                  {isWip
+                    ? 'You have no work-in-progress alerts.'
+                    : 'All alerts have been processed or no alerts match your filters'}
                 </p>
+                {isWip && (
+                  <button
+                    onClick={() => setView(false)}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium ${t.btn}`}
+                  >
+                    View all alerts
+                  </button>
+                )}
               </div>
             </div>
           ) : (
             <>
               {/* Desktop table */}
-              <div className="overflow-x-auto hidden md:block">
+              <div className="overflow-auto hidden md:block max-h-[calc(100vh-340px)] min-h-[300px]">
                 <table className="w-full">
                   <thead
-                    className={`border-b sticky top-0 z-10 ${
-                      theme === 'dark'
-                        ? 'border-white/20 bg-[#0f1424]'
-                        : 'border-gray-200 bg-gray-50'
+                    className={`sticky top-0 z-10 border-b backdrop-blur-sm ${
+                      dark
+                        ? 'border-white/20 bg-slate-900/95'
+                        : 'border-gray-200 bg-gray-50/95'
                     }`}
                   >
                     <tr>
+                      {['Risk', 'Alert', 'Customer', 'Rule', 'Date'].map(
+                        (h) => (
+                          <th
+                            key={h}
+                            className={`px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap ${dark ? 'text-white/70' : 'text-gray-500'}`}
+                          >
+                            {h}
+                          </th>
+                        )
+                      )}
                       <th
-                        className={`px-6 py-4 text-left font-semibold ${
-                          theme === 'dark' ? 'text-white' : 'text-gray-900'
-                        }`}
-                      >
-                        Alert Details
-                      </th>
-                      <th
-                        className={`px-6 py-4 text-left font-semibold ${
-                          theme === 'dark' ? 'text-white' : 'text-gray-900'
-                        }`}
-                      >
-                        Customer
-                      </th>
-                      <th
-                        className={`px-6 py-4 text-left font-semibold ${
-                          theme === 'dark' ? 'text-white' : 'text-gray-900'
-                        }`}
-                      >
-                        Rule
-                      </th>
-                      <th
-                        className={`px-6 py-4 text-left font-semibold ${
-                          theme === 'dark' ? 'text-white' : 'text-gray-900'
-                        }`}
-                      >
-                        Risk Level
-                      </th>
-                      <th
-                        className={`px-6 py-4 text-left font-semibold ${
-                          theme === 'dark' ? 'text-white' : 'text-gray-900'
-                        }`}
-                      >
-                        Date
-                      </th>
-                      <th
-                        className={`px-6 py-4 text-right font-semibold ${
-                          theme === 'dark' ? 'text-white' : 'text-gray-900'
-                        }`}
+                        className={`px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wide ${dark ? 'text-white/70' : 'text-gray-500'}`}
                       >
                         Actions
                       </th>
@@ -766,185 +1118,196 @@ const AlertsManagement: React.FC = () => {
                   </thead>
                   <tbody>
                     {alerts.map((alert, index) => {
-                      const riskBadge = getRiskBadge(alert.rule_priority);
-                      const RiskIcon = riskBadge.icon;
+                      const risk = getRiskBadge(alert.rule_priority, dark);
+                      const RiskIcon = risk.icon;
+                      const isSelected =
+                        showDetailsModal && selectedAlertId === alert.alert_id;
                       return (
-                        <motion.tr
+                        <tr
                           key={alert.alert_id}
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: Math.min(index, 10) * 0.04 }}
                           className={`border-b transition-colors ${
-                            theme === 'dark'
-                              ? `border-white/10 hover:bg-white/5 ${
-                                  index % 2 === 1 ? 'bg-white/[0.02]' : ''
-                                }`
-                              : `border-gray-100 hover:bg-gray-50 ${
-                                  index % 2 === 1 ? 'bg-gray-50/50' : ''
-                                }`
+                            dark
+                              ? 'border-white/10 hover:bg-white/5'
+                              : 'border-gray-100 hover:bg-gray-50'
+                          } ${
+                            isSelected
+                              ? dark
+                                ? 'bg-white/10'
+                                : 'bg-blue-50/60'
+                              : index % 2 === 1
+                                ? dark
+                                  ? 'bg-white/[0.02]'
+                                  : 'bg-gray-50/50'
+                                : ''
                           }`}
                         >
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                              <div
-                                className={`p-2 rounded-lg ${
-                                  theme === 'dark'
-                                    ? 'bg-white/10'
-                                    : 'bg-gray-100'
-                                }`}
-                              >
-                                {getServiceTypeIcon(alert.service_type)}
-                              </div>
-                              <div>
-                                <div
-                                  className={`font-medium ${
-                                    theme === 'dark'
-                                      ? 'text-white'
-                                      : 'text-gray-900'
-                                  }`}
-                                >
-                                  {alert.service_type}
-                                </div>
-                                <div
-                                  className={`text-sm ${
-                                    theme === 'dark'
-                                      ? 'text-white/60'
-                                      : 'text-gray-600'
-                                  }`}
-                                >
-                                  ID: {alert.alert_id}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                              <div
-                                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
-                                  theme === 'dark'
-                                    ? 'bg-gradient-to-br from-blue-500/30 to-purple-500/30 text-blue-200'
-                                    : 'bg-gradient-to-br from-blue-100 to-purple-100 text-blue-700'
-                                }`}
-                              >
-                                {getInitials(alert.cust_name)}
-                              </div>
-                              <div>
-                                <div
-                                  className={`font-medium ${
-                                    theme === 'dark'
-                                      ? 'text-white'
-                                      : 'text-gray-900'
-                                  }`}
-                                >
-                                  {alert.cust_name}
-                                </div>
-                                <div
-                                  className={`text-sm ${
-                                    theme === 'dark'
-                                      ? 'text-white/60'
-                                      : 'text-gray-600'
-                                  }`}
-                                >
-                                  Code: {alert.cust_code}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-
-                          <td className="px-6 py-4">
-                            <div>
-                              <div
-                                className={`font-medium ${
-                                  theme === 'dark'
-                                    ? 'text-white'
-                                    : 'text-gray-900'
-                                }`}
-                              >
-                                {alert.rule_id}
-                              </div>
-                              <div
-                                title={alert.rule_desc}
-                                className={`text-sm ${
-                                  theme === 'dark'
-                                    ? 'text-white/60'
-                                    : 'text-gray-600'
-                                }`}
-                              >
-                                {alert.rule_desc.length > 50
-                                  ? `${alert.rule_desc.slice(0, 50)}...`
-                                  : alert.rule_desc}
-                              </div>
-                            </div>
-                          </td>
-
-                          <td className="px-6 py-4">
+                          <td className={`px-4 ${pad}`}>
                             <span
-                              className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full border ${riskBadge.color}`}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-bold rounded-full border ${risk.color}`}
                             >
                               <RiskIcon className="w-3 h-3" />
-                              {riskBadge.level}
+                              {risk.level}
                             </span>
                           </td>
 
-                          <td className="px-6 py-4">
-                            <div
-                              title={new Date(
-                                alert.time_stamp
-                              ).toLocaleString()}
-                              className={`text-sm ${
-                                theme === 'dark'
-                                  ? 'text-white/80'
-                                  : 'text-gray-700'
-                              }`}
-                            >
-                              {formatRelativeDate(alert.time_stamp)}
+                          <td className={`px-4 ${pad}`}>
+                            <div className="flex items-center gap-2.5">
+                              <div
+                                className={`p-1.5 rounded-lg shrink-0 ${dark ? 'bg-white/10' : 'bg-gray-100'} ${t.body}`}
+                              >
+                                {getServiceTypeIcon(alert.service_type)}
+                              </div>
+                              <div className="min-w-0">
+                                <div
+                                  className={`text-sm font-medium ${t.text}`}
+                                >
+                                  {alert.service_type}
+                                </div>
+                                {!compact && (
+                                  <div
+                                    className={`text-xs font-mono ${t.muted}`}
+                                  >
+                                    ID: {alert.alert_id}
+                                  </div>
+                                )}
+                              </div>
+                              {compact && (
+                                <span
+                                  className={`text-xs font-mono ${t.faint}`}
+                                >
+                                  {alert.alert_id}
+                                </span>
+                              )}
                             </div>
                           </td>
 
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end gap-2">
+                          <td className={`px-4 ${pad}`}>
+                            <div className="flex items-center gap-2.5">
+                              {!compact && (
+                                <div
+                                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${
+                                    dark
+                                      ? 'bg-gradient-to-br from-blue-500/30 to-purple-500/30 text-blue-200'
+                                      : 'bg-gradient-to-br from-blue-100 to-purple-100 text-blue-700'
+                                  }`}
+                                >
+                                  {getInitials(alert.cust_name)}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <div
+                                  className={`text-sm font-medium truncate max-w-[200px] ${t.text}`}
+                                  title={alert.cust_name}
+                                >
+                                  {alert.cust_name}
+                                </div>
+                                {!compact && (
+                                  <div className={`text-xs ${t.muted}`}>
+                                    Code: {alert.cust_code}
+                                  </div>
+                                )}
+                              </div>
+                              {compact && (
+                                <span className={`text-xs ${t.faint}`}>
+                                  {alert.cust_code}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className={`px-4 ${pad} max-w-[300px]`}>
+                            {compact ? (
+                              <div className="flex items-baseline gap-2 min-w-0">
+                                <span
+                                  className={`text-sm font-medium shrink-0 ${t.text}`}
+                                >
+                                  {alert.rule_id}
+                                </span>
+                                <span
+                                  className={`text-sm truncate ${t.muted}`}
+                                  title={alert.rule_desc}
+                                >
+                                  {alert.rule_desc}
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                <div
+                                  className={`text-sm font-medium ${t.text}`}
+                                >
+                                  {alert.rule_id}
+                                </div>
+                                <div
+                                  title={alert.rule_desc}
+                                  className={`text-xs ${t.muted}`}
+                                >
+                                  {truncate(alert.rule_desc, 50)}
+                                </div>
+                              </>
+                            )}
+                          </td>
+
+                          <td className={`px-4 ${pad} whitespace-nowrap`}>
+                            <div
+                              title={
+                                isValid(alert.time_stamp)
+                                  ? new Date(alert.time_stamp).toLocaleString()
+                                  : ''
+                              }
+                              className={`text-sm ${t.body}`}
+                            >
+                              {formatRelativeDate(alert.time_stamp)}{' '}
+                              {/* <span className={t.faint}>
+                                {formatClock(alert.time_stamp)}
+                              </span> */}
+                            </div>
+                          </td>
+
+                          <td className={`px-4 ${pad} text-right`}>
+                            <div className="flex items-center justify-end gap-1.5">
                               <PermissionGuard
                                 menuId={ALERTS_MANAGEMENT_MENU_ID}
                                 action="view"
                               >
-                                <motion.button
-                                  whileHover={{ scale: 1.05 }}
-                                  whileTap={{ scale: 0.95 }}
+                                <button
                                   onClick={() => handleViewDetails(alert)}
-                                  className={`p-2 rounded-lg transition-colors ${
-                                    theme === 'dark'
+                                  disabled={openingId !== null}
+                                  className={`p-1.5 rounded-lg transition-colors disabled:opacity-60 ${
+                                    dark
                                       ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
                                       : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
                                   }`}
                                   title="View Details"
+                                  aria-label={`View details for alert ${alert.alert_id}`}
                                 >
-                                  <Eye className="w-4 h-4" />
-                                </motion.button>
+                                  {openingId === alert.alert_id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Eye className="w-4 h-4" />
+                                  )}
+                                </button>
                               </PermissionGuard>
-
                               <PermissionGuard
                                 menuId={ALERTS_MANAGEMENT_MENU_ID}
                                 action="edit"
                                 fallback={null}
                               >
-                                <motion.button
-                                  whileHover={{ scale: 1.05 }}
-                                  whileTap={{ scale: 0.95 }}
+                                <button
                                   onClick={() => handleDisposeAlert(alert)}
-                                  className={`p-2 rounded-lg transition-colors ${
-                                    theme === 'dark'
+                                  className={`p-1.5 rounded-lg transition-colors ${
+                                    dark
                                       ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300'
                                       : 'bg-green-100 hover:bg-green-200 text-green-700'
                                   }`}
                                   title="Dispose Alert"
+                                  aria-label={`Dispose alert ${alert.alert_id}`}
                                 >
                                   <CheckCircle className="w-4 h-4" />
-                                </motion.button>
+                                </button>
                               </PermissionGuard>
                             </div>
                           </td>
-                        </motion.tr>
+                        </tr>
                       );
                     })}
                   </tbody>
@@ -952,293 +1315,213 @@ const AlertsManagement: React.FC = () => {
               </div>
 
               {/* Mobile card list */}
-              <div className="md:hidden divide-y divide-white/10">
-                {alerts.map((alert, index) => {
-                  const riskBadge = getRiskBadge(alert.rule_priority);
-                  const RiskIcon = riskBadge.icon;
+              <div
+                className={`md:hidden divide-y ${dark ? 'divide-white/10' : 'divide-gray-100'}`}
+              >
+                {alerts.map((alert) => {
+                  const risk = getRiskBadge(alert.rule_priority, dark);
+                  const RiskIcon = risk.icon;
                   return (
-                    <motion.div
-                      key={alert.alert_id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: Math.min(index, 10) * 0.04 }}
-                      className="p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3 mb-3">
+                    <div key={alert.alert_id} className="p-4">
+                      <div className="flex items-start justify-between gap-3 mb-2">
                         <div className="flex items-center gap-3 min-w-0">
                           <div
-                            className={`p-2 rounded-lg flex-shrink-0 ${
-                              theme === 'dark' ? 'bg-white/10' : 'bg-gray-100'
-                            }`}
+                            className={`p-2 rounded-lg shrink-0 ${dark ? 'bg-white/10' : 'bg-gray-100'} ${t.body}`}
                           >
                             {getServiceTypeIcon(alert.service_type)}
                           </div>
                           <div className="min-w-0">
-                            <div
-                              className={`font-medium truncate ${
-                                theme === 'dark'
-                                  ? 'text-white'
-                                  : 'text-gray-900'
-                              }`}
-                            >
+                            <div className={`font-medium truncate ${t.text}`}>
                               {alert.service_type}
                             </div>
-                            <div
-                              className={`text-xs ${
-                                theme === 'dark'
-                                  ? 'text-white/50'
-                                  : 'text-gray-500'
-                              }`}
-                            >
+                            <div className={`text-xs ${t.faint}`}>
                               ID: {alert.alert_id}
                             </div>
                           </div>
                         </div>
                         <span
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-full border flex-shrink-0 ${riskBadge.color}`}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-full border shrink-0 ${risk.color}`}
                         >
                           <RiskIcon className="w-3 h-3" />
-                          {riskBadge.level}
+                          {risk.level}
                         </span>
                       </div>
-
-                      <div className="flex items-center gap-3 mb-3">
-                        <div
-                          className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-semibold flex-shrink-0 ${
-                            theme === 'dark'
-                              ? 'bg-gradient-to-br from-blue-500/30 to-purple-500/30 text-blue-200'
-                              : 'bg-gradient-to-br from-blue-100 to-purple-100 text-blue-700'
-                          }`}
-                        >
-                          {getInitials(alert.cust_name)}
-                        </div>
-                        <div
-                          className={`text-sm ${
-                            theme === 'dark' ? 'text-white/80' : 'text-gray-700'
-                          }`}
-                        >
-                          {alert.cust_name}{' '}
-                          <span
-                            className={
-                              theme === 'dark'
-                                ? 'text-white/40'
-                                : 'text-gray-400'
-                            }
-                          >
-                            · {alert.cust_code}
-                          </span>
-                        </div>
+                      <div className={`text-sm mb-1 ${t.body}`}>
+                        {alert.cust_name}{' '}
+                        <span className={t.faint}>· {alert.cust_code}</span>
                       </div>
-
-                      <div
-                        className={`text-xs mb-3 ${
-                          theme === 'dark' ? 'text-white/50' : 'text-gray-500'
-                        }`}
-                      >
+                      <div className={`text-xs mb-3 ${t.muted}`}>
                         <span className="font-medium">{alert.rule_id}</span> ·{' '}
-                        {alert.rule_desc.length > 60
-                          ? `${alert.rule_desc.slice(0, 60)}...`
-                          : alert.rule_desc}
+                        {truncate(alert.rule_desc, 60)}
                       </div>
-
                       <div className="flex items-center justify-between">
-                        <span
-                          className={`text-xs ${
-                            theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                          }`}
-                        >
-                          {formatRelativeDate(alert.time_stamp)}
+                        <span className={`text-xs ${t.faint}`}>
+                          <Clock className="inline w-3 h-3 mr-1" />
+                          {formatRelativeDate(alert.time_stamp)}{' '}
+                          {formatClock(alert.time_stamp)}
                         </span>
                         <div className="flex items-center gap-2">
                           <PermissionGuard
                             menuId={ALERTS_MANAGEMENT_MENU_ID}
                             action="view"
                           >
-                            <motion.button
-                              whileTap={{ scale: 0.95 }}
+                            <button
                               onClick={() => handleViewDetails(alert)}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                                theme === 'dark'
-                                  ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
-                                  : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                              disabled={openingId !== null}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-60 ${
+                                dark
+                                  ? 'bg-blue-500/20 text-blue-300'
+                                  : 'bg-blue-100 text-blue-700'
                               }`}
                             >
-                              <Eye className="w-3.5 h-3.5" />
+                              {openingId === alert.alert_id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Eye className="w-3.5 h-3.5" />
+                              )}
                               View
-                            </motion.button>
+                            </button>
                           </PermissionGuard>
                           <PermissionGuard
                             menuId={ALERTS_MANAGEMENT_MENU_ID}
                             action="edit"
                             fallback={null}
                           >
-                            <motion.button
-                              whileTap={{ scale: 0.95 }}
+                            <button
                               onClick={() => handleDisposeAlert(alert)}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                                theme === 'dark'
-                                  ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300'
-                                  : 'bg-green-100 hover:bg-green-200 text-green-700'
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${
+                                dark
+                                  ? 'bg-green-500/20 text-green-300'
+                                  : 'bg-green-100 text-green-700'
                               }`}
                             >
                               <CheckCircle className="w-3.5 h-3.5" />
                               Dispose
-                            </motion.button>
+                            </button>
                           </PermissionGuard>
                         </div>
                       </div>
-                    </motion.div>
+                    </div>
                   );
                 })}
               </div>
             </>
           )}
 
-          {/* Pagination */}
-          {totalPages > 1 && (
+          {/* Pagination — always shown when there are rows, so page size stays reachable */}
+          {!loading && !error && alerts.length > 0 && (
             <div
-              className={`flex flex-col sm:flex-row gap-3 justify-between sm:items-center px-6 py-4 border-t ${
-                theme === 'dark' ? 'border-white/20' : 'border-gray-200'
-              }`}
+              className={`flex flex-col sm:flex-row gap-3 justify-between sm:items-center px-4 py-2.5 border-t ${t.line}`}
             >
-              <div className="flex items-center gap-2">
-                <div
-                  className={`text-sm ${
-                    theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                  }`}
-                >
-                  Page {currentPage} of {totalPages}
+              <div className="flex items-center gap-3">
+                <div className={`text-sm ${t.muted}`}>
+                  Page {currentPage} of {Math.max(totalPages, 1)}
                 </div>
                 <select
                   value={pageSize}
                   onChange={(e) => setPageSize(Number(e.target.value))}
-                  className={`ml-4 px-2 py-1 rounded-lg text-sm ${
-                    theme === 'dark'
-                      ? 'bg-white/10 text-white border border-white/20'
-                      : 'bg-white text-gray-700 border border-gray-300'
-                  }`}
+                  aria-label="Rows per page"
+                  className={`px-2 py-1 rounded-lg text-sm ${t.input}`}
                 >
-                  <option value={10}>10 per page</option>
-                  <option value={20}>20 per page</option>
-                  <option value={50}>50 per page</option>
-                  <option value={100}>100 per page</option>
+                  {PAGE_SIZES.map((n) => (
+                    <option key={n} value={n}>
+                      {n} per page
+                    </option>
+                  ))}
                 </select>
               </div>
-              <div className="flex gap-2">
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+              <div className="flex items-center gap-1.5">
+                <button
                   onClick={() => setPage(currentPage - 1)}
                   disabled={!hasPrev}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                    !hasPrev
-                      ? 'opacity-50 cursor-not-allowed'
-                      : theme === 'dark'
-                        ? 'bg-white/10 hover:bg-white/20 text-white'
-                        : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                  }`}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${t.btn}`}
                 >
                   <ChevronLeft className="w-4 h-4" />
                   <span className="hidden sm:inline">Previous</span>
-                </motion.button>
+                </button>
 
                 <div className="hidden md:flex gap-1">
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    // Show pages around current page
-                    let pageToShow;
-                    if (totalPages <= 5) {
-                      pageToShow = i + 1;
-                    } else if (currentPage <= 3) {
-                      pageToShow = i + 1;
-                    } else if (currentPage >= totalPages - 2) {
-                      pageToShow = totalPages - 4 + i;
-                    } else {
-                      pageToShow = currentPage - 2 + i;
-                    }
-
-                    return (
-                      <motion.button
-                        key={pageToShow}
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        onClick={() => setPage(pageToShow)}
-                        className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
-                          currentPage === pageToShow
-                            ? theme === 'dark'
-                              ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
-                              : 'bg-blue-100 text-blue-700 border border-blue-300'
-                            : theme === 'dark'
-                              ? 'bg-white/10 hover:bg-white/20 text-white'
-                              : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                        }`}
-                      >
-                        {pageToShow}
-                      </motion.button>
-                    );
-                  })}
-
+                  {pageNumbers.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setPage(p)}
+                      aria-current={currentPage === p ? 'page' : undefined}
+                      className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm transition-colors ${
+                        currentPage === p
+                          ? dark
+                            ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
+                            : 'bg-blue-100 text-blue-700 border border-blue-300'
+                          : dark
+                            ? 'bg-white/10 hover:bg-white/20 text-white'
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
                   {totalPages > 5 && currentPage < totalPages - 2 && (
                     <>
-                      <span
-                        className={
-                          theme === 'dark' ? 'text-white/50' : 'text-gray-500'
-                        }
-                      >
-                        ...
-                      </span>
-                      <motion.button
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
+                      <span className={`self-center ${t.faint}`}>...</span>
+                      <button
                         onClick={() => setPage(totalPages)}
                         className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm ${
-                          theme === 'dark'
+                          dark
                             ? 'bg-white/10 hover:bg-white/20 text-white'
                             : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                         }`}
                       >
                         {totalPages}
-                      </motion.button>
+                      </button>
                     </>
                   )}
                 </div>
 
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                <button
                   onClick={() => setPage(currentPage + 1)}
                   disabled={!hasNext}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                    !hasNext
-                      ? 'opacity-50 cursor-not-allowed'
-                      : theme === 'dark'
-                        ? 'bg-white/10 hover:bg-white/20 text-white'
-                        : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                  }`}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${t.btn}`}
                 >
                   <span className="hidden sm:inline">Next</span>
                   <ChevronRight className="w-4 h-4" />
-                </motion.button>
+                </button>
               </div>
             </div>
           )}
         </div>
-
-        {/* Modals */}
-        <AlertDetailsModal
-          isOpen={showDetailsModal}
-          onClose={() => setShowDetailsModal(false)}
-          alertDetails={selectedAlert}
-          alertId={selectedAlertId}
-          loading={loading}
-        />
-
-        <AlertDispositionModal
-          isOpen={showDispositionModal}
-          onClose={() => setShowDispositionModal(false)}
-          alert={selectedAlertForDisposition}
-          onDispose={disposeAlert}
-        />
       </div>
+
+      {/* Overlays — portaled to <body>. Filters (z-90) and the record modals
+          (z-100) can never be trapped under, or stack over, each other. */}
+      <Portal>
+        <AnimatePresence>
+          {showFilters && (
+            <FiltersDrawer dark={dark} onClose={() => setShowFilters(false)}>
+              <AlertFiltersPanel
+                filters={filters}
+                filterOptions={filterOptions}
+                onFiltersChange={updateFilters}
+                onClose={() => setShowFilters(false)}
+              />
+            </FiltersDrawer>
+          )}
+        </AnimatePresence>
+
+        <div className={`relative ${Z_MODALS}`}>
+          <AlertDetailsModal
+            isOpen={showDetailsModal}
+            onClose={() => setShowDetailsModal(false)}
+            alertDetails={selectedAlert}
+            alertId={selectedAlertId}
+            loading={openingId !== null}
+          />
+          <AlertDispositionModal
+            isOpen={showDispositionModal}
+            onClose={() => setShowDispositionModal(false)}
+            alert={selectedAlertForDisposition}
+            onDispose={disposeAlert}
+          />
+        </div>
+      </Portal>
     </PermissionGuard>
   );
 };

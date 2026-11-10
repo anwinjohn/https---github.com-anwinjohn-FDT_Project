@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useMemo,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShieldAlert,
@@ -12,7 +13,7 @@ import {
   User,
   Clock,
   Search,
-  Filter,
+  SlidersHorizontal,
   RefreshCw,
   Download,
   ChevronDown,
@@ -24,7 +25,6 @@ import {
   Check,
   Shield,
   Layers,
-  SlidersHorizontal,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
@@ -44,6 +44,7 @@ import {
   MessageSquare,
   ArrowLeftRight,
   History,
+  ClipboardList,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useMenuIds } from '../../hooks/useMenuIds';
@@ -81,10 +82,8 @@ interface AlertsResponse {
   data: FraudAlert[];
 }
 
-// ---- Alert detail (fetched per-row on click) ------------------------------
 // `llm_configs` has no fixed shape — it varies per rule, so it is always
-// rendered dynamically from whatever keys/values the API returns, never
-// hardcoded to a specific rule's parameters.
+// rendered dynamically from whatever keys/values the API returns.
 export interface AlertDetailInfo {
   alert_date?: string;
   created_user_full_name?: string;
@@ -147,9 +146,11 @@ type SortField =
   | 'status';
 type SortOrder = 'ASC' | 'DESC';
 type TriState = 'all' | 'true' | 'false';
+type ViewMode = 'all' | 'wip';
+type Density = 'comfortable' | 'compact';
 
 interface FilterState {
-  search: string;
+  view: ViewMode;
   status: string;
   priority: string;
   channel: string;
@@ -162,24 +163,101 @@ interface FilterState {
   toDate: string;
 }
 
-// NOTE: adjust to match your actual API route + menu registration key.
+type AdvancedFields = Pick<
+  FilterState,
+  | 'status'
+  | 'priority'
+  | 'channel'
+  | 'ruleId'
+  | 'location'
+  | 'username'
+  | 'closed'
+  | 'fraud'
+>;
+
+interface FilterOptionsResponse {
+  statuses: string[];
+  priorities: string[];
+  channels: string[];
+  rules: { id: string; description: string }[];
+}
+
+interface AlertListingProps {
+  /**
+   * Id of the signed-in user. Wire this from your auth context
+   * (e.g. `useAuth().user.id`). It is sent to the back-end with the WIP
+   * request; the back-end MUST still resolve the real user from the session
+   * token and treat this value as a hint only.
+   */
+  currentUserId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 const ALERTS_ENDPOINT = '/alerts-summary-master';
 const ALERT_DETAIL_ENDPOINT = (alertId: string) =>
-  `/alerts-summary-details?alert_id=${alertId}`;
-const MENU_KEY = 'alert_lists';
+  `/alerts-summary-details?alert_id=${encodeURIComponent(alertId)}`;
 const ALERTS_FILTERS_ENDPOINT = '/alerts-filters';
+// NEW endpoints (back-end work needed — see notes):
+const ALERTS_EXPORT_ENDPOINT = '/alerts-summary-export';
+const ALERTS_WIP_COUNT_ENDPOINT = '/alerts-wip-count';
+const MENU_KEY = 'alert_lists';
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
 const AUTO_REFRESH_MS = 30000;
+const DENSITY_STORAGE_KEY = 'alerts.listing.density';
 
 const SORT_FIELDS: { key: SortField; label: string }[] = [
-  { key: 'created_at', label: 'Created At' },
+  { key: 'created_at', label: 'Created' },
   { key: 'rule_priority', label: 'Priority' },
   { key: 'rule_id', label: 'Rule' },
   { key: 'branch_name', label: 'Branch' },
   { key: 'channel', label: 'Channel' },
   { key: 'status', label: 'Status' },
 ];
+
+const ADV_DEFAULT: AdvancedFields = {
+  status: '',
+  priority: '',
+  channel: '',
+  ruleId: '',
+  location: '',
+  username: '',
+  closed: 'all',
+  fraud: 'all',
+};
+
+// z-index ladder. Everything that floats above the page is rendered through a
+// portal into <body>, so none of it can be trapped under (or fight with) a
+// parent stacking context such as a blurred / transformed filter panel.
+const Z_POPOVER = 'z-30';
+const Z_DRAWER = 'z-[90]';
+const Z_MODAL = 'z-[100]';
+
+// ---------------------------------------------------------------------------
+// Design tokens (one place for the dark/light class pairs)
+// ---------------------------------------------------------------------------
+
+const tokens = (dark: boolean) => ({
+  text: dark ? 'text-white' : 'text-gray-900',
+  body: dark ? 'text-white/80' : 'text-gray-700',
+  muted: dark ? 'text-white/50' : 'text-gray-500',
+  faint: dark ? 'text-white/40' : 'text-gray-400',
+  line: dark ? 'border-white/10' : 'border-gray-100',
+  panel: dark ? 'bg-white/5 border-white/15' : 'bg-white border-gray-200',
+  sunken: dark ? 'bg-white/5 border-white/10' : 'bg-gray-50 border-gray-100',
+  surface: dark ? 'bg-slate-900 border-white/15' : 'bg-white border-gray-200',
+  hover: dark ? 'hover:bg-white/5' : 'hover:bg-gray-50',
+  input: dark
+    ? 'bg-white/10 border border-white/20 text-white placeholder-white/40'
+    : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-400',
+  btn: dark
+    ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
+    : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300',
+});
+type Tokens = ReturnType<typeof tokens>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -194,79 +272,140 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
-function toISODate(d: Date) {
-  return d.toISOString().slice(0, 10);
+// Re-render on an interval so relative times ("5m ago") don't go stale.
+function useTick(ms: number) {
+  const [, setN] = useState(0);
+  useEffect(() => {
+    const i = setInterval(() => setN((n) => n + 1), ms);
+    return () => clearInterval(i);
+  }, [ms]);
 }
-const TODAY = toISODate(new Date());
-const DEFAULT_FILTERS: FilterState = {
-  search: '',
-  status: '',
-  priority: '',
-  channel: '',
-  ruleId: '',
-  location: '',
-  username: '',
-  closed: 'all',
-  fraud: 'all',
-  fromDate: TODAY,
-  toDate: TODAY,
+
+// Shared body-scroll lock (counter based, so stacked/overlapping overlays can't
+// restore `overflow` too early or leave the page permanently locked).
+let scrollLockCount = 0;
+let scrollLockPrev = '';
+function useBodyScrollLock() {
+  useEffect(() => {
+    if (scrollLockCount === 0) {
+      scrollLockPrev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+    scrollLockCount++;
+    return () => {
+      scrollLockCount--;
+      if (scrollLockCount === 0) document.body.style.overflow = scrollLockPrev;
+    };
+  }, []);
+}
+
+// Dialog behaviour: Esc closes, focus moves in, Tab is trapped, focus returns
+// to the element that opened it.
+function useDialog(onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    ref.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeRef.current();
+        return;
+      }
+      if (e.key === 'Tab' && ref.current) {
+        const focusables = ref.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      previouslyFocused?.focus?.();
+    };
+  }, []);
+
+  return ref;
+}
+
+const Portal: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+  typeof document === 'undefined'
+    ? null
+    : createPortal(children, document.body);
+
+// Local-time ISO date (YYYY-MM-DD). `toISOString()` is UTC and returns
+// "yesterday" for the first hours of the day in UTC+ time zones (e.g. Dubai).
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const toLocalISODate = (d: Date) =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const todayISO = () => toLocalISODate(new Date());
+const daysAgoISO = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return toLocalISODate(d);
 };
 
 const DATE_PRESETS: { label: string; get: () => [string, string] }[] = [
-  { label: 'Today', get: () => [TODAY, TODAY] },
-  {
-    label: 'Yesterday',
-    get: () => {
-      const d = new Date();
-      d.setDate(d.getDate() - 1);
-      const s = toISODate(d);
-      return [s, s];
-    },
-  },
-  {
-    label: 'Last 7 days',
-    get: () => {
-      const start = new Date();
-      start.setDate(start.getDate() - 6);
-      return [toISODate(start), TODAY];
-    },
-  },
-  {
-    label: 'Last 30 days',
-    get: () => {
-      const start = new Date();
-      start.setDate(start.getDate() - 29);
-      return [toISODate(start), TODAY];
-    },
-  },
+  { label: 'Today', get: () => [todayISO(), todayISO()] },
+  { label: 'Yesterday', get: () => [daysAgoISO(1), daysAgoISO(1)] },
+  { label: 'Last 7 days', get: () => [daysAgoISO(6), todayISO()] },
+  { label: 'Last 30 days', get: () => [daysAgoISO(29), todayISO()] },
   {
     label: 'This month',
     get: () => {
       const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), 1);
-      return [toISODate(start), TODAY];
+      return [
+        toLocalISODate(new Date(now.getFullYear(), now.getMonth(), 1)),
+        todayISO(),
+      ];
     },
   },
 ];
 
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, {
+const defaultFilters = (): FilterState => ({
+  view: 'all',
+  ...ADV_DEFAULT,
+  fromDate: todayISO(),
+  toDate: todayISO(),
+});
+
+const isValidDate = (iso?: string) =>
+  !!iso && !Number.isNaN(new Date(iso).getTime());
+
+function formatDate(iso?: string) {
+  if (!isValidDate(iso)) return '—';
+  return new Date(iso as string).toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
   });
 }
-function formatTime(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleTimeString(undefined, {
+function formatTime(iso?: string) {
+  if (!isValidDate(iso)) return '';
+  return new Date(iso as string).toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
   });
 }
-function timeAgo(iso: string) {
-  const diffSec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+function timeAgo(iso?: string) {
+  if (!isValidDate(iso)) return '';
+  const diffSec = Math.floor(
+    (Date.now() - new Date(iso as string).getTime()) / 1000
+  );
   if (diffSec < 5) return 'just now';
   if (diffSec < 60) return `${diffSec}s ago`;
   const min = Math.floor(diffSec / 60);
@@ -278,7 +417,7 @@ function timeAgo(iso: string) {
   return `${Math.floor(day / 30)}mo ago`;
 }
 
-function downloadBlob(content: string, filename: string, type: string) {
+function downloadBlob(content: BlobPart, filename: string, type: string) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -289,6 +428,14 @@ function downloadBlob(content: string, filename: string, type: string) {
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// CSV cell with formula-injection protection (a cell starting with = + - @
+// would execute as a formula when the file is opened in Excel).
+const csvCell = (v: unknown) => {
+  let s = String(v ?? '');
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+};
 
 function exportCSV(rows: FraudAlert[]) {
   const headers = [
@@ -306,7 +453,6 @@ function exportCSV(rows: FraudAlert[]) {
     'Created At',
     'Comments',
   ];
-  const escape = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const lines = [
     headers.join(','),
     ...rows.map((r) =>
@@ -325,12 +471,13 @@ function exportCSV(rows: FraudAlert[]) {
         r.created_at_timestamp,
         r.comments,
       ]
-        .map(escape)
+        .map(csvCell)
         .join(',')
     ),
   ];
+  // BOM so Excel renders non-Latin (e.g. Arabic) names correctly.
   downloadBlob(
-    lines.join('\n'),
+    `\uFEFF${lines.join('\n')}`,
     `fraud-alerts-${Date.now()}.csv`,
     'text/csv;charset=utf-8;'
   );
@@ -345,21 +492,20 @@ function exportJSON(rows: FraudAlert[]) {
 }
 
 // Splits the pipe-delimited comment string the API returns into a short
-// summary, a handful of supporting detail fragments, and the rule "LOGIC"
-// clause (if present), so the UI can present it as a readable narrative
-// rather than one long run-on string.
-function parseComment(comment: string): {
+// summary, supporting detail fragments, and the rule "LOGIC" clause.
+function parseComment(comment: string | null | undefined): {
   summary: string;
   details: string[];
   logic: string | null;
 } {
-  const segments = comment
+  const raw = comment ?? '';
+  const segments = raw
     .split('|')
     .map((s) => s.trim())
     .filter(Boolean);
   const logicSeg = segments.find((s) => /^LOGIC:/i.test(s));
   const rest = segments.filter((s) => s !== logicSeg);
-  const summary = rest[0] ?? comment;
+  const summary = rest[0] ?? raw;
   const details = rest.slice(1);
   const logic = logicSeg
     ? logicSeg.replace(/^LOGIC:\s*/i, '').replace(/\*\*/g, '')
@@ -401,68 +547,6 @@ function priorityDot(priority: string) {
   }
 }
 
-function formatAmount(amount: number | undefined, currency?: string) {
-  if (amount === undefined || amount === null || Number.isNaN(amount))
-    return '—';
-  const formatted = amount.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return currency ? `${formatted} ${currency}` : formatted;
-}
-
-// Turns a snake_case / camelCase key into a readable label, e.g.
-// "daily_threshold_count" -> "Daily Threshold Count".
-function humanizeKey(key: string) {
-  return key
-    .replace(/_/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// `llm_configs` has no fixed schema across rules, so every value is
-// rendered generically rather than assuming a particular type per key.
-function formatDynamicValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—';
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (typeof value === 'number') return value.toLocaleString();
-  if (Array.isArray(value))
-    return value.map((v) => formatDynamicValue(v)).join(', ');
-  if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
-}
-
-// History rows vary a lot by event type (disposition, escalation, follow-up,
-// system actions, etc.), so nothing beyond the compact row header (date,
-// action, risk, actioned-by) is assumed to always exist. Everything else in
-// the entry is surfaced dynamically: long free-text fields render as
-// paragraphs, short fields render as a compact label/value grid.
-const HISTORY_CORE_KEYS = new Set([
-  'id',
-  'created_at',
-  'action_type',
-  'disposition_type',
-  'risk_category',
-  'actioned_by',
-]);
-
-function splitHistoryFields(entry: AlertHistoryEntry) {
-  const paragraphs: { label: string; text: string }[] = [];
-  const grid: { label: string; value: string }[] = [];
-
-  Object.entries(entry).forEach(([key, value]) => {
-    if (HISTORY_CORE_KEYS.has(key)) return;
-    if (value === null || value === undefined || value === '') return;
-    if (typeof value === 'string' && value.length > 60) {
-      paragraphs.push({ label: humanizeKey(key), text: value });
-    } else {
-      grid.push({ label: humanizeKey(key), value: formatDynamicValue(value) });
-    }
-  });
-
-  return { paragraphs, grid };
-}
-
 function statusStyles(status: string, dark: boolean) {
   const s = (status || '').toUpperCase();
   if (s.includes('CLOS'))
@@ -486,194 +570,643 @@ function statusStyles(status: string, dark: boolean) {
     : 'bg-gray-100 text-gray-700 border-gray-300';
 }
 
+function formatAmount(amount: number | undefined, currency?: string) {
+  if (amount === undefined || amount === null || Number.isNaN(amount))
+    return '—';
+  const formatted = amount.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return currency ? `${formatted} ${currency}` : formatted;
+}
+
+// "daily_threshold_count" -> "Daily Threshold Count"
+function humanizeKey(key: string) {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatDynamicValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return value.toLocaleString();
+  if (Array.isArray(value))
+    return value.map((v) => formatDynamicValue(v)).join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+// History rows vary a lot by event type, so only the compact row header is
+// assumed; everything else is surfaced dynamically (long text -> paragraphs,
+// short values -> label/value grid).
+const HISTORY_CORE_KEYS = new Set([
+  'id',
+  'created_at',
+  'action_type',
+  'disposition_type',
+  'risk_category',
+  'actioned_by',
+]);
+
+function splitHistoryFields(entry: AlertHistoryEntry) {
+  const paragraphs: { label: string; text: string }[] = [];
+  const grid: { label: string; value: string }[] = [];
+  Object.entries(entry).forEach(([key, value]) => {
+    if (HISTORY_CORE_KEYS.has(key)) return;
+    if (value === null || value === undefined || value === '') return;
+    if (typeof value === 'string' && value.length > 60) {
+      paragraphs.push({ label: humanizeKey(key), text: value });
+    } else {
+      grid.push({ label: humanizeKey(key), value: formatDynamicValue(value) });
+    }
+  });
+  return { paragraphs, grid };
+}
+
+// Single place that turns UI state into API query params (used by the list
+// fetch AND the server-side export, so they can never drift apart).
+function buildFilterParams(
+  f: FilterState,
+  search: string,
+  userId?: string
+): Record<string, string | number | boolean> {
+  const p: Record<string, string | number | boolean> = {};
+  if (search) p.search = search;
+  if (f.status) p.status = f.status;
+  if (f.priority) p.priority = f.priority;
+  if (f.channel) p.channel = f.channel;
+  if (f.ruleId) p.rule_id = f.ruleId;
+  if (f.location) p.location = f.location;
+  if (f.username) p.username = f.username;
+  if (f.closed !== 'all') p.is_closed = f.closed === 'true';
+  if (f.fraud !== 'all') p.is_fraud = f.fraud === 'true';
+
+  if (f.view === 'wip') {
+    // WIP is the user's backlog regardless of when the alert was raised, so the
+    // date range is deliberately NOT sent — otherwise the default "Today" range
+    // would hide older items that are still in progress.
+    p.wip = true;
+    if (userId) p.user_id = userId;
+  } else {
+    if (f.fromDate) p.fromDate = f.fromDate;
+    if (f.toDate) p.toDate = f.toDate;
+  }
+  return p;
+}
+
 // ---------------------------------------------------------------------------
-// Date range field — click-anywhere calendar + quick presets
+// Small shared UI pieces
+// ---------------------------------------------------------------------------
+
+const Field: React.FC<{
+  label: string;
+  t: Tokens;
+  children: React.ReactNode;
+}> = ({ label, t, children }) => (
+  <div>
+    <div
+      className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${t.faint}`}
+    >
+      {label}
+    </div>
+    {children}
+  </div>
+);
+
+const Skeleton: React.FC<{ rows: number; h: string; dark: boolean }> = ({
+  rows,
+  h,
+  dark,
+}) => (
+  <div className="space-y-2">
+    {Array.from({ length: rows }).map((_, i) => (
+      <div
+        key={i}
+        className={`${h} rounded-lg animate-pulse ${dark ? 'bg-white/5' : 'bg-gray-100'}`}
+        style={{ animationDelay: `${i * 60}ms` }}
+      />
+    ))}
+  </div>
+);
+
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  dark,
+  ariaLabel,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+  dark: boolean;
+  ariaLabel: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={`flex rounded-lg p-0.5 ${dark ? 'bg-white/10' : 'bg-gray-100'}`}
+    >
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          aria-pressed={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={`flex-1 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
+            value === o.value
+              ? dark
+                ? 'bg-white/20 text-white'
+                : 'bg-white text-gray-900 shadow-sm'
+              : dark
+                ? 'text-white/60 hover:text-white'
+                : 'text-gray-500 hover:text-gray-800'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const SortTh: React.FC<{
+  field: SortField;
+  label: string;
+  sortBy: SortField;
+  sortOrder: SortOrder;
+  dark: boolean;
+  onSort: (f: SortField) => void;
+  className?: string;
+}> = ({ field, label, sortBy, sortOrder, dark, onSort, className }) => (
+  <th
+    aria-sort={
+      sortBy === field
+        ? sortOrder === 'ASC'
+          ? 'ascending'
+          : 'descending'
+        : 'none'
+    }
+    className={`px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap ${className ?? ''}`}
+  >
+    <button
+      type="button"
+      onClick={() => onSort(field)}
+      className={`inline-flex items-center gap-1 uppercase tracking-wide ${
+        dark
+          ? 'text-white/70 hover:text-white'
+          : 'text-gray-500 hover:text-gray-900'
+      }`}
+    >
+      {label}
+      {sortBy === field ? (
+        sortOrder === 'ASC' ? (
+          <ArrowUp className="w-3 h-3" />
+        ) : (
+          <ArrowDown className="w-3 h-3" />
+        )
+      ) : (
+        <ArrowUpDown className="w-3 h-3 opacity-30" />
+      )}
+    </button>
+  </th>
+);
+
+// ---------------------------------------------------------------------------
+// Date range field — presets + native pickers, local-time safe
 // ---------------------------------------------------------------------------
 
 const DateRangeField: React.FC<{
   fromDate: string;
   toDate: string;
   dark: boolean;
+  disabled?: boolean;
   onChange: (from: string, to: string) => void;
-}> = ({ fromDate, toDate, dark, onChange }) => {
+}> = ({ fromDate, toDate, dark, disabled, onChange }) => {
+  const t = tokens(dark);
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const fromRef = useRef<HTMLInputElement>(null);
-  const toRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    if (!open) return;
+    const down = (e: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node))
         setOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', down);
+    document.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('mousedown', down);
+      document.removeEventListener('keydown', key);
+    };
+  }, [open]);
 
-  const openPicker = (ref: React.RefObject<HTMLInputElement>) => {
-    const el = ref.current as any;
-    if (!el) return;
-    if (typeof el.showPicker === 'function') {
-      try {
-        el.showPicker();
-        return;
-      } catch {
-        /* fall through */
-      }
-    }
-    el.focus();
-  };
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   const activePreset = DATE_PRESETS.find((p) => {
-    const [f, t] = p.get();
-    return f === fromDate && t === toDate;
+    const [f, to] = p.get();
+    return f === fromDate && to === toDate;
   });
+
+  const short = (iso: string, withYear: boolean) =>
+    new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      ...(withYear ? { year: 'numeric' as const } : {}),
+    });
 
   const label = activePreset
     ? activePreset.label
     : fromDate === toDate
-      ? new Date(`${fromDate}T00:00:00`).toLocaleDateString(undefined, {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        })
-      : `${new Date(`${fromDate}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${new Date(
-          `${toDate}T00:00:00`
-        ).toLocaleDateString(undefined, {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        })}`;
+      ? short(fromDate, true)
+      : `${short(fromDate, false)} – ${short(toDate, true)}`;
 
-  //   return (
-  //     <div className="relative" ref={wrapperRef}>
-  //       <label
-  //         className={`block text-sm font-medium mb-2 ${dark ? 'text-white/70' : 'text-gray-600'}`}
-  //       >
-  //         Date range
-  //       </label>
-  //       <button
-  //         type="button"
-  //         onClick={() => setOpen((v) => !v)}
-  //         className={`flex items-center gap-2 px-3 py-2 rounded-lg border w-56 text-left transition-colors ${
-  //           dark
-  //             ? 'bg-white/10 border-white/20 text-white hover:bg-white/15'
-  //             : 'bg-white border-gray-300 text-gray-900 hover:bg-gray-50'
-  //         }`}
-  //       >
-  //         <Calendar className="w-4 h-4 opacity-60 shrink-0" />
-  //         <span className="text-sm truncate flex-1">{label}</span>
-  //         <ChevronDown
-  //           className={`w-3.5 h-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
-  //         />
-  //       </button>
+  return (
+    <div className="relative" ref={wrapperRef}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={
+          disabled
+            ? 'Date range is not applied in the My WIP view'
+            : 'Choose date range'
+        }
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm min-w-[170px] disabled:opacity-40 disabled:cursor-not-allowed ${t.input}`}
+      >
+        <Calendar className="w-4 h-4 shrink-0 text-gray-400" />
+        <span className="flex-1 text-left truncate">
+          {disabled ? 'All dates' : label}
+        </span>
+        <ChevronDown
+          className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
 
-  //       <AnimatePresence>
-  //         {open && (
-  //           <motion.div
-  //             initial={{ opacity: 0, y: -6 }}
-  //             animate={{ opacity: 1, y: 0 }}
-  //             exit={{ opacity: 0, y: -6 }}
-  //             className={`absolute z-30 mt-2 w-[26rem] rounded-xl border shadow-2xl p-6 ${
-  //               dark ? 'bg-slate-900 border-white/20' : 'bg-white border-gray-200'
-  //             }`}
-  //           >
-  //             <div className="grid grid-cols-3 gap-2 mb-5">
-  //               {DATE_PRESETS.map((p) => {
-  //                 const [f, t] = p.get();
-  //                 const active = f === fromDate && t === toDate;
-  //                 return (
-  //                   <button
-  //                     key={p.label}
-  //                     type="button"
-  //                     onClick={() => {
-  //                       onChange(f, t);
-  //                       setOpen(false);
-  //                     }}
-  //                     className={`px-3 py-1.5 rounded-lg text-xs font-medium text-left transition-colors ${
-  //                       active
-  //                         ? 'bg-blue-500 text-white'
-  //                         : dark
-  //                           ? 'bg-white/10 hover:bg-white/20 text-white'
-  //                           : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-  //                     }`}
-  //                   >
-  //                     {p.label}
-  //                   </button>
-  //                 );
-  //               })}
-  //             </div>
-
-  //             <div
-  //               className={`text-xs font-semibold uppercase tracking-wide mb-2 ${dark ? 'text-white/40' : 'text-gray-400'}`}
-  //             >
-  //               Custom range
-  //             </div>
-  //             <div className="flex items-center gap-2">
-  //               <div
-  //                 onClick={() => openPicker(fromRef)}
-  //                 className={`flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg border cursor-pointer ${
-  //                   dark
-  //                     ? 'bg-white/10 border-white/20 hover:bg-white/15'
-  //                     : 'bg-white border-gray-300 hover:bg-gray-50'
-  //                 }`}
-  //               >
-  //                 <Calendar
-  //                   className={`w-3.5 h-3.5 ${dark ? 'text-white/40' : 'text-gray-400'}`}
-  //                 />
-  //                 <input
-  //                   ref={fromRef}
-  //                   type="date"
-  //                   value={fromDate}
-  //                   max={toDate}
-  //                   onChange={(e) => onChange(e.target.value, toDate)}
-  //                   className={`w-full bg-transparent text-sm outline-none cursor-pointer ${dark ? 'text-white' : 'text-gray-900'}`}
-  //                 />
-  //               </div>
-  //               <span className={dark ? 'text-white/40' : 'text-gray-400'}>
-  //                 –
-  //               </span>
-  //               <div
-  //                 onClick={() => openPicker(toRef)}
-  //                 className={`flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg border cursor-pointer ${
-  //                   dark
-  //                     ? 'bg-white/10 border-white/20 hover:bg-white/15'
-  //                     : 'bg-white border-gray-300 hover:bg-gray-50'
-  //                 }`}
-  //               >
-  //                 <Calendar
-  //                   className={`w-3.5 h-3.5 ${dark ? 'text-white/40' : 'text-gray-400'}`}
-  //                 />
-  //                 <input
-  //                   ref={toRef}
-  //                   type="date"
-  //                   value={toDate}
-  //                   min={fromDate}
-  //                   max={TODAY}
-  //                   onChange={(e) => onChange(fromDate, e.target.value)}
-  //                   className={`w-full bg-transparent text-sm outline-none cursor-pointer ${dark ? 'text-white' : 'text-gray-900'}`}
-  //                 />
-  //               </div>
-  //             </div>
-  //           </motion.div>
-  //         )}
-  //       </AnimatePresence>
-  //     </div>
-  //   );
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Date range"
+          className={`absolute left-0 top-full mt-1.5 w-72 rounded-xl border shadow-2xl p-3 ${Z_POPOVER} ${t.surface}`}
+        >
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {DATE_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => {
+                  const [f, to] = p.get();
+                  onChange(f, to);
+                  setOpen(false);
+                }}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
+                  activePreset?.label === p.label
+                    ? dark
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                    : t.btn
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className={`text-[11px] font-semibold uppercase ${t.faint}`}>
+              From
+              <input
+                type="date"
+                value={fromDate}
+                max={toDate}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v) onChange(v, v > toDate ? v : toDate);
+                }}
+                style={{ colorScheme: dark ? 'dark' : 'light' }}
+                className={`mt-1 w-full px-2 py-1.5 rounded-lg text-sm normal-case ${t.input}`}
+              />
+            </label>
+            <label className={`text-[11px] font-semibold uppercase ${t.faint}`}>
+              To
+              <input
+                type="date"
+                value={toDate}
+                min={fromDate}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v) onChange(v < fromDate ? v : fromDate, v);
+                }}
+                style={{ colorScheme: dark ? 'dark' : 'light' }}
+                className={`mt-1 w-full px-2 py-1.5 rounded-lg text-sm normal-case ${t.input}`}
+              />
+            </label>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 // ---------------------------------------------------------------------------
-// Alert detail modal — fetches the full record (info / details / history) for
-// the clicked alert_id and renders it as a tabbed, elegant popup.
+// Advanced filters — right-hand drawer, rendered in a portal. Edits are held
+// in a draft and only applied on "Apply", so typing never triggers a refetch.
+// ---------------------------------------------------------------------------
+
+const FilterDrawer: React.FC<{
+  dark: boolean;
+  initial: AdvancedFields;
+  options: {
+    statuses: string[];
+    priorities: string[];
+    channels: string[];
+    rules: [string, string][];
+  };
+  loading: boolean;
+  onApply: (next: AdvancedFields) => void;
+  onClose: () => void;
+}> = ({ dark, initial, options, loading, onApply, onClose }) => {
+  const t = tokens(dark);
+  const [draft, setDraft] = useState<AdvancedFields>(initial);
+  const dialogRef = useDialog(onClose);
+  useBodyScrollLock();
+
+  const set = <K extends keyof AdvancedFields>(k: K, v: AdvancedFields[K]) =>
+    setDraft((d) => ({ ...d, [k]: v }));
+
+  const selectCls = `w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 ${t.input}`;
+  const labelCls = `block text-xs font-semibold uppercase tracking-wide mb-1.5 ${t.muted}`;
+  const onEnter = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') onApply(draft);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={onClose}
+      className={`fixed inset-0 ${Z_DRAWER} bg-black/50 backdrop-blur-[2px]`}
+    >
+      <motion.aside
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Advanced filters"
+        tabIndex={-1}
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        transition={{ type: 'spring', stiffness: 320, damping: 34 }}
+        onClick={(e) => e.stopPropagation()}
+        className={`absolute right-0 top-0 h-full w-full sm:w-[400px] border-l shadow-2xl flex flex-col outline-none ${t.surface}`}
+      >
+        <div
+          className={`px-5 py-4 border-b flex items-center justify-between shrink-0 ${t.line}`}
+        >
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className={`w-4 h-4 ${t.muted}`} />
+            <h3 className={`text-base font-bold ${t.text}`}>Filters</h3>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close filters"
+            className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/10 text-white/70' : 'hover:bg-gray-100 text-gray-500'}`}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5 space-y-6">
+          <section className="space-y-4">
+            <div className={`text-[11px] font-bold uppercase ${t.faint}`}>
+              Alert
+            </div>
+            <div>
+              <label className={labelCls}>Priority</label>
+              <select
+                value={draft.priority}
+                onChange={(e) => set('priority', e.target.value)}
+                disabled={loading}
+                className={selectCls}
+              >
+                <option value="">
+                  {loading ? 'Loading…' : 'All priorities'}
+                </option>
+                {options.priorities.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Status</label>
+              <select
+                value={draft.status}
+                onChange={(e) => set('status', e.target.value)}
+                disabled={loading}
+                className={selectCls}
+              >
+                <option value="">
+                  {loading ? 'Loading…' : 'All statuses'}
+                </option>
+                {options.statuses.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Rule</label>
+              <select
+                value={draft.ruleId}
+                onChange={(e) => set('ruleId', e.target.value)}
+                disabled={loading}
+                className={selectCls}
+              >
+                <option value="">All rules</option>
+                {options.rules.map(([id, desc]) => (
+                  <option key={id} value={id}>
+                    {id} — {desc}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Channel</label>
+              <select
+                value={draft.channel}
+                onChange={(e) => set('channel', e.target.value)}
+                disabled={loading}
+                className={selectCls}
+              >
+                <option value="">All channels</option>
+                {options.channels.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div className={`text-[11px] font-bold uppercase ${t.faint}`}>
+              Who &amp; where
+            </div>
+            <div>
+              <label className={labelCls}>Branch / Location</label>
+              <input
+                type="text"
+                value={draft.location}
+                onChange={(e) => set('location', e.target.value)}
+                onKeyDown={onEnter}
+                placeholder="e.g. HEAD OFFICE"
+                className={selectCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Cashier / User</label>
+              <input
+                type="text"
+                value={draft.username}
+                onChange={(e) => set('username', e.target.value)}
+                onKeyDown={onEnter}
+                placeholder="e.g. SADIQUEM"
+                className={selectCls}
+              />
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div className={`text-[11px] font-bold uppercase ${t.faint}`}>
+              State
+            </div>
+            <div>
+              <label className={labelCls}>Closed status</label>
+              <Segmented<TriState>
+                dark={dark}
+                ariaLabel="Closed status"
+                value={draft.closed}
+                onChange={(v) => set('closed', v)}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'false', label: 'Open' },
+                  { value: 'true', label: 'Closed' },
+                ]}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Fraud flag</label>
+              <Segmented<TriState>
+                dark={dark}
+                ariaLabel="Fraud flag"
+                value={draft.fraud}
+                onChange={(v) => set('fraud', v)}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'true', label: 'Fraud' },
+                  { value: 'false', label: 'Not fraud' },
+                ]}
+              />
+            </div>
+          </section>
+        </div>
+
+        <div
+          className={`px-5 py-3.5 border-t flex items-center justify-between gap-3 shrink-0 ${t.line}`}
+        >
+          <button
+            type="button"
+            onClick={() => setDraft(ADV_DEFAULT)}
+            className={`px-3 py-2 rounded-lg text-sm font-medium ${t.btn}`}
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            onClick={() => onApply(draft)}
+            className="px-5 py-2 rounded-lg text-sm font-semibold bg-rose-600 hover:bg-rose-500 text-white"
+          >
+            Apply filters
+          </button>
+        </div>
+      </motion.aside>
+    </motion.div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Alert detail modal — portaled, fixed layout, prev/next triage navigation
 // ---------------------------------------------------------------------------
 
 type DetailTab = 'overview' | 'transactions' | 'history';
 
+const TabButton: React.FC<{
+  active: boolean;
+  dark: boolean;
+  label: string;
+  icon: React.ReactNode;
+  count?: number;
+  onClick: () => void;
+}> = ({ active, dark, label, icon, count, onClick }) => (
+  <button
+    role="tab"
+    aria-selected={active}
+    onClick={onClick}
+    className={`flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+      active
+        ? dark
+          ? 'border-rose-400 text-white'
+          : 'border-rose-500 text-gray-900'
+        : dark
+          ? 'border-transparent text-white/50 hover:text-white/80'
+          : 'border-transparent text-gray-500 hover:text-gray-800'
+    }`}
+  >
+    {icon}
+    {label}
+    {typeof count === 'number' && (
+      <span
+        className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-semibold ${
+          active
+            ? dark
+              ? 'bg-rose-500/20 text-rose-300'
+              : 'bg-rose-100 text-rose-700'
+            : dark
+              ? 'bg-white/10 text-white/50'
+              : 'bg-gray-100 text-gray-500'
+        }`}
+      >
+        {count}
+      </span>
+    )}
+  </button>
+);
+
 const AlertDetailModal: React.FC<{
   alert: FraudAlert;
   dark: boolean;
+  position?: { index: number; total: number };
+  onPrev?: () => void;
+  onNext?: () => void;
   onClose: () => void;
-}> = ({ alert, dark, onClose }) => {
+}> = ({ alert, dark, position, onPrev, onNext, onClose }) => {
+  const t = tokens(dark);
+  const dialogRef = useDialog(onClose);
+  useBodyScrollLock();
+
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [detail, setDetail] = useState<AlertDetailResponse | null>(null);
@@ -683,16 +1216,20 @@ const AlertDetailModal: React.FC<{
     null
   );
 
-  // Prevent the page behind the modal from scrolling while it's open.
+  // ←/→ move between alerts in the current list (when not typing in a field).
+  const navRef = useRef({ onPrev, onNext });
+  navRef.current = { onPrev, onNext };
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'ArrowLeft') navRef.current.onPrev?.();
+      if (e.key === 'ArrowRight') navRef.current.onNext?.();
     };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
   }, []);
 
-  // Fetch the full detail payload for this alert_id.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -700,6 +1237,7 @@ const AlertDetailModal: React.FC<{
     setDetailError(null);
     setDetail(null);
     setActiveTab('overview');
+    setExpandedHistoryId(null);
 
     apiClient
       .get<AlertDetailResponse>(ALERT_DETAIL_ENDPOINT(alert.alert_id), {
@@ -712,7 +1250,8 @@ const AlertDetailModal: React.FC<{
         if (
           cancelled ||
           err?.name === 'CanceledError' ||
-          err?.name === 'AbortError'
+          err?.name === 'AbortError' ||
+          err?.code === 'ERR_CANCELED'
         )
           return;
         console.error('Error fetching alert detail:', err);
@@ -740,8 +1279,7 @@ const AlertDetailModal: React.FC<{
     }
   };
 
-  // The list row and the detail API describe overlapping but different
-  // fields — merge them, preferring the richer detail payload once it loads.
+  // Merge list row + detail payload, preferring the richer detail once loaded.
   const info = detail?.info;
   const effective = useMemo(
     () => ({
@@ -752,7 +1290,6 @@ const AlertDetailModal: React.FC<{
       isClosed: info?.is_alert_closed ?? alert.is_alert_closed,
       branch: info?.branch_name || alert.branch_name,
       processedBy: info?.created_user_full_name || alert.created_user_full_name,
-      alertDate: info?.alert_date || alert.created_date,
       llmConfigs: info?.llm_configs,
     }),
     [info, alert]
@@ -762,10 +1299,7 @@ const AlertDetailModal: React.FC<{
     summary,
     details: commentDetails,
     logic,
-  } = useMemo(
-    () => parseComment(effective.comments || ''),
-    [effective.comments]
-  );
+  } = useMemo(() => parseComment(effective.comments), [effective.comments]);
 
   const llmConfigEntries = useMemo(
     () => Object.entries(effective.llmConfigs ?? {}),
@@ -774,50 +1308,7 @@ const AlertDetailModal: React.FC<{
 
   const transactions = detail?.details ?? [];
   const history = detail?.history ?? [];
-
-  const fieldLabel = dark ? 'text-white/40' : 'text-gray-400';
-  const fieldValue = dark ? 'text-white/90' : 'text-gray-800';
-  const cardBase = dark
-    ? 'bg-white/5 border-white/10'
-    : 'bg-gray-50 border-gray-100';
-
-  const TabButton: React.FC<{
-    tab: DetailTab;
-    label: string;
-    icon: React.ReactNode;
-    count?: number;
-  }> = ({ tab, label, icon, count }) => (
-    <button
-      onClick={() => setActiveTab(tab)}
-      className={`flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-        activeTab === tab
-          ? dark
-            ? 'border-rose-400 text-white'
-            : 'border-rose-500 text-gray-900'
-          : dark
-            ? 'border-transparent text-white/50 hover:text-white/80'
-            : 'border-transparent text-gray-500 hover:text-gray-800'
-      }`}
-    >
-      {icon}
-      {label}
-      {typeof count === 'number' && (
-        <span
-          className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-semibold ${
-            activeTab === tab
-              ? dark
-                ? 'bg-rose-500/20 text-rose-300'
-                : 'bg-rose-100 text-rose-700'
-              : dark
-                ? 'bg-white/10 text-white/50'
-                : 'bg-gray-100 text-gray-500'
-          }`}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
+  const prio = (effective.rulePriority || '').toLowerCase();
 
   return (
     <motion.div
@@ -826,30 +1317,31 @@ const AlertDetailModal: React.FC<{
       exit={{ opacity: 0 }}
       onClick={onClose}
       onWheel={(e) => e.stopPropagation()}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      className={`fixed inset-0 ${Z_MODAL} flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm`}
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.94, y: 12 }}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Alert ${alert.alert_id}`}
+        tabIndex={-1}
+        initial={{ opacity: 0, scale: 0.96, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.96, y: 8 }}
+        exit={{ opacity: 0, scale: 0.97, y: 8 }}
         transition={{ type: 'spring', stiffness: 300, damping: 28 }}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full sm:w-[80vw] sm:max-w-[1400px] max-h-[88vh] overflow-hidden rounded-2xl border shadow-2xl flex flex-col ${
-          dark ? 'bg-slate-900 border-white/15' : 'bg-white border-gray-200'
-        }`}
+        className={`w-full sm:w-[80vw] sm:max-w-[1400px] h-[min(88vh,860px)] overflow-hidden rounded-2xl border shadow-2xl flex flex-col outline-none ${t.surface}`}
       >
         {/* Header */}
         <div
-          className={`px-6 py-5 border-b flex items-start justify-between gap-4 shrink-0 ${
-            dark ? 'border-white/10' : 'border-gray-100'
-          }`}
+          className={`px-6 py-4 border-b flex items-start justify-between gap-4 shrink-0 ${t.line}`}
         >
           <div className="flex items-start gap-3 min-w-0">
             <div
               className={`p-2.5 rounded-xl shrink-0 shadow-md bg-gradient-to-br ${
-                effective.rulePriority?.toLowerCase() === 'high'
+                prio === 'high'
                   ? 'from-rose-500 to-red-600'
-                  : effective.rulePriority?.toLowerCase() === 'medium'
+                  : prio === 'medium'
                     ? 'from-amber-500 to-orange-600'
                     : 'from-blue-500 to-indigo-600'
               }`}
@@ -858,9 +1350,7 @@ const AlertDetailModal: React.FC<{
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h3
-                  className={`text-base font-bold truncate ${dark ? 'text-white' : 'text-gray-900'}`}
-                >
+                <h3 className={`text-base font-bold truncate ${t.text}`}>
                   {effective.ruleDescription}
                 </h3>
                 <span
@@ -873,7 +1363,7 @@ const AlertDetailModal: React.FC<{
                 </span>
               </div>
               <div
-                className={`mt-1 flex items-center gap-1.5 text-xs font-mono ${dark ? 'text-white/40' : 'text-gray-400'}`}
+                className={`mt-1 flex items-center gap-1.5 text-xs font-mono ${t.faint}`}
               >
                 <Hash className="w-3 h-3" />
                 {effective.ruleId}
@@ -895,39 +1385,44 @@ const AlertDetailModal: React.FC<{
           </div>
           <button
             onClick={onClose}
-            className={`p-1.5 rounded-lg shrink-0 ${dark ? 'hover:bg-white/10 text-white/70' : 'hover:bg-gray-100 text-gray-500'}`}
+            aria-label="Close (Esc)"
             title="Close (Esc)"
+            className={`p-1.5 rounded-lg shrink-0 ${dark ? 'hover:bg-white/10 text-white/70' : 'hover:bg-gray-100 text-gray-500'}`}
           >
-            <X className="w-4.5 h-4.5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Tabs */}
         <div
-          className={`flex items-center gap-1 px-6 border-b overflow-x-auto shrink-0 ${
-            dark ? 'border-white/10' : 'border-gray-100'
-          }`}
+          role="tablist"
+          className={`flex items-center gap-1 px-6 border-b overflow-x-auto shrink-0 ${t.line}`}
         >
           <TabButton
-            tab="overview"
+            dark={dark}
+            active={activeTab === 'overview'}
+            onClick={() => setActiveTab('overview')}
             label="Overview"
             icon={<Info className="w-3.5 h-3.5" />}
           />
           <TabButton
-            tab="transactions"
+            dark={dark}
+            active={activeTab === 'transactions'}
+            onClick={() => setActiveTab('transactions')}
             label="Transactions"
             icon={<ArrowLeftRight className="w-3.5 h-3.5" />}
             count={detail ? transactions.length : undefined}
           />
           <TabButton
-            tab="history"
+            dark={dark}
+            active={activeTab === 'history'}
+            onClick={() => setActiveTab('history')}
             label="History"
             icon={<History className="w-3.5 h-3.5" />}
             count={detail ? history.length : undefined}
           />
         </div>
 
-        {/* Error banner (applies to any tab) */}
         {detailError && (
           <div
             className={`mx-6 mt-4 flex items-center gap-3 px-4 py-3 rounded-xl border text-sm shrink-0 ${
@@ -941,13 +1436,11 @@ const AlertDetailModal: React.FC<{
           </div>
         )}
 
-        {/* Body — fixed height so switching tabs doesn't resize the modal;
-            each tab scrolls independently within this region. */}
-        <div className="h-[58vh] px-6">
-          {/* -------------------------------- Overview -------------------------------- */}
+        {/* Body — fills remaining height; each tab scrolls independently */}
+        <div className="flex-1 min-h-0 px-6">
+          {/* ------------------------------ Overview ------------------------------ */}
           {activeTab === 'overview' && (
             <div className="h-full overflow-y-auto overscroll-contain py-5 pr-1 space-y-5">
-              {/* Status chips */}
               <div className="flex flex-wrap gap-2">
                 <span
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold ${statusStyles(alert.status, dark)}`}
@@ -987,87 +1480,67 @@ const AlertDetailModal: React.FC<{
                 )}
               </div>
 
-              {/* Key/value grid */}
               <div
-                className={`grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-4 rounded-xl border p-4 ${cardBase}`}
+                className={`grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-4 rounded-xl border p-4 ${t.sunken}`}
               >
-                <div>
+                <Field label="Cashier" t={t}>
                   <div
-                    className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${fieldLabel}`}
+                    className={`text-sm font-medium ${dark ? 'text-white/90' : 'text-gray-800'}`}
                   >
-                    Cashier
-                  </div>
-                  <div className={`text-sm font-medium ${fieldValue}`}>
                     {alert.cashier}
                   </div>
-                </div>
-                <div>
+                </Field>
+                <Field label="Processed by" t={t}>
                   <div
-                    className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${fieldLabel}`}
+                    className={`text-sm font-medium ${dark ? 'text-white/90' : 'text-gray-800'}`}
                   >
-                    Processed by
-                  </div>
-                  <div className={`text-sm font-medium ${fieldValue}`}>
                     {effective.processedBy}
                   </div>
-                </div>
-                <div>
+                </Field>
+                <Field label="Branch" t={t}>
                   <div
-                    className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${fieldLabel}`}
+                    className={`text-sm font-medium ${dark ? 'text-white/90' : 'text-gray-800'}`}
                   >
-                    Branch
-                  </div>
-                  <div className={`text-sm font-medium ${fieldValue}`}>
                     {effective.branch}
                   </div>
-                </div>
-                <div>
+                </Field>
+                <Field label="Channel" t={t}>
                   <div
-                    className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${fieldLabel}`}
+                    className={`text-sm font-medium ${dark ? 'text-white/90' : 'text-gray-800'}`}
                   >
-                    Channel
-                  </div>
-                  <div className={`text-sm font-medium ${fieldValue}`}>
                     {alert.channel}
                   </div>
-                </div>
-                <div>
+                </Field>
+                <Field label="Created" t={t}>
                   <div
-                    className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${fieldLabel}`}
+                    className={`text-sm font-medium ${dark ? 'text-white/90' : 'text-gray-800'}`}
                   >
-                    Created
-                  </div>
-                  <div className={`text-sm font-medium ${fieldValue}`}>
                     {formatDate(alert.created_at_timestamp)}
                   </div>
-                  <div className={`text-xs ${fieldLabel}`}>
+                  <div className={`text-xs ${t.faint}`}>
                     {formatTime(alert.created_at_timestamp)} ·{' '}
                     {timeAgo(alert.created_at_timestamp)}
                   </div>
-                </div>
-                <div>
+                </Field>
+                <Field label="Rule" t={t}>
                   <div
-                    className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${fieldLabel}`}
-                  >
-                    Rule
-                  </div>
-                  <div
-                    className={`text-sm font-mono font-medium ${fieldValue}`}
+                    className={`text-sm font-mono font-medium ${dark ? 'text-white/90' : 'text-gray-800'}`}
                   >
                     {effective.ruleId}
                   </div>
-                </div>
+                </Field>
               </div>
 
-              {/* Alert narrative */}
               <div>
                 <div
-                  className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide mb-2 ${fieldLabel}`}
+                  className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide mb-2 ${t.faint}`}
                 >
                   <MessageSquare className="w-3.5 h-3.5" />
                   Alert summary
                 </div>
-                <p className={`text-sm leading-relaxed ${fieldValue}`}>
+                <p
+                  className={`text-sm leading-relaxed ${dark ? 'text-white/90' : 'text-gray-800'}`}
+                >
                   {summary}
                 </p>
                 {commentDetails.length > 0 && (
@@ -1085,7 +1558,6 @@ const AlertDetailModal: React.FC<{
                 )}
               </div>
 
-              {/* Rule logic callout */}
               {logic && (
                 <div
                   className={`rounded-xl border p-4 flex gap-3 ${
@@ -1112,38 +1584,26 @@ const AlertDetailModal: React.FC<{
                 </div>
               )}
 
-              {/* Rule parameters — dynamic, key/value shape varies per rule */}
               {detailLoading ? (
-                <div className="space-y-2">
-                  {Array.from({ length: 3 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className={`h-9 rounded-lg animate-pulse ${dark ? 'bg-white/5' : 'bg-gray-100'}`}
-                    />
-                  ))}
-                </div>
+                <Skeleton rows={3} h="h-9" dark={dark} />
               ) : (
                 llmConfigEntries.length > 0 && (
                   <div>
                     <div
-                      className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide mb-2 ${fieldLabel}`}
+                      className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide mb-2 ${t.faint}`}
                     >
                       <SlidersHorizontal className="w-3.5 h-3.5" />
                       Rule parameters
                     </div>
                     <div
-                      className={`rounded-xl border overflow-hidden ${dark ? 'border-white/10' : 'border-gray-100'}`}
+                      className={`rounded-xl border overflow-hidden ${t.line}`}
                     >
                       <table className="w-full">
                         <tbody>
                           {llmConfigEntries.map(([key, value], i) => (
                             <tr
                               key={key}
-                              className={`${i % 2 === 1 ? (dark ? 'bg-white/[0.03]' : 'bg-gray-50') : ''} ${
-                                i > 0
-                                  ? `border-t ${dark ? 'border-white/10' : 'border-gray-100'}`
-                                  : ''
-                              }`}
+                              className={`${i % 2 === 1 ? (dark ? 'bg-white/[0.03]' : 'bg-gray-50') : ''} ${i > 0 ? `border-t ${t.line}` : ''}`}
                             >
                               <td
                                 className={`px-4 py-2 text-sm font-medium w-1/2 ${dark ? 'text-white/70' : 'text-gray-600'}`}
@@ -1151,7 +1611,7 @@ const AlertDetailModal: React.FC<{
                                 {humanizeKey(key)}
                               </td>
                               <td
-                                className={`px-4 py-2 text-sm font-mono ${fieldValue}`}
+                                className={`px-4 py-2 text-sm font-mono ${dark ? 'text-white/90' : 'text-gray-800'}`}
                               >
                                 {formatDynamicValue(value)}
                               </td>
@@ -1166,18 +1626,11 @@ const AlertDetailModal: React.FC<{
             </div>
           )}
 
-          {/* ----------------------------- Transactions ----------------------------- */}
+          {/* ---------------------------- Transactions ---------------------------- */}
           {activeTab === 'transactions' && (
             <div className="h-full py-5">
               {detailLoading ? (
-                <div className="space-y-2">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className={`h-12 rounded-lg animate-pulse ${dark ? 'bg-white/5' : 'bg-gray-100'}`}
-                    />
-                  ))}
-                </div>
+                <Skeleton rows={4} h="h-12" dark={dark} />
               ) : transactions.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center">
                   <ArrowLeftRight
@@ -1191,7 +1644,7 @@ const AlertDetailModal: React.FC<{
                 </div>
               ) : (
                 <div
-                  className={`h-full rounded-xl border overflow-auto overscroll-contain ${dark ? 'border-white/10' : 'border-gray-100'}`}
+                  className={`h-full rounded-xl border overflow-auto overscroll-contain ${t.line}`}
                 >
                   <table className="w-full">
                     <thead
@@ -1220,52 +1673,54 @@ const AlertDetailModal: React.FC<{
                       </tr>
                     </thead>
                     <tbody>
-                      {transactions.map((t, i) => (
+                      {transactions.map((tx, i) => (
                         <tr
-                          key={t.row_id}
-                          className={`${i > 0 ? `border-t ${dark ? 'border-white/10' : 'border-gray-100'}` : ''}`}
+                          key={tx.row_id}
+                          className={i > 0 ? `border-t ${t.line}` : ''}
                         >
                           <td className="px-4 py-2.5 whitespace-nowrap">
-                            <div className={`text-sm ${fieldValue}`}>
-                              {t.txn_date ? formatDate(t.txn_date) : '—'}
+                            <div
+                              className={`text-sm ${dark ? 'text-white/90' : 'text-gray-800'}`}
+                            >
+                              {formatDate(tx.txn_date)}
                             </div>
-                            <div className={`text-xs ${fieldLabel}`}>
-                              {t.txn_date ? formatTime(t.txn_date) : ''}
+                            <div className={`text-xs ${t.faint}`}>
+                              {formatTime(tx.txn_date)}
                             </div>
                           </td>
                           <td
-                            className={`px-4 py-2.5 text-sm font-mono whitespace-nowrap ${fieldValue}`}
+                            className={`px-4 py-2.5 text-sm font-mono whitespace-nowrap ${dark ? 'text-white/90' : 'text-gray-800'}`}
                           >
-                            {String(t.refno_send_receive ?? '—')}
+                            {String(tx.refno_send_receive ?? '—')}
                           </td>
                           <td className="px-4 py-2.5 max-w-[200px]">
                             <div
-                              className={`text-sm truncate ${fieldValue}`}
-                              title={String(t.customer_name ?? '')}
+                              className={`text-sm truncate ${dark ? 'text-white/90' : 'text-gray-800'}`}
+                              title={String(tx.customer_name ?? '')}
                             >
-                              {String(t.customer_name ?? '—')}
+                              {String(tx.customer_name ?? '—')}
                             </div>
-                            <div className={`text-xs ${fieldLabel}`}>
-                              {String(t.customer_type ?? '')}
+                            <div className={`text-xs ${t.faint}`}>
+                              {String(tx.customer_type ?? '')}
                             </div>
                           </td>
                           <td
-                            className={`px-4 py-2.5 text-sm whitespace-nowrap ${fieldValue}`}
+                            className={`px-4 py-2.5 text-sm whitespace-nowrap ${dark ? 'text-white/90' : 'text-gray-800'}`}
                           >
-                            {String(t.beneficiary_name ?? '—')}
+                            {String(tx.beneficiary_name ?? '—')}
                           </td>
                           <td
-                            className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap ${fieldValue}`}
+                            className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap tabular-nums ${dark ? 'text-white/90' : 'text-gray-800'}`}
                           >
                             {formatAmount(
-                              t.amt_aed as number | undefined,
-                              t.curcode as string | undefined
+                              tx.amt_aed as number | undefined,
+                              tx.curcode as string | undefined
                             )}
                           </td>
                           <td className="px-4 py-2.5">
                             <span
                               className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${
-                                t.is_employee_txn
+                                tx.is_employee_txn
                                   ? dark
                                     ? 'bg-amber-500/15 text-amber-300'
                                     : 'bg-amber-50 text-amber-700'
@@ -1274,7 +1729,7 @@ const AlertDetailModal: React.FC<{
                                     : 'bg-gray-100 text-gray-500'
                               }`}
                             >
-                              {t.is_employee_txn ? 'Yes' : 'No'}
+                              {tx.is_employee_txn ? 'Yes' : 'No'}
                             </span>
                           </td>
                         </tr>
@@ -1286,18 +1741,11 @@ const AlertDetailModal: React.FC<{
             </div>
           )}
 
-          {/* -------------------------------- History -------------------------------- */}
+          {/* ------------------------------ History ------------------------------ */}
           {activeTab === 'history' && (
             <div className="h-full py-5">
               {detailLoading ? (
-                <div className="space-y-2">
-                  {Array.from({ length: 3 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className={`h-14 rounded-lg animate-pulse ${dark ? 'bg-white/5' : 'bg-gray-100'}`}
-                    />
-                  ))}
-                </div>
+                <Skeleton rows={3} h="h-14" dark={dark} />
               ) : history.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center">
                   <History
@@ -1327,39 +1775,26 @@ const AlertDetailModal: React.FC<{
                           onClick={() =>
                             setExpandedHistoryId(isExpanded ? null : index)
                           }
-                          className={`w-full flex items-center justify-between gap-3 px-4 py-3 text-left transition-colors ${
-                            dark ? 'hover:bg-white/5' : 'hover:bg-gray-50'
-                          }`}
+                          aria-expanded={isExpanded}
+                          className={`w-full flex items-center justify-between gap-3 px-4 py-3 text-left transition-colors ${t.hover}`}
                         >
                           <div className="flex items-center gap-3 min-w-0">
                             <span
-                              className={`w-2 h-2 rounded-full shrink-0 ${
-                                String(h.risk_category ?? '').toLowerCase() ===
-                                'high'
-                                  ? 'bg-rose-500'
-                                  : String(
-                                        h.risk_category ?? ''
-                                      ).toLowerCase() === 'medium'
-                                    ? 'bg-amber-500'
-                                    : String(
-                                          h.risk_category ?? ''
-                                        ).toLowerCase() === 'low'
-                                      ? 'bg-blue-500'
-                                      : 'bg-gray-400'
-                              }`}
+                              className={`w-2 h-2 rounded-full shrink-0 ${priorityDot(String(h.risk_category ?? ''))}`}
                             />
                             <div className="min-w-0">
                               <div
-                                className={`text-sm font-semibold truncate ${dark ? 'text-white' : 'text-gray-900'}`}
+                                className={`text-sm font-semibold truncate ${t.text}`}
                               >
-                                {(h.action_type ?? 'ACTION')
-                                  .toString()
-                                  .replace(/_/g, ' ')}
+                                {String(h.action_type ?? 'ACTION').replace(
+                                  /_/g,
+                                  ' '
+                                )}
                                 {h.disposition_type
                                   ? ` · ${String(h.disposition_type).replace(/_/g, ' ')}`
                                   : ''}
                               </div>
-                              <div className={`text-xs truncate ${fieldLabel}`}>
+                              <div className={`text-xs truncate ${t.faint}`}>
                                 {h.actioned_by ? `by ${h.actioned_by}` : ''}
                                 {h.created_at
                                   ? ` · ${formatDate(String(h.created_at))} ${formatTime(String(h.created_at))}`
@@ -1369,9 +1804,7 @@ const AlertDetailModal: React.FC<{
                           </div>
                           {hasMore && (
                             <ChevronRight
-                              className={`w-4 h-4 shrink-0 transition-transform ${dark ? 'text-white/40' : 'text-gray-400'} ${
-                                isExpanded ? 'rotate-90' : ''
-                              }`}
+                              className={`w-4 h-4 shrink-0 transition-transform ${t.faint} ${isExpanded ? 'rotate-90' : ''}`}
                             />
                           )}
                         </button>
@@ -1386,39 +1819,31 @@ const AlertDetailModal: React.FC<{
                               <div
                                 className={`px-4 pb-4 pt-1 space-y-4 ${dark ? 'bg-white/[0.02]' : 'bg-gray-50/60'}`}
                               >
-                                {/* Short fields — rendered as a compact grid, whatever keys this event has */}
                                 {grid.length > 0 && (
                                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
                                     {grid.map((g) => (
-                                      <div key={g.label}>
-                                        <div
-                                          className={`text-[11px] font-semibold uppercase tracking-wide mb-0.5 ${fieldLabel}`}
-                                        >
-                                          {g.label}
-                                        </div>
+                                      <Field
+                                        key={g.label}
+                                        label={g.label}
+                                        t={t}
+                                      >
                                         <div
                                           className={`text-sm ${dark ? 'text-white/85' : 'text-gray-800'}`}
                                         >
                                           {g.value}
                                         </div>
-                                      </div>
+                                      </Field>
                                     ))}
                                   </div>
                                 )}
-                                {/* Long free-text fields — rendered as paragraphs */}
                                 {paragraphs.map((n) => (
-                                  <div key={n.label}>
-                                    <div
-                                      className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${fieldLabel}`}
-                                    >
-                                      {n.label}
-                                    </div>
+                                  <Field key={n.label} label={n.label} t={t}>
                                     <p
                                       className={`text-sm leading-relaxed ${dark ? 'text-white/80' : 'text-gray-700'}`}
                                     >
                                       {n.text}
                                     </p>
-                                  </div>
+                                  </Field>
                                 ))}
                               </div>
                             </motion.div>
@@ -1435,23 +1860,47 @@ const AlertDetailModal: React.FC<{
 
         {/* Footer */}
         <div
-          className={`px-6 py-3.5 border-t flex items-center justify-between shrink-0 ${
-            dark ? 'border-white/10' : 'border-gray-100'
-          }`}
+          className={`px-6 py-3 border-t flex items-center justify-between gap-3 shrink-0 ${t.line}`}
         >
-          <span className={`text-xs font-mono ${fieldLabel}`}>
+          <span className={`text-xs font-mono truncate ${t.faint}`}>
             {alert.alert_id}
           </span>
-          <button
-            onClick={onClose}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              dark
-                ? 'bg-white/10 hover:bg-white/20 text-white'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-            }`}
-          >
-            Close
-          </button>
+          <div className="flex items-center gap-2">
+            {position && position.total > 1 && (
+              <div
+                className="flex items-center gap-1"
+                aria-label="Navigate alerts"
+              >
+                <button
+                  onClick={onPrev}
+                  disabled={!onPrev}
+                  title="Previous alert (←)"
+                  aria-label="Previous alert"
+                  className={`p-1.5 rounded-lg disabled:opacity-30 ${t.btn}`}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className={`text-xs tabular-nums px-1 ${t.muted}`}>
+                  {position.index + 1} / {position.total}
+                </span>
+                <button
+                  onClick={onNext}
+                  disabled={!onNext}
+                  title="Next alert (→)"
+                  aria-label="Next alert"
+                  className={`p-1.5 rounded-lg disabled:opacity-30 ${t.btn}`}
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            <button
+              onClick={onClose}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium ${t.btn}`}
+            >
+              Close
+            </button>
+          </div>
         </div>
       </motion.div>
     </motion.div>
@@ -1459,19 +1908,22 @@ const AlertDetailModal: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// Component
+// Listing
 // ---------------------------------------------------------------------------
 
-const AlertListing: React.FC = () => {
+const AlertListing: React.FC<AlertListingProps> = ({ currentUserId }) => {
   const { theme } = useTheme();
   const { getMenuId } = useMenuIds();
   const dark = theme === 'dark';
+  const t = tokens(dark);
   const ALERTS_MENU_ID = getMenuId(MENU_KEY);
+  const { addNotification } = useNotifications();
+  useTick(60000);
 
   const [alerts, setAlerts] = useState<FraudAlert[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [usingFallback, setUsingFallback] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -1481,29 +1933,36 @@ const AlertListing: React.FC = () => {
   const [sortBy, setSortBy] = useState<SortField>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('DESC');
 
-  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
-  const debouncedSearch = useDebouncedValue(filters.search, 400);
-  const debouncedUsername = useDebouncedValue(filters.username, 400);
-  const debouncedLocation = useDebouncedValue(filters.location, 400);
-  const searchPending = filters.search !== debouncedSearch;
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 400);
+  const searchPending = search !== debouncedSearch;
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [filters, setFilters] = useState<FilterState>(defaultFilters);
+
+  const [density, setDensity] = useState<Density>(() => {
+    try {
+      return localStorage.getItem(DENSITY_STORAGE_KEY) === 'compact'
+        ? 'compact'
+        : 'comfortable';
+    } catch {
+      return 'comfortable';
+    }
+  });
+  const compact = density === 'compact';
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
   const [selectedAlert, setSelectedAlert] = useState<FraudAlert | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [wipCount, setWipCount] = useState<number | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
-  const { addNotification } = useNotifications();
+  const requestId = useRef(0);
 
-  // ---- Dynamic filter facets, built from whatever the API actually returns ----
-  interface FilterOptionsResponse {
-    statuses: string[];
-    priorities: string[];
-    channels: string[];
-    rules: { id: string; description: string }[];
-  }
   const [filterOptions, setFilterOptions] = useState<FilterOptionsResponse>({
     statuses: [],
     priorities: [],
@@ -1512,94 +1971,90 @@ const AlertListing: React.FC = () => {
   });
   const [filtersLoading, setFiltersLoading] = useState(false);
 
-  // Close export menu on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (exportRef.current && !exportRef.current.contains(e.target as Node))
-        setExportOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+  const canUseWip = !!currentUserId;
+
+  // ---- Filter mutation helpers (always reset to page 1) --------------------
+  const patchFilters = useCallback((patch: Partial<FilterState>) => {
+    setFilters((f) => ({ ...f, ...patch }));
+    setPage(1);
   }, []);
 
-  // Esc closes the modal
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && selectedAlert) setSelectedAlert(null);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [selectedAlert]);
+  const clearAll = () => {
+    setFilters(defaultFilters());
+    setSearch('');
+    setPage(1);
+  };
 
+  // ---- Data ----------------------------------------------------------------
   const fetchAlerts = useCallback(
     async (silent = false) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
+      const id = ++requestId.current;
 
       if (!silent) setLoading(true);
       setError(null);
 
-      const params: Record<string, string | number | boolean> = {
-        page,
-        pageSize,
-        sortBy,
-        sortOrder,
-      };
-      if (debouncedSearch) params.search = debouncedSearch;
-      if (filters.status) params.status = filters.status;
-      if (filters.priority) params.priority = filters.priority;
-      if (filters.channel) params.channel = filters.channel;
-      if (filters.ruleId) params.rule_id = filters.ruleId;
-      if (debouncedLocation) params.location = debouncedLocation;
-      if (debouncedUsername) params.username = debouncedUsername;
-      if (filters.closed !== 'all')
-        params.is_closed = filters.closed === 'true';
-      if (filters.fraud !== 'all') params.is_fraud = filters.fraud === 'true';
-      //   if (filters.fromDate) params.fromDate = filters.fromDate;
-      //   if (filters.toDate) params.toDate = filters.toDate;
-
       try {
         const response = await apiClient.get<AlertsResponse>(ALERTS_ENDPOINT, {
-          params,
+          params: {
+            page,
+            pageSize,
+            sortBy,
+            sortOrder,
+            ...buildFilterParams(filters, debouncedSearch, currentUserId),
+          },
           signal: controller.signal,
         });
+        if (id !== requestId.current) return; // a newer request superseded this one
         const payload = response.data;
         setAlerts(payload.data);
         setTotalRecords(payload.totalRecords);
         setTotalPages(payload.totalPages);
-        setUsingFallback(false);
+        setLastUpdated(new Date());
+        // Result set shrank (e.g. alerts closed) — don't strand the user on an empty page.
+        if (payload.totalPages > 0 && page > payload.totalPages)
+          setPage(payload.totalPages);
       } catch (err: any) {
-        if (err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+        if (
+          err?.name === 'CanceledError' ||
+          err?.name === 'AbortError' ||
+          err?.code === 'ERR_CANCELED'
+        )
+          return;
+        if (id !== requestId.current) return;
         console.error('Error fetching fraud alerts:', err);
-        setError(
-          'Could not reach the alerts service. Showing sample data for design review.'
-        );
-        setUsingFallback(true);
-        setTotalPages(1);
+        setError('Could not reach the alerts service.');
+        // Never leave stale rows up as if they were current after a manual load;
+        // on a silent background refresh keep what's on screen and flag the error.
+        if (!silent) {
+          setAlerts([]);
+          setTotalRecords(0);
+          setTotalPages(1);
+        }
       } finally {
-        setLoading(false);
+        if (id === requestId.current) setLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      page,
-      pageSize,
-      sortBy,
-      sortOrder,
-      debouncedSearch,
-      debouncedUsername,
-      debouncedLocation,
-      filters.status,
-      filters.priority,
-      filters.channel,
-      filters.ruleId,
-      filters.closed,
-      filters.fraud,
-      filters.fromDate,
-      filters.toDate,
-    ]
+    [page, pageSize, sortBy, sortOrder, filters, debouncedSearch, currentUserId]
   );
+
+  const fetchWipCount = useCallback(async () => {
+    if (!currentUserId) {
+      setWipCount(null);
+      return;
+    }
+    try {
+      const res = await apiClient.get<{ count: number }>(
+        ALERTS_WIP_COUNT_ENDPOINT,
+        { params: { user_id: currentUserId } }
+      );
+      setWipCount(typeof res.data?.count === 'number' ? res.data.count : null);
+    } catch {
+      setWipCount(null); // badge is a convenience; fail silently
+    }
+  }, [currentUserId]);
 
   const fetchFilterOptions = useCallback(async () => {
     setFiltersLoading(true);
@@ -1610,38 +2065,28 @@ const AlertListing: React.FC = () => {
       setFilterOptions(response.data);
     } catch (err) {
       console.error('Error fetching filter options:', err);
-      // Set default/fallback options or keep empty arrays
       setFilterOptions({
         statuses: [],
         priorities: [],
         channels: [],
         rules: [],
       });
-      // Optionally show a notification
       addNotification?.('Could not load filter options', 'warning');
     } finally {
       setFiltersLoading(false);
     }
   }, [addNotification]);
 
-  const statusOptions = useMemo(
-    () => [...filterOptions.statuses].sort(),
-    [filterOptions.statuses]
-  );
-  const priorityOptions = useMemo(
-    () => [...filterOptions.priorities].sort(),
-    [filterOptions.priorities]
-  );
-  const channelOptions = useMemo(
-    () => [...filterOptions.channels].sort(),
-    [filterOptions.channels]
-  );
-  const ruleOptions = useMemo(
-    () =>
-      [...filterOptions.rules]
+  const drawerOptions = useMemo(
+    () => ({
+      statuses: [...filterOptions.statuses].sort(),
+      priorities: [...filterOptions.priorities].sort(),
+      channels: [...filterOptions.channels].sort(),
+      rules: [...filterOptions.rules]
         .map((r) => [r.id, r.description] as [string, string])
-        .sort(),
-    [filterOptions.rules]
+        .sort((a, b) => a[0].localeCompare(b[0])),
+    }),
+    [filterOptions]
   );
 
   useEffect(() => {
@@ -1653,32 +2098,57 @@ const AlertListing: React.FC = () => {
     fetchFilterOptions();
   }, [fetchFilterOptions]);
 
-  // Reset to page 1 whenever a filter (not page/pageSize) changes
+  useEffect(() => {
+    fetchWipCount();
+  }, [fetchWipCount]);
+
+  // A new search term always starts from page 1.
   useEffect(() => {
     setPage(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    debouncedSearch,
-    debouncedUsername,
-    debouncedLocation,
-    filters.status,
-    filters.priority,
-    filters.channel,
-    filters.ruleId,
-    filters.closed,
-    filters.fraud,
-    filters.fromDate,
-    filters.toDate,
-    pageSize,
-  ]);
+  }, [debouncedSearch]);
 
-  // Auto-refresh (silent, keeps scroll position)
+  // Page size change also resets to page 1.
+  const changePageSize = (n: number) => {
+    setPageSize(n);
+    setPage(1);
+  };
+
+  // Auto-refresh (silent; paused while the tab is hidden)
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(() => fetchAlerts(true), AUTO_REFRESH_MS);
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      fetchAlerts(true);
+      fetchWipCount();
+    }, AUTO_REFRESH_MS);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchAlerts]);
+  }, [autoRefresh, fetchAlerts, fetchWipCount]);
 
+  // Close export menu on outside click
+  useEffect(() => {
+    if (!exportOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node))
+        setExportOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [exportOpen]);
+
+  // "/" focuses search (when not already typing somewhere)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== '/' || selectedAlert || drawerOpen) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [selectedAlert, drawerOpen]);
+
+  // ---- Actions ---------------------------------------------------------------
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
       setSortOrder((o) => (o === 'ASC' ? 'DESC' : 'ASC'));
@@ -1686,65 +2156,121 @@ const AlertListing: React.FC = () => {
       setSortBy(field);
       setSortOrder('DESC');
     }
+    setPage(1);
   };
 
-  const clearFilters = () => setFilters(DEFAULT_FILTERS);
+  const openAlert = (a: FraudAlert) => {
+    // Only one overlay at a time — opening a record dismisses the filter drawer
+    // and any open menu so they can never stack on top of each other.
+    setDrawerOpen(false);
+    setExportOpen(false);
+    setSelectedAlert(a);
+  };
 
-  const activeFilterCount = useMemo(() => {
-    let n = 0;
-    if (filters.channel) n++;
-    if (filters.ruleId) n++;
-    if (filters.location) n++;
-    if (filters.username) n++;
-    if (filters.closed !== 'all') n++;
-    if (filters.fraud !== 'all') n++;
-    return n;
+  const toggleDensity = (d: Density) => {
+    setDensity(d);
+    try {
+      localStorage.setItem(DENSITY_STORAGE_KEY, d);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleServerExport = async () => {
+    setExportOpen(false);
+    setExporting(true);
+    try {
+      const res = await apiClient.get(ALERTS_EXPORT_ENDPOINT, {
+        params: {
+          sortBy,
+          sortOrder,
+          format: 'csv',
+          ...buildFilterParams(filters, debouncedSearch, currentUserId),
+        },
+        responseType: 'blob',
+      });
+      downloadBlob(res.data, `fraud-alerts-all-${Date.now()}.csv`, 'text/csv');
+    } catch (err) {
+      console.error('Export failed:', err);
+      addNotification?.('Export failed. Please try again.', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // ---- Derived view state ----------------------------------------------------
+  const rows = useMemo(
+    () => alerts.map((a) => ({ a, summary: parseComment(a.comments).summary })),
+    [alerts]
+  );
+
+  const selectedIndex = selectedAlert
+    ? alerts.findIndex((a) => a.alert_id === selectedAlert.alert_id)
+    : -1;
+
+  const chips = useMemo(() => {
+    const c: { key: string; label: string; clear: Partial<FilterState> }[] = [];
+    if (filters.priority)
+      c.push({
+        key: 'priority',
+        label: `Priority: ${filters.priority}`,
+        clear: { priority: '' },
+      });
+    if (filters.status)
+      c.push({
+        key: 'status',
+        label: `Status: ${filters.status}`,
+        clear: { status: '' },
+      });
+    if (filters.ruleId)
+      c.push({
+        key: 'rule',
+        label: `Rule: ${filters.ruleId}`,
+        clear: { ruleId: '' },
+      });
+    if (filters.channel)
+      c.push({
+        key: 'channel',
+        label: `Channel: ${filters.channel}`,
+        clear: { channel: '' },
+      });
+    if (filters.location)
+      c.push({
+        key: 'location',
+        label: `Branch: ${filters.location}`,
+        clear: { location: '' },
+      });
+    if (filters.username)
+      c.push({
+        key: 'username',
+        label: `User: ${filters.username}`,
+        clear: { username: '' },
+      });
+    if (filters.closed !== 'all')
+      c.push({
+        key: 'closed',
+        label: filters.closed === 'true' ? 'Closed only' : 'Open only',
+        clear: { closed: 'all' },
+      });
+    if (filters.fraud !== 'all')
+      c.push({
+        key: 'fraud',
+        label: filters.fraud === 'true' ? 'Fraud confirmed' : 'Not fraud',
+        clear: { fraud: 'all' },
+      });
+    return c;
   }, [filters]);
 
-  const panelBase = dark
-    ? 'bg-white/5 border-white/20'
-    : 'bg-white border-gray-200';
-  const inputBase = dark
-    ? 'bg-white/10 border border-white/20 text-white placeholder-white/40'
-    : 'bg-white border border-gray-300 text-gray-900 placeholder-gray-400';
-  const labelBase = dark ? 'text-white/70' : 'text-gray-600';
-
-  const SortHeader: React.FC<{
-    field: SortField;
-    label: string;
-    className?: string;
-  }> = ({ field, label, className }) => (
-    <th
-      onClick={() => handleSort(field)}
-      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide cursor-pointer select-none whitespace-nowrap ${
-        dark
-          ? 'text-white/70 hover:text-white'
-          : 'text-gray-500 hover:text-gray-900'
-      } ${className ?? ''}`}
-    >
-      <span className="inline-flex items-center gap-1">
-        {label}
-        {sortBy === field ? (
-          sortOrder === 'ASC' ? (
-            <ArrowUp className="w-3 h-3" />
-          ) : (
-            <ArrowDown className="w-3 h-3" />
-          )
-        ) : (
-          <ArrowUpDown className="w-3 h-3 opacity-30" />
-        )}
-      </span>
-    </th>
-  );
+  const pad = compact ? 'py-1.5' : 'py-3';
+  const anyFilterActive =
+    chips.length > 0 || !!search || filters.view !== 'all';
 
   return (
     <PermissionGuard
       menuId={ALERTS_MENU_ID}
       action="view"
       fallback={
-        <div
-          className={`text-center py-20 ${dark ? 'text-white' : 'text-gray-900'}`}
-        >
+        <div className={`text-center py-20 ${t.text}`}>
           <Shield className="w-16 h-16 mx-auto mb-4 text-red-400" />
           <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
           <p className="text-gray-500">
@@ -1753,18 +2279,16 @@ const AlertListing: React.FC = () => {
         </div>
       }
     >
-      <div className="space-y-6">
+      <div className="space-y-3">
         {/* Header */}
-        <div className="relative z-30 flex flex-wrap justify-between items-center gap-4">
+        <div className="flex flex-wrap justify-between items-center gap-3">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-gradient-to-br from-rose-500 to-red-600 rounded-xl shadow-lg">
-              <ShieldAlert className="w-6 h-6 text-white" />
+            <div className="p-2.5 bg-gradient-to-br from-rose-500 to-red-600 rounded-xl shadow-lg">
+              <ShieldAlert className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2
-                  className={`text-2xl font-bold ${dark ? 'text-white' : 'text-gray-900'}`}
-                >
+                <h2 className={`text-xl font-bold leading-tight ${t.text}`}>
                   Fraud &amp; Risk Alerts
                 </h2>
                 {autoRefresh && (
@@ -1777,55 +2301,61 @@ const AlertListing: React.FC = () => {
                   </span>
                 )}
               </div>
-              <p className={dark ? 'text-rose-200/70' : 'text-rose-600'}>
-                {totalRecords.toLocaleString()} alerts · search, filter and
-                investigate flagged activity
+              <p
+                className={`text-xs ${dark ? 'text-rose-200/70' : 'text-rose-600'}`}
+              >
+                {totalRecords.toLocaleString()}{' '}
+                {filters.view === 'wip' ? 'items in your queue' : 'alerts'}
+                {lastUpdated && (
+                  <span className={t.faint}>
+                    {' '}
+                    · updated{' '}
+                    {lastUpdated.toLocaleTimeString(undefined, {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                )}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+          <div className="flex items-center gap-2">
+            <button
               onClick={() => setAutoRefresh((v) => !v)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
+              aria-pressed={autoRefresh}
+              title={
+                autoRefresh ? 'Pause auto-refresh' : 'Auto-refresh every 30s'
+              }
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${
                 autoRefresh
                   ? dark
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                     : 'bg-emerald-100 text-emerald-700 border border-emerald-300'
-                  : dark
-                    ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
-                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300'
+                  : t.btn
               }`}
-              title={
-                autoRefresh ? 'Pause auto-refresh' : 'Auto-refresh every 30s'
-              }
             >
               {autoRefresh ? (
-                <Pause className="w-4 h-4" />
+                <Pause className="w-3.5 h-3.5" />
               ) : (
-                <Play className="w-4 h-4" />
+                <Play className="w-3.5 h-3.5" />
               )}
-              {autoRefresh ? 'Live' : 'Auto-refresh'}
-            </motion.button>
+              {autoRefresh ? 'Live' : 'Auto'}
+            </button>
 
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => fetchAlerts()}
+            <button
+              onClick={() => {
+                fetchAlerts();
+                fetchWipCount();
+              }}
               disabled={loading}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
-                dark
-                  ? 'bg-white/10 hover:bg-white/20 text-white border border-white/20'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300'
-              }`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${t.btn}`}
             >
               <RefreshCw
-                className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}
+                className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`}
               />
               Refresh
-            </motion.button>
+            </button>
 
             <PermissionGuard
               menuId={ALERTS_MENU_ID}
@@ -1838,69 +2368,75 @@ const AlertListing: React.FC = () => {
                       'warning'
                     )
                   }
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl opacity-50 ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg opacity-50 ${
                     dark
                       ? 'bg-green-500/20 text-green-300 border border-green-500/30'
                       : 'bg-green-100 text-green-700 border border-green-300'
                   }`}
                 >
-                  <Download className="w-4 h-4" />
+                  <Download className="w-3.5 h-3.5" />
                   Export
                 </button>
               }
             >
               <div className="relative" ref={exportRef}>
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                <button
                   onClick={() => setExportOpen((v) => !v)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
+                  disabled={exporting}
+                  aria-haspopup="menu"
+                  aria-expanded={exportOpen}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${
                     dark
                       ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'
                       : 'bg-green-100 hover:bg-green-200 text-green-700 border border-green-300'
                   }`}
                 >
-                  <Download className="w-4 h-4" />
+                  {exporting ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5" />
+                  )}
                   Export
                   <ChevronDown
                     className={`w-3.5 h-3.5 transition-transform ${exportOpen ? 'rotate-180' : ''}`}
                   />
-                </motion.button>
+                </button>
                 <AnimatePresence>
                   {exportOpen && (
                     <motion.div
+                      role="menu"
                       initial={{ opacity: 0, y: -6 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -6 }}
-                      className={`absolute right-0 mt-2 w-48 rounded-xl border shadow-2xl z-20 overflow-hidden ${
-                        dark
-                          ? 'bg-slate-900 border-white/20'
-                          : 'bg-white border-gray-200'
-                      }`}
+                      className={`absolute right-0 mt-2 w-64 rounded-xl border shadow-2xl overflow-hidden ${Z_POPOVER} ${t.surface}`}
                     >
                       <button
+                        role="menuitem"
                         onClick={() => {
                           exportCSV(alerts);
                           setExportOpen(false);
                         }}
                         className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 ${dark ? 'text-white hover:bg-white/10' : 'text-gray-700 hover:bg-gray-50'}`}
                       >
-                        <FileText className="w-4 h-4" /> Export current page
-                        (CSV)
+                        <FileText className="w-4 h-4" /> Current page (CSV)
                       </button>
                       <button
+                        role="menuitem"
                         onClick={() => {
                           exportJSON(alerts);
                           setExportOpen(false);
                         }}
-                        className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 border-t ${
-                          dark
-                            ? 'text-white hover:bg-white/10 border-white/10'
-                            : 'text-gray-700 hover:bg-gray-50 border-gray-100'
-                        }`}
+                        className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 border-t ${t.line} ${dark ? 'text-white hover:bg-white/10' : 'text-gray-700 hover:bg-gray-50'}`}
                       >
-                        <Layers className="w-4 h-4" /> Export current page
-                        (JSON)
+                        <Layers className="w-4 h-4" /> Current page (JSON)
+                      </button>
+                      <button
+                        role="menuitem"
+                        onClick={handleServerExport}
+                        className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 border-t ${t.line} ${dark ? 'text-white hover:bg-white/10' : 'text-gray-700 hover:bg-gray-50'}`}
+                      >
+                        <Download className="w-4 h-4" /> All{' '}
+                        {totalRecords.toLocaleString()} matching (CSV)
                       </button>
                     </motion.div>
                   )}
@@ -1910,401 +2446,369 @@ const AlertListing: React.FC = () => {
           </div>
         </div>
 
-        {/* Fallback banner */}
-        {usingFallback && (
+        {/* Error banner */}
+        {error && (
           <div
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm ${
+            role="alert"
+            className={`flex items-center gap-3 px-4 py-2.5 rounded-xl border text-sm ${
               dark
                 ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
                 : 'bg-amber-50 border-amber-300 text-amber-800'
             }`}
           >
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
+            <span className="flex-1">{error}</span>
+            <button
+              onClick={() => fetchAlerts()}
+              className="font-semibold underline underline-offset-2"
+            >
+              Retry
+            </button>
           </div>
         )}
 
-        {/* Filters */}
-        <div
-          className={`relative z-20 rounded-2xl border p-6 backdrop-blur-xl ${panelBase}`}
-        >
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="flex-1 min-w-[220px]">
-              <label className={`block text-sm font-medium mb-2 ${labelBase}`}>
-                Search
-              </label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={filters.search}
-                  onChange={(e) =>
-                    setFilters((f) => ({ ...f, search: e.target.value }))
-                  }
-                  placeholder="Search by comments, cashier, rule…"
-                  className={`w-full pl-10 pr-9 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                />
-                {searchPending && (
-                  <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin" />
-                )}
-              </div>
+        {/* Toolbar — one compact row. Nothing in here uses a z-index that could
+            compete with the portaled overlays. */}
+        <div className={`rounded-xl border p-3 ${t.panel}`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                ref={searchRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search alerts"
+                placeholder="Search comments, cashier, rule…   ( / )"
+                className={`w-full pl-9 pr-9 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 ${t.input}`}
+              />
+              {searchPending && (
+                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin" />
+              )}
             </div>
 
             <DateRangeField
               fromDate={filters.fromDate}
               toDate={filters.toDate}
               dark={dark}
+              disabled={filters.view === 'wip'}
               onChange={(from, to) =>
-                setFilters((f) => ({ ...f, fromDate: from, toDate: to }))
+                patchFilters({ fromDate: from, toDate: to })
               }
             />
 
-            <div className="w-44">
-              <label className={`block text-sm font-medium mb-2 ${labelBase}`}>
-                Priority
-              </label>
-              <select
-                value={filters.priority}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, priority: e.target.value }))
-                }
-                className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                disabled={filtersLoading}
+            {/* View switch: All alerts / My WIP */}
+            <div
+              role="tablist"
+              aria-label="Alert view"
+              className={`inline-flex rounded-lg p-0.5 ${dark ? 'bg-white/10' : 'bg-gray-100'}`}
+            >
+              <button
+                role="tab"
+                aria-selected={filters.view === 'all'}
+                onClick={() => patchFilters({ view: 'all' })}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  filters.view === 'all'
+                    ? dark
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white text-gray-900 shadow-sm'
+                    : dark
+                      ? 'text-white/60 hover:text-white'
+                      : 'text-gray-500 hover:text-gray-800'
+                }`}
               >
-                <option value="">
-                  {filtersLoading ? 'Loading...' : 'All statuses'}
-                </option>
-                {priorityOptions.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="w-44">
-              <label className={`block text-sm font-medium mb-2 ${labelBase}`}>
-                Status
-              </label>
-              <select
-                value={filters.status}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, status: e.target.value }))
+                All alerts
+              </button>
+              <button
+                role="tab"
+                aria-selected={filters.view === 'wip'}
+                disabled={!canUseWip}
+                onClick={() => patchFilters({ view: 'wip' })}
+                title={
+                  canUseWip
+                    ? 'Alerts you are currently working on'
+                    : 'Your user could not be resolved'
                 }
-                className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                disabled={filtersLoading}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  filters.view === 'wip'
+                    ? dark
+                      ? 'bg-rose-500/25 text-rose-200'
+                      : 'bg-white text-rose-700 shadow-sm'
+                    : dark
+                      ? 'text-white/60 hover:text-white'
+                      : 'text-gray-500 hover:text-gray-800'
+                }`}
               >
-                <option value="">
-                  {filtersLoading ? 'Loading...' : 'All statuses'}
-                </option>
-                {statusOptions.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="w-56">
-              <label className={`block text-sm font-medium mb-2 ${labelBase}`}>
-                Sort by
-              </label>
-              <div className="flex gap-2">
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as SortField)}
-                  className={`flex-1 px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                >
-                  {SORT_FIELDS.map((s) => (
-                    <option key={s.key} value={s.key}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() =>
-                    setSortOrder((o) => (o === 'ASC' ? 'DESC' : 'ASC'))
-                  }
-                  className={`px-3 rounded-lg border ${dark ? 'bg-white/10 border-white/20 text-white' : 'bg-white border-gray-300 text-gray-700'}`}
-                  title={sortOrder === 'ASC' ? 'Ascending' : 'Descending'}
-                >
-                  {sortOrder === 'ASC' ? (
-                    <ArrowUp className="w-4 h-4" />
-                  ) : (
-                    <ArrowDown className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
+                <ClipboardList className="w-3.5 h-3.5" />
+                My WIP
+                {wipCount !== null && (
+                  <span
+                    className={`px-1.5 rounded-full text-[11px] font-semibold ${
+                      wipCount > 0
+                        ? 'bg-rose-500 text-white'
+                        : dark
+                          ? 'bg-white/10 text-white/50'
+                          : 'bg-gray-200 text-gray-500'
+                    }`}
+                  >
+                    {wipCount > 99 ? '99+' : wipCount}
+                  </span>
+                )}
+              </button>
             </div>
 
             <button
-              onClick={() => setAdvancedOpen((v) => !v)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
-                dark
-                  ? 'bg-white/10 hover:bg-white/20 border-white/20 text-white'
-                  : 'bg-gray-50 hover:bg-gray-100 border-gray-300 text-gray-700'
-              }`}
+              onClick={() => setDrawerOpen(true)}
+              aria-haspopup="dialog"
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${t.btn}`}
             >
               <SlidersHorizontal className="w-4 h-4" />
-              Advanced
-              {activeFilterCount > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 rounded-full text-xs bg-rose-500 text-white">
-                  {activeFilterCount}
+              Filters
+              {chips.length > 0 && (
+                <span className="px-1.5 rounded-full text-xs bg-rose-500 text-white">
+                  {chips.length}
                 </span>
               )}
-              <ChevronDown
-                className={`w-3.5 h-3.5 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
-              />
             </button>
 
-            <button
-              onClick={clearFilters}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                dark
-                  ? 'bg-white/10 hover:bg-white/20 text-white'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-              }`}
-            >
-              <Filter className="w-4 h-4" />
-              Clear
-            </button>
+            {anyFilterActive && (
+              <button
+                onClick={clearAll}
+                className={`px-2 py-2 text-sm font-medium ${dark ? 'text-white/60 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}
+              >
+                Clear all
+              </button>
+            )}
           </div>
 
-          <AnimatePresence>
-            {advancedOpen && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden"
-              >
-                <div
-                  className={`mt-5 pt-5 border-t grid grid-cols-1 md:grid-cols-3 gap-4 ${dark ? 'border-white/10' : 'border-gray-100'}`}
+          {chips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+              {chips.map((c) => (
+                <span
+                  key={c.key}
+                  className={`inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full border text-xs font-medium ${
+                    dark
+                      ? 'bg-white/10 border-white/20 text-white/80'
+                      : 'bg-gray-100 border-gray-200 text-gray-700'
+                  }`}
                 >
-                  <div>
-                    <label
-                      className={`block text-sm font-medium mb-2 ${labelBase}`}
-                    >
-                      Rule
-                    </label>
-                    <select
-                      value={filters.ruleId}
-                      onChange={(e) =>
-                        setFilters((f) => ({ ...f, ruleId: e.target.value }))
-                      }
-                      className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                    >
-                      <option value="">All rules</option>
-                      {ruleOptions.map(([id, desc]) => (
-                        <option key={id} value={id}>
-                          {id} — {desc}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      className={`block text-sm font-medium mb-2 ${labelBase}`}
-                    >
-                      Channel
-                    </label>
-                    <select
-                      value={filters.channel}
-                      onChange={(e) =>
-                        setFilters((f) => ({ ...f, channel: e.target.value }))
-                      }
-                      className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                    >
-                      <option value="">All channels</option>
-                      {channelOptions.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      className={`block text-sm font-medium mb-2 ${labelBase}`}
-                    >
-                      Branch / Location
-                    </label>
-                    <input
-                      type="text"
-                      value={filters.location}
-                      onChange={(e) =>
-                        setFilters((f) => ({ ...f, location: e.target.value }))
-                      }
-                      placeholder="e.g. HEAD OFFICE"
-                      className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      className={`block text-sm font-medium mb-2 ${labelBase}`}
-                    >
-                      Cashier / User
-                    </label>
-                    <input
-                      type="text"
-                      value={filters.username}
-                      onChange={(e) =>
-                        setFilters((f) => ({ ...f, username: e.target.value }))
-                      }
-                      placeholder="e.g. SADIQUEM"
-                      className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      className={`block text-sm font-medium mb-2 ${labelBase}`}
-                    >
-                      Closed status
-                    </label>
-                    <select
-                      value={filters.closed}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          closed: e.target.value as TriState,
-                        }))
-                      }
-                      className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                    >
-                      <option value="all">All alerts</option>
-                      <option value="false">Open only</option>
-                      <option value="true">Closed only</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      className={`block text-sm font-medium mb-2 ${labelBase}`}
-                    >
-                      Fraud flag
-                    </label>
-                    <select
-                      value={filters.fraud}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          fraud: e.target.value as TriState,
-                        }))
-                      }
-                      className={`w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 ${inputBase}`}
-                    >
-                      <option value="all">All alerts</option>
-                      <option value="true">Fraud confirmed</option>
-                      <option value="false">Not fraud</option>
-                    </select>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                  {c.label}
+                  <button
+                    onClick={() => patchFilters(c.clear)}
+                    aria-label={`Remove filter ${c.label}`}
+                    className={`p-0.5 rounded-full ${dark ? 'hover:bg-white/20' : 'hover:bg-gray-200'}`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Table */}
-        <div
-          className={`rounded-2xl border backdrop-blur-xl overflow-hidden ${panelBase}`}
-        >
-          {loading ? (
-            <div className="p-6 space-y-3">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <div
-                  key={i}
-                  className={`h-14 rounded-xl animate-pulse ${dark ? 'bg-white/5' : 'bg-gray-100'}`}
-                  style={{ animationDelay: `${i * 60}ms` }}
+        {/* Results */}
+        <div className={`rounded-xl border overflow-hidden ${t.panel}`}>
+          {/* Results bar: sort + density */}
+          <div
+            className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b ${t.line}`}
+          >
+            <div className={`text-xs ${t.muted}`}>
+              {filters.view === 'wip' ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5" />
+                  Showing your work-in-progress alerts across all dates
+                </span>
+              ) : (
+                <>
+                  Showing {rows.length.toLocaleString()} of{' '}
+                  {totalRecords.toLocaleString()}
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <label className={`text-xs ${t.muted}`} htmlFor="alerts-sort">
+                Sort
+              </label>
+              <select
+                id="alerts-sort"
+                value={sortBy}
+                onChange={(e) => {
+                  setSortBy(e.target.value as SortField);
+                  setPage(1);
+                }}
+                className={`px-2 py-1 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-rose-500 ${t.input}`}
+              >
+                {SORT_FIELDS.map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  setSortOrder((o) => (o === 'ASC' ? 'DESC' : 'ASC'));
+                  setPage(1);
+                }}
+                aria-label={sortOrder === 'ASC' ? 'Ascending' : 'Descending'}
+                title={sortOrder === 'ASC' ? 'Ascending' : 'Descending'}
+                className={`p-1.5 rounded-lg ${t.btn}`}
+              >
+                {sortOrder === 'ASC' ? (
+                  <ArrowUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ArrowDown className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <div className="w-44">
+                <Segmented<Density>
+                  dark={dark}
+                  ariaLabel="Row density"
+                  value={density}
+                  onChange={toggleDensity}
+                  options={[
+                    { value: 'comfortable', label: 'Comfortable' },
+                    { value: 'compact', label: 'Compact' },
+                  ]}
                 />
-              ))}
+              </div>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="p-4">
+              <Skeleton
+                rows={compact ? 12 : 8}
+                h={compact ? 'h-9' : 'h-14'}
+                dark={dark}
+              />
+            </div>
+          ) : error && alerts.length === 0 ? (
+            <div className="flex items-center justify-center h-64">
+              <div className="text-center">
+                <AlertTriangle className="w-12 h-12 text-amber-400 mx-auto mb-3" />
+                <p className={`text-lg font-medium ${t.text}`}>
+                  Alerts unavailable
+                </p>
+                <p className={`text-sm mb-3 ${t.muted}`}>
+                  We couldn't load alerts right now.
+                </p>
+                <button
+                  onClick={() => fetchAlerts()}
+                  className="px-4 py-1.5 rounded-lg text-sm font-semibold bg-rose-600 hover:bg-rose-500 text-white"
+                >
+                  Retry
+                </button>
+              </div>
             </div>
           ) : alerts.length === 0 ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
-                <ShieldCheck className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p
-                  className={`text-lg font-medium ${dark ? 'text-white' : 'text-gray-900'}`}
-                >
-                  No alerts found
+                <ShieldCheck className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                <p className={`text-lg font-medium ${t.text}`}>
+                  {filters.view === 'wip'
+                    ? 'Your queue is clear'
+                    : 'No alerts found'}
                 </p>
-                <p className={`text-sm ${labelBase}`}>
-                  Try widening the date range or adjusting your filters
+                <p className={`text-sm mb-3 ${t.muted}`}>
+                  {filters.view === 'wip'
+                    ? 'You have no work-in-progress alerts.'
+                    : 'Try widening the date range or adjusting your filters.'}
                 </p>
+                {filters.view === 'wip' && (
+                  <button
+                    onClick={() => patchFilters({ view: 'all' })}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium ${t.btn}`}
+                  >
+                    View all alerts
+                  </button>
+                )}
               </div>
             </div>
           ) : (
-            <div className="overflow-auto max-h-[65vh]">
+            <div className="overflow-auto max-h-[calc(100vh-330px)] min-h-[320px]">
               <table className="w-full">
                 <thead
                   className={`sticky top-0 z-10 border-b backdrop-blur-sm ${dark ? 'border-white/20 bg-slate-900/95' : 'border-gray-200 bg-gray-50/95'}`}
                 >
                   <tr>
-                    <SortHeader
+                    <SortTh
                       field="rule_priority"
                       label="Priority"
                       className="w-28"
+                      sortBy={sortBy}
+                      sortOrder={sortOrder}
+                      dark={dark}
+                      onSort={handleSort}
                     />
-                    <SortHeader
+                    <SortTh
                       field="rule_id"
-                      label="Rule"
-                      className="min-w-[200px]"
+                      label="Alert"
+                      sortBy={sortBy}
+                      sortOrder={sortOrder}
+                      dark={dark}
+                      onSort={handleSort}
                     />
-                    <th
-                      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide ${dark ? 'text-white/70' : 'text-gray-500'}`}
-                    >
-                      Alert Summary
-                    </th>
-                    <th
-                      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${dark ? 'text-white/70' : 'text-gray-500'}`}
-                    >
-                      Cashier
-                    </th>
-                    <SortHeader
+                    <SortTh
                       field="branch_name"
-                      label="Branch"
-                      className="whitespace-nowrap"
+                      label="Cashier · Branch"
+                      sortBy={sortBy}
+                      sortOrder={sortOrder}
+                      dark={dark}
+                      onSort={handleSort}
                     />
-                    <SortHeader
-                      field="channel"
-                      label="Channel"
-                      className="whitespace-nowrap"
-                    />
-                    <SortHeader
+                    <SortTh
                       field="status"
                       label="Status"
-                      className="whitespace-nowrap"
+                      sortBy={sortBy}
+                      sortOrder={sortOrder}
+                      dark={dark}
+                      onSort={handleSort}
                     />
-                    <SortHeader
+                    <SortTh
                       field="created_at"
                       label="Created"
-                      className="whitespace-nowrap"
+                      sortBy={sortBy}
+                      sortOrder={sortOrder}
+                      dark={dark}
+                      onSort={handleSort}
                     />
-                    <th className="w-10" />
+                    <th className="w-8" aria-label="Open" />
                   </tr>
                 </thead>
                 <tbody>
-                  {alerts.map((alert, index) => {
-                    const { summary } = parseComment(alert.comments);
+                  {rows.map(({ a, summary }, index) => {
+                    const isSelected = selectedAlert?.alert_id === a.alert_id;
                     return (
-                      <motion.tr
-                        key={`${alert.alert_id}-${alert.created_at_timestamp}-${index}`}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: Math.min(index, 20) * 0.015 }}
-                        onClick={() => setSelectedAlert(alert)}
-                        className={`border-b cursor-pointer transition-colors group ${
+                      <tr
+                        key={`${a.alert_id}-${a.created_at_timestamp}-${index}`}
+                        tabIndex={0}
+                        aria-label={`Open alert ${a.rule_id}`}
+                        onClick={() => openAlert(a)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            openAlert(a);
+                          }
+                        }}
+                        className={`border-b cursor-pointer transition-colors group focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-rose-500 ${
                           dark
                             ? 'border-white/10 hover:bg-white/5'
                             : 'border-gray-100 hover:bg-gray-50'
-                        } ${index % 2 === 1 ? (dark ? 'bg-white/[0.02]' : 'bg-gray-50/50') : ''}`}
+                        } ${
+                          isSelected
+                            ? dark
+                              ? 'bg-white/10'
+                              : 'bg-rose-50/60'
+                            : index % 2 === 1
+                              ? dark
+                                ? 'bg-white/[0.02]'
+                                : 'bg-gray-50/50'
+                              : ''
+                        }`}
                       >
                         <td
-                          className={`pl-4 pr-2 py-3 border-l-4 ${
-                            alert.is_fraud
+                          className={`pl-3 pr-2 ${pad} border-l-4 ${
+                            a.is_fraud
                               ? dark
                                 ? 'border-l-rose-500'
                                 : 'border-l-rose-400'
@@ -2312,87 +2816,109 @@ const AlertListing: React.FC = () => {
                           }`}
                         >
                           <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold ${priorityStyles(alert.rule_priority, dark)}`}
+                            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-semibold ${priorityStyles(a.rule_priority, dark)}`}
                           >
                             <span
-                              className={`w-1.5 h-1.5 rounded-full ${priorityDot(alert.rule_priority)}`}
+                              className={`w-1.5 h-1.5 rounded-full ${priorityDot(a.rule_priority)}`}
                             />
-                            {alert.rule_priority}
+                            {a.rule_priority}
                           </span>
                         </td>
-                        <td className="px-4 py-3">
-                          <div
-                            className={`text-sm font-mono font-semibold ${dark ? 'text-white' : 'text-gray-900'}`}
-                          >
-                            {alert.rule_id}
-                          </div>
-                          <div
-                            className={`text-xs truncate max-w-[220px] ${dark ? 'text-white/50' : 'text-gray-500'}`}
-                            title={alert.rule_description}
-                          >
-                            {alert.rule_description}
-                          </div>
-                        </td>
-                        <td
-                          className={`px-4 py-3 text-sm max-w-[280px] ${dark ? 'text-white/80' : 'text-gray-700'}`}
-                        >
-                          <span className="block truncate" title={summary}>
-                            {summary}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <User
-                              className={`w-3.5 h-3.5 shrink-0 ${dark ? 'text-white/40' : 'text-gray-400'}`}
-                            />
-                            <div>
-                              <div
-                                className={`text-sm ${dark ? 'text-white/90' : 'text-gray-800'}`}
-                              >
-                                {alert.cashier}
-                              </div>
-                              <div
-                                className={`text-xs truncate max-w-[140px] ${dark ? 'text-white/40' : 'text-gray-400'}`}
-                                title={alert.created_user_full_name}
-                              >
-                                {alert.created_user_full_name}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <Building2
-                              className={`w-3.5 h-3.5 shrink-0 ${dark ? 'text-white/40' : 'text-gray-400'}`}
-                            />
-                            <span
-                              className={`text-sm whitespace-nowrap ${dark ? 'text-white/80' : 'text-gray-700'}`}
-                            >
-                              {alert.branch_name}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`inline-block px-2 py-1 rounded-lg text-xs font-medium whitespace-nowrap ${
-                              dark
-                                ? 'bg-white/10 text-white/70'
-                                : 'bg-gray-100 text-gray-600'
-                            }`}
-                          >
-                            {alert.channel}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-col gap-1">
-                            <span
-                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-semibold w-fit ${statusStyles(alert.status, dark)}`}
-                            >
-                              {alert.status}
-                            </span>
-                            {alert.is_fraud && (
+
+                        <td className={`px-3 ${pad} max-w-[380px]`}>
+                          {compact ? (
+                            <div className="flex items-baseline gap-2 min-w-0">
                               <span
-                                className={`inline-flex items-center gap-1 text-[11px] font-semibold w-fit ${dark ? 'text-rose-300' : 'text-rose-600'}`}
+                                className={`text-sm font-mono font-semibold shrink-0 ${t.text}`}
+                              >
+                                {a.rule_id}
+                              </span>
+                              <span
+                                className={`text-sm truncate ${t.body}`}
+                                title={`${a.rule_description} — ${summary}`}
+                              >
+                                {summary}
+                              </span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-baseline gap-2 min-w-0">
+                                <span
+                                  className={`text-sm font-mono font-semibold shrink-0 ${t.text}`}
+                                >
+                                  {a.rule_id}
+                                </span>
+                                <span
+                                  className={`text-xs truncate ${t.muted}`}
+                                  title={a.rule_description}
+                                >
+                                  {a.rule_description}
+                                </span>
+                              </div>
+                              <div
+                                className={`text-sm truncate mt-0.5 ${t.body}`}
+                                title={summary}
+                              >
+                                {summary}
+                              </div>
+                            </>
+                          )}
+                        </td>
+
+                        <td className={`px-3 ${pad}`}>
+                          {compact ? (
+                            <div
+                              className={`text-sm whitespace-nowrap ${t.body}`}
+                            >
+                              {a.cashier}
+                              <span className={t.faint}>
+                                {' '}
+                                · {a.branch_name} · {a.channel}
+                              </span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-1.5">
+                                <User
+                                  className={`w-3.5 h-3.5 shrink-0 ${t.faint}`}
+                                />
+                                <span
+                                  className={`text-sm ${dark ? 'text-white/90' : 'text-gray-800'}`}
+                                >
+                                  {a.cashier}
+                                </span>
+                                <span
+                                  className={`inline-block px-1.5 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${
+                                    dark
+                                      ? 'bg-white/10 text-white/70'
+                                      : 'bg-gray-100 text-gray-600'
+                                  }`}
+                                >
+                                  {a.channel}
+                                </span>
+                              </div>
+                              <div
+                                className={`flex items-center gap-1.5 mt-0.5 text-xs ${t.faint}`}
+                              >
+                                <Building2 className="w-3 h-3 shrink-0" />
+                                <span className="whitespace-nowrap">
+                                  {a.branch_name}
+                                </span>
+                              </div>
+                            </>
+                          )}
+                        </td>
+
+                        <td className={`px-3 ${pad}`}>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full border text-xs font-semibold w-fit whitespace-nowrap ${statusStyles(a.status, dark)}`}
+                            >
+                              {a.status}
+                            </span>
+                            {a.is_fraud && (
+                              <span
+                                className={`inline-flex items-center gap-1 text-[11px] font-semibold ${dark ? 'text-rose-300' : 'text-rose-600'}`}
                               >
                                 <Flag className="w-3 h-3" />
                                 Fraud
@@ -2400,31 +2926,45 @@ const AlertListing: React.FC = () => {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <Clock
-                              className={`w-3.5 h-3.5 shrink-0 ${dark ? 'text-white/40' : 'text-gray-400'}`}
-                            />
-                            <div>
-                              <div
-                                className={`text-sm whitespace-nowrap ${dark ? 'text-white/90' : 'text-gray-800'}`}
-                              >
-                                {formatDate(alert.created_at_timestamp)}
-                              </div>
-                              <div
-                                className={`text-xs whitespace-nowrap ${dark ? 'text-white/40' : 'text-gray-400'}`}
-                              >
-                                {formatTime(alert.created_at_timestamp)}
+
+                        <td className={`px-3 ${pad}`}>
+                          {compact ? (
+                            <div
+                              className={`text-sm whitespace-nowrap ${t.body}`}
+                            >
+                              {formatDate(a.created_at_timestamp)}{' '}
+                              <span className={t.faint}>
+                                {formatTime(a.created_at_timestamp)}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <Clock
+                                className={`w-3.5 h-3.5 shrink-0 ${t.faint}`}
+                              />
+                              <div>
+                                <div
+                                  className={`text-sm whitespace-nowrap ${dark ? 'text-white/90' : 'text-gray-800'}`}
+                                >
+                                  {formatDate(a.created_at_timestamp)}{' '}
+                                  <span className={t.faint}>
+                                    {formatTime(a.created_at_timestamp)}
+                                  </span>
+                                </div>
+                                <div className={`text-xs ${t.faint}`}>
+                                  {timeAgo(a.created_at_timestamp)}
+                                </div>
                               </div>
                             </div>
-                          </div>
+                          )}
                         </td>
-                        <td className="px-2 py-3">
+
+                        <td className="px-2">
                           <ChevronRight
-                            className={`w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity ${dark ? 'text-white/40' : 'text-gray-400'}`}
+                            className={`w-4 h-4 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity ${t.faint}`}
                           />
                         </td>
-                      </motion.tr>
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -2435,34 +2975,36 @@ const AlertListing: React.FC = () => {
           {/* Pagination */}
           {!loading && alerts.length > 0 && (
             <div
-              className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t ${dark ? 'border-white/10' : 'border-gray-100'}`}
+              className={`flex flex-wrap items-center justify-between gap-3 px-3 py-2.5 border-t ${t.line}`}
             >
-              <div className={`text-sm ${labelBase}`}>
+              <div className={`text-sm ${t.muted}`}>
                 Page {page} of {Math.max(totalPages, 1)} ·{' '}
                 {totalRecords.toLocaleString()} records
               </div>
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-1.5">
-                  <span className={`text-sm ${labelBase}`}>Go to</span>
+                  <span className={`text-sm ${t.muted}`}>Go to</span>
                   <input
                     key={page}
                     type="number"
                     min={1}
                     max={totalPages}
                     defaultValue={page}
+                    aria-label="Go to page"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         const v = Number((e.target as HTMLInputElement).value);
                         if (v >= 1 && v <= totalPages) setPage(v);
                       }
                     }}
-                    className={`w-14 px-2 py-1.5 rounded-lg text-sm ${inputBase}`}
+                    className={`w-14 px-2 py-1 rounded-lg text-sm ${t.input}`}
                   />
                 </div>
                 <select
                   value={pageSize}
-                  onChange={(e) => setPageSize(Number(e.target.value))}
-                  className={`px-2 py-1.5 rounded-lg text-sm ${inputBase}`}
+                  onChange={(e) => changePageSize(Number(e.target.value))}
+                  aria-label="Rows per page"
+                  className={`px-2 py-1 rounded-lg text-sm ${t.input}`}
                 >
                   {PAGE_SIZE_OPTIONS.map((n) => (
                     <option key={n} value={n}>
@@ -2474,6 +3016,7 @@ const AlertListing: React.FC = () => {
                   <button
                     disabled={page <= 1}
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    aria-label="Previous page"
                     className={`p-1.5 rounded-lg disabled:opacity-30 ${dark ? 'hover:bg-white/10 text-white' : 'hover:bg-gray-100 text-gray-700'}`}
                   >
                     <ChevronLeft className="w-4 h-4" />
@@ -2481,6 +3024,7 @@ const AlertListing: React.FC = () => {
                   <button
                     disabled={page >= totalPages}
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    aria-label="Next page"
                     className={`p-1.5 rounded-lg disabled:opacity-30 ${dark ? 'hover:bg-white/10 text-white' : 'hover:bg-gray-100 text-gray-700'}`}
                   >
                     <ChevronRight className="w-4 h-4" />
@@ -2492,16 +3036,58 @@ const AlertListing: React.FC = () => {
         </div>
       </div>
 
-      {/* Detail modal */}
-      <AnimatePresence>
-        {selectedAlert && (
-          <AlertDetailModal
-            alert={selectedAlert}
-            dark={dark}
-            onClose={() => setSelectedAlert(null)}
-          />
-        )}
-      </AnimatePresence>
+      {/* Overlays — rendered in <body> via portal so they sit above everything
+          regardless of any ancestor's stacking context. */}
+      <Portal>
+        <AnimatePresence>
+          {drawerOpen && (
+            <FilterDrawer
+              dark={dark}
+              initial={{
+                status: filters.status,
+                priority: filters.priority,
+                channel: filters.channel,
+                ruleId: filters.ruleId,
+                location: filters.location,
+                username: filters.username,
+                closed: filters.closed,
+                fraud: filters.fraud,
+              }}
+              options={drawerOptions}
+              loading={filtersLoading}
+              onClose={() => setDrawerOpen(false)}
+              onApply={(next) => {
+                patchFilters(next);
+                setDrawerOpen(false);
+              }}
+            />
+          )}
+        </AnimatePresence>
+        <AnimatePresence>
+          {selectedAlert && (
+            <AlertDetailModal
+              alert={selectedAlert}
+              dark={dark}
+              position={
+                selectedIndex >= 0
+                  ? { index: selectedIndex, total: alerts.length }
+                  : undefined
+              }
+              onPrev={
+                selectedIndex > 0
+                  ? () => setSelectedAlert(alerts[selectedIndex - 1])
+                  : undefined
+              }
+              onNext={
+                selectedIndex >= 0 && selectedIndex < alerts.length - 1
+                  ? () => setSelectedAlert(alerts[selectedIndex + 1])
+                  : undefined
+              }
+              onClose={() => setSelectedAlert(null)}
+            />
+          )}
+        </AnimatePresence>
+      </Portal>
     </PermissionGuard>
   );
 };

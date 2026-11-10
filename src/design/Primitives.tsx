@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { RefreshCw } from 'lucide-react';
-import { ThemeMode, getTokens, badgeClasses } from './tokens';
+import { ThemeMode, getTokens, badgeClasses } from './Tokens';
 
 export const EmptyState: React.FC<{
   icon: React.ComponentType<any>;

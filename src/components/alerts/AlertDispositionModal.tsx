@@ -52,6 +52,7 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useNotifications } from '../notifications';
+import { toast } from '../../utils/toastBus';
 import { AlertSummary, AlertDisposition } from '../../types/alerts';
 import { logger } from '../../utils/logger';
 import { appConfig as config } from '../../config/runtime-config';
@@ -65,6 +66,9 @@ import {
   validateFile,
   fmtSize,
 } from '../../services/alertAttachmentsService';
+import PermissionGuard from '../PermissionGuard';
+import { useMenuIds } from '../../hooks/useMenuIds';
+import { usePermissions } from '../../hooks/usePermissions';
 
 /* ------------------------------------------------------------------ */
 /*  Config & types                                                     */
@@ -133,6 +137,10 @@ type Notify = (
   msg: string,
   type: 'success' | 'error' | 'warning' | 'info'
 ) => void;
+
+// The permissions system is keyed on the menu, not the modal, so attachment
+// upload/download rights piggyback on the alerts-management menu entry.
+const MENU_KEY = 'alerts_management';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -1512,6 +1520,32 @@ const AttachmentsPanel: React.FC<{
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { getMenuId } = useMenuIds();
+  const ALERTS_MENU_ID = getMenuId(MENU_KEY);
+  const { user } = useAuth();
+  const { hasPermission, loading: permsLoading } = usePermissions();
+  const isSuperAdmin = user?.role_id === 0;
+  const canUpload =
+    isSuperAdmin ||
+    (!permsLoading &&
+      ALERTS_MENU_ID !== 0 &&
+      hasPermission(ALERTS_MENU_ID, 'canEdit'));
+
+  const denyUpload = () =>
+    notify(
+      'You do not have permission to upload alert attachments, contact your administrator.',
+      'warning'
+    );
+  const denyDownload = () =>
+    notify(
+      'You do not have permission to download alert attachments, contact your administrator.',
+      'warning'
+    );
+  const denayDelete = () =>
+    notify(
+      'You do not have permission to delete alert attachments, contact your administrator.',
+      'warning'
+    );
 
   const load = useCallback(
     async (silent = false) => {
@@ -1554,6 +1588,11 @@ const AttachmentsPanel: React.FC<{
 
   const addFiles = (list: FileList | null) => {
     if (!list || !canEdit) return;
+    if (!canUpload) {
+      denyUpload();
+      if (inputRef.current) inputRef.current.value = '';
+      return;
+    }
     const rejected: string[] = [];
     const accepted: StagedFile[] = [];
     Array.from(list).forEach((file) => {
@@ -1783,19 +1822,34 @@ const AttachmentsPanel: React.FC<{
             >
               Clear
             </button>
-            <button
-              type="button"
-              disabled={uploading || !canEdit}
-              onClick={uploadAll}
-              className={s.primaryBtn + ' !px-5 !py-2 text-sm'}
+            <PermissionGuard
+              menuId={ALERTS_MENU_ID}
+              action="edit"
+              fallback={
+                <button
+                  type="button"
+                  onClick={denyUpload}
+                  className={s.primaryBtn + ' !px-5 !py-2 text-sm opacity-50'}
+                >
+                  <Upload className="w-4 h-4" />
+                  Upload {staged.length} file{staged.length > 1 ? 's' : ''}
+                </button>
+              }
             >
-              {uploading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Upload className="w-4 h-4" />
-              )}
-              Upload {staged.length} file{staged.length > 1 ? 's' : ''}
-            </button>
+              <button
+                type="button"
+                disabled={uploading || !canEdit}
+                onClick={uploadAll}
+                className={s.primaryBtn + ' !px-5 !py-2 text-sm'}
+              >
+                {uploading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4" />
+                )}
+                Upload {staged.length} file{staged.length > 1 ? 's' : ''}
+              </button>
+            </PermissionGuard>
           </div>
         )}
       </div>
@@ -1877,23 +1931,38 @@ const AttachmentsPanel: React.FC<{
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        aria-label={`Download ${a.file_name}`}
-                        onClick={async () => {
-                          try {
-                            await alertAttachmentsService.download(a);
-                          } catch {
-                            notify(
-                              `Failed to download ${a.file_name}`,
-                              'error'
-                            );
-                          }
-                        }}
-                        className={s.ghostBtn}
+                      <PermissionGuard
+                        menuId={ALERTS_MENU_ID}
+                        action="export"
+                        fallback={
+                          <button
+                            type="button"
+                            aria-label={`Download ${a.file_name}`}
+                            onClick={denyDownload}
+                            className={`${s.ghostBtn} opacity-50`}
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        }
                       >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
+                        <button
+                          type="button"
+                          aria-label={`Download ${a.file_name}`}
+                          onClick={async () => {
+                            try {
+                              await alertAttachmentsService.download(a);
+                            } catch {
+                              notify(
+                                `Failed to download ${a.file_name}`,
+                                'error'
+                              );
+                            }
+                          }}
+                          className={s.ghostBtn}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+                      </PermissionGuard>
                       {mine && canEdit && (
                         <button
                           type="button"
@@ -1927,17 +1996,35 @@ const AttachmentsPanel: React.FC<{
                         >
                           Cancel
                         </button>
-                        <button
-                          type="button"
-                          disabled={busyId === a.attachment_id}
-                          onClick={() => deleteItem(a)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white disabled:opacity-50"
+                        <PermissionGuard
+                          menuId={ALERTS_MENU_ID}
+                          action="delete"
+                          fallback={
+                            <button
+                              type="button"
+                              aria-label={`Download ${a.file_name}`}
+                              onClick={denayDelete}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white disabled:opacity-50"
+                            >
+                              {busyId === a.attachment_id && (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              )}
+                              Delete
+                            </button>
+                          }
                         >
-                          {busyId === a.attachment_id && (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          )}
-                          Delete
-                        </button>
+                          <button
+                            type="button"
+                            disabled={busyId === a.attachment_id}
+                            onClick={() => deleteItem(a)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white disabled:opacity-50"
+                          >
+                            {busyId === a.attachment_id && (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            )}
+                            Delete
+                          </button>
+                        </PermissionGuard>
                       </div>
                     </div>
                   )}
@@ -2008,7 +2095,8 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
     isOpen && !!alert,
     notify
   );
-  const canEdit = lockApi.isMine;
+  // const canEdit = lockApi.isMine;
+  const canEdit = true;
 
   // Reset ONLY when a different alert is opened. (The old effect depended on the
   // whole `alert` object, so any parent refresh that produced a new object
@@ -2115,8 +2203,15 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
 
   const handleClose = useCallback(() => {
     if (isSubmitting) return;
-    if (isDirty && !window.confirm('You have unsaved changes. Close anyway?'))
+    if (isDirty) {
+      toast.warning('You have unsaved changes', {
+        title: 'Unsaved changes',
+        duration: 10000,
+        actionLabel: 'Close anyway',
+        onAction: () => onClose(),
+      });
       return;
+    }
     onClose();
   }, [isSubmitting, isDirty, onClose]);
 

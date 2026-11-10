@@ -106,7 +106,11 @@ export const pushService = {
    */
   async enableFromUserGesture(username: string): Promise<PushEnableResult> {
     if (this.getState() === 'unavailable') {
-      return { ok: false, state: 'unavailable', error: 'Push not supported in this browser' };
+      return {
+        ok: false,
+        state: 'unavailable',
+        error: 'Push not supported in this browser',
+      };
     }
     if (Notification.permission === 'granted') {
       const sub = await this.subscribeWithStoredPermission(username);
@@ -116,7 +120,8 @@ export const pushService = {
       return {
         ok: false,
         state: 'denied',
-        error: 'Notifications are blocked. Enable them in your browser settings.',
+        error:
+          'Notifications are blocked. Enable them in your browser settings.',
       };
     }
     try {
@@ -131,13 +136,16 @@ export const pushService = {
       return {
         ok: false,
         state: 'denied',
-        error: error instanceof Error ? error.message : 'Permission request failed',
+        error:
+          error instanceof Error ? error.message : 'Permission request failed',
       };
     }
   },
 
   /** Creates the subscription and posts it to the API. Assumes permission granted. */
-  async subscribeWithStoredPermission(username: string): Promise<PushEnableResult> {
+  async subscribeWithStoredPermission(
+    username: string
+  ): Promise<PushEnableResult> {
     try {
       const vapidKey = await notificationService.getVapidPublicKey();
       if (!vapidKey) {
@@ -151,7 +159,11 @@ export const pushService = {
       const applicationServerKey = urlBase64ToUint8Array(vapidKey);
       const existing = await registration.pushManager.getSubscription();
       const subscription =
-        existing ?? (await registration.pushManager.subscribe({ applicationServerKey, userVisibleOnly: true }));
+        existing ??
+        (await registration.pushManager.subscribe({
+          applicationServerKey,
+          userVisibleOnly: true,
+        }));
       localStorage.setItem(SUBSCRIPTION_ENDPOINT_KEY, subscription.endpoint);
       await notificationService.subscribe(username, subscription.toJSON());
       return { ok: true, state: 'granted' };
@@ -170,6 +182,7 @@ export const pushService = {
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.getSubscription();
       if (subscription) {
+        console.log('Disabling push notifications for user:', username);
         await notificationService.unsubscribe(username, subscription.endpoint);
         await subscription.unsubscribe();
       }
@@ -183,7 +196,10 @@ export const pushService = {
   async showLocal(title: string, body: string): Promise<void> {
     if (this.getState() !== 'granted') return;
     const registration = await navigator.serviceWorker.ready;
-    await registration.showNotification(title, { body, tag: `local-${Date.now()}` });
+    await registration.showNotification(title, {
+      body,
+      tag: `local-${Date.now()}`,
+    });
   },
 };
 

@@ -22,6 +22,9 @@ export interface Notification {
   title?: string;
   onClick?: () => void;
   persistent?: boolean;
+  /** Inline action button rendered inside the toast. */
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 interface NotificationContextType {
@@ -31,7 +34,9 @@ interface NotificationContextType {
     type?: Notification['type'],
     duration?: number,
     title?: string,
-    onClick?: () => void
+    onClick?: () => void,
+    actionLabel?: string,
+    onAction?: () => void
   ) => void;
   removeNotification: (id: string) => void;
   clearAllNotifications: () => void;
@@ -59,7 +64,9 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({
       type: Notification['type'] = 'info',
       duration: number = 10000,
       title?: string,
-      onClick?: () => void
+      onClick?: () => void,
+      actionLabel?: string,
+      onAction?: () => void
     ) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
@@ -71,6 +78,8 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({
         title: title ?? config.app.name,
         onClick,
         persistent: duration === 0,
+        actionLabel,
+        onAction,
       };
 
       setNotifications((prev) => [...prev, notification]);
@@ -115,7 +124,9 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({
           payload.type as ToastType as Notification['type'],
           payload.duration,
           payload.title,
-          payload.onClick
+          payload.onClick,
+          payload.actionLabel,
+          payload.onAction
         );
       }),
     [addNotification]
