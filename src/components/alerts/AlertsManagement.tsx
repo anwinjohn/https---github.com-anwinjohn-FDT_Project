@@ -47,7 +47,7 @@ import {
   AlertsExportProgress,
   exportAllAlerts,
 } from '../../utils/alertsCsvExport';
-
+import { useAuth } from '../../context/AuthContext';
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -226,6 +226,9 @@ const getServiceTypeIcon = (serviceType: string) => {
       return <AlertTriangle className="w-4 h-4" />;
   }
 };
+
+const isWipAlert = (a: AlertSummary) =>
+  a.wip === true || a.status?.toUpperCase() === 'IN WIP';
 
 const getInitials = (name?: string) => {
   if (!name) return '?';
@@ -437,12 +440,12 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
   const compact = density === 'compact';
 
   const ALERTS_MANAGEMENT_MENU_ID = getMenuId('alerts_management');
-
+  const { user } = useAuth();
   // `wip` / `user_id` are new filter keys (see hook/type patch). They are read
   // and written through these helpers so the filters object stays the single
   // source of truth for fetching AND for exportAllAlerts.
   const isWip = Boolean((filters as { wip?: boolean }).wip);
-  const canUseWip = !!currentUserId;
+  const canUseWip = !!user?.username;
   const patchFilters = useCallback(
     (patch: Record<string, unknown>) =>
       updateFilters({ ...filters, ...patch } as typeof filters),
@@ -724,17 +727,36 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
               </p>
             </div>
             <div className="hidden md:flex items-center gap-2 ml-3">
-              {kpis.map((k) => (
-                <div
-                  key={k.label}
-                  className={`px-3 py-1 rounded-lg border text-xs ${t.panel}`}
-                >
-                  <span className={`font-bold text-sm tabular-nums ${k.cls}`}>
-                    {formatNumber(k.value ?? 0)}
-                  </span>{' '}
-                  <span className={t.muted}>{k.label}</span>
-                </div>
-              ))}
+              {kpis.map((k) =>
+                k.label === 'WIP' ? (
+                  <button
+                    key={k.label}
+                    onClick={() => setView(true)}
+                    disabled={!canUseWip}
+                    title={
+                      canUseWip
+                        ? 'Show your work in progress'
+                        : 'Your user could not be resolved'
+                    }
+                    className={`px-3 py-1 rounded-lg border text-xs ${t.panel} ${canUseWip ? 'cursor-pointer transition-colors ' + (dark ? 'hover:bg-white/10' : 'hover:bg-gray-100') : 'opacity-50 cursor-not-allowed'}`}
+                  >
+                    <span className={`font-bold text-sm tabular-nums ${k.cls}`}>
+                      {formatNumber(k.value ?? 0)}
+                    </span>{' '}
+                    <span className={t.muted}>{k.label}</span>
+                  </button>
+                ) : (
+                  <div
+                    key={k.label}
+                    className={`px-3 py-1 rounded-lg border text-xs ${t.panel}`}
+                  >
+                    <span className={`font-bold text-sm tabular-nums ${k.cls}`}>
+                      {formatNumber(k.value ?? 0)}
+                    </span>{' '}
+                    <span className={t.muted}>{k.label}</span>
+                  </div>
+                )
+              )}
             </div>
           </div>
 
@@ -1099,7 +1121,7 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
                     }`}
                   >
                     <tr>
-                      {['Risk', 'Alert', 'Customer', 'Rule', 'Date'].map(
+                      {['Risk', 'Alert', 'User', 'Customer', 'Rule'].map(
                         (h) => (
                           <th
                             key={h}
@@ -1141,13 +1163,28 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
                                 : ''
                           }`}
                         >
-                          <td className={`px-4 ${pad}`}>
-                            <span
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-bold rounded-full border ${risk.color}`}
-                            >
-                              <RiskIcon className="w-3 h-3" />
-                              {risk.level}
-                            </span>
+                          <td className={`px-3 ${pad}`}>
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-bold rounded-full border ${risk.color}`}
+                              >
+                                <RiskIcon className="w-3 h-3" />
+                                {risk.level}
+                              </span>
+                              {isWipAlert(alert) && (
+                                <span
+                                  title="In your work in progress"
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full border ${
+                                    dark
+                                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                                      : 'bg-blue-100 text-blue-700 border-blue-300'
+                                  }`}
+                                >
+                                  <ClipboardList className="w-3 h-3" />
+                                  WIP
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           <td className={`px-4 ${pad}`}>
@@ -1179,6 +1216,38 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
                                 </span>
                               )}
                             </div>
+                          </td>
+
+                          <td className={`px-4 ${pad} max-w-[300px]`}>
+                            {compact ? (
+                              <div className="flex items-baseline gap-2 min-w-0">
+                                <span
+                                  className={`text-sm font-medium shrink-0 ${t.text}`}
+                                >
+                                  {alert.cashier}
+                                </span>
+                                <span
+                                  className={`text-sm truncate ${t.muted}`}
+                                  title={alert.branch_name}
+                                >
+                                  {alert.branch_name}
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                <div
+                                  className={`text-sm font-medium ${t.text}`}
+                                >
+                                  {alert.cashier}
+                                </div>
+                                <div
+                                  title={alert.branch_name}
+                                  className={`text-xs ${t.muted}`}
+                                >
+                                  {truncate(alert.branch_name, 50)}
+                                </div>
+                              </>
+                            )}
                           </td>
 
                           <td className={`px-4 ${pad}`}>
@@ -1247,7 +1316,7 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
                             )}
                           </td>
 
-                          <td className={`px-4 ${pad} whitespace-nowrap`}>
+                          {/* <td className={`px-4 ${pad} whitespace-nowrap`}>
                             <div
                               title={
                                 isValid(alert.time_stamp)
@@ -1257,11 +1326,11 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
                               className={`text-sm ${t.body}`}
                             >
                               {formatRelativeDate(alert.time_stamp)}{' '}
-                              {/* <span className={t.faint}>
+                              <span className={t.faint}>
                                 {formatClock(alert.time_stamp)}
-                              </span> */}
+                              </span>
                             </div>
-                          </td>
+                          </td> */}
 
                           <td className={`px-4 ${pad} text-right`}>
                             <div className="flex items-center justify-end gap-1.5">
@@ -1345,6 +1414,18 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
                           <RiskIcon className="w-3 h-3" />
                           {risk.level}
                         </span>
+                        {isWipAlert(alert) && (
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full border shrink-0 ${
+                              dark
+                                ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                                : 'bg-blue-100 text-blue-700 border-blue-300'
+                            }`}
+                          >
+                            <ClipboardList className="w-3 h-3" />
+                            WIP
+                          </span>
+                        )}
                       </div>
                       <div className={`text-sm mb-1 ${t.body}`}>
                         {alert.cust_name}{' '}

@@ -146,13 +146,26 @@ export const useAlerts = (initialPageSize: number = 20): UseAlertsReturn => {
       });
     }
 
-    // Date range filters
-    if (filters.date_range?.from && filters.date_range.from.trim()) {
-      queryParams.append('from_date', filters.date_range.from.trim());
-    }
+    // Date range filters. Skipped in the WIP view: WIP is the user's backlog
+    // across all dates, so a default "Today" range would hide older items.
+    const wipFilters = filters as AlertFilters & {
+      wip?: boolean;
+      user_id?: string;
+    };
+    if (wipFilters.wip) {
+      queryParams.append('wip', 'true');
+      // Hint only — the back-end resolves the real user from the session.
+      if (wipFilters.user_id) {
+        queryParams.append('user_id', wipFilters.user_id);
+      }
+    } else {
+      if (filters.date_range?.from && filters.date_range.from.trim()) {
+        queryParams.append('from_date', filters.date_range.from.trim());
+      }
 
-    if (filters.date_range?.to && filters.date_range.to.trim()) {
-      queryParams.append('to_date', filters.date_range.to.trim());
+      if (filters.date_range?.to && filters.date_range.to.trim()) {
+        queryParams.append('to_date', filters.date_range.to.trim());
+      }
     }
 
     // Assigned to filter (multiple values)
