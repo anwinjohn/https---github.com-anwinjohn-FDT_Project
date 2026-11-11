@@ -172,6 +172,7 @@ const TONES: Record<
 
 const VIEW_TITLES: Record<string, string> = {
   dashboard: 'Fraud Detection & Analytics Dashboard',
+  'profile-management': 'My Profile',
   'management-dashboard': 'Management Dashboard — Fraud Trend',
   'risk-analytics': 'Fraud & Risk Analytics',
   rules: 'Alert Rules Management',
