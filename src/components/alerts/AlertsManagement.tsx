@@ -441,17 +441,6 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
 
   const ALERTS_MANAGEMENT_MENU_ID = getMenuId('alerts_management');
   const { user } = useAuth();
-
-  // The menu-ID lookup runs on its own API call. Until it resolves,
-  // getMenuId returns 0 and the permission check would wrongly render the
-  // "Access Denied" fallback, so keep showing a loader until we have a real ID.
-  if (menuIdsLoading || !ALERTS_MANAGEMENT_MENU_ID) {
-    return (
-      <div className="flex items-center justify-center p-4 py-20">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-      </div>
-    );
-  }
   // `wip` / `user_id` are new filter keys (see hook/type patch). They are read
   // and written through these helpers so the filters object stays the single
   // source of truth for fetching AND for exportAllAlerts.
@@ -703,6 +692,19 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
     },
   ];
 
+  // The menu-ID lookup runs on its own API call. Until it resolves,
+  // getMenuId returns 0 and the permission check would wrongly render the
+  // "Access Denied" fallback, so keep showing a loader until we have a real ID.
+  // This early return must stay AFTER every hook call in this component
+  // (Rules of Hooks) — it is placed immediately before the final return.
+  if (menuIdsLoading || !ALERTS_MANAGEMENT_MENU_ID) {
+    return (
+      <div className="flex items-center justify-center p-4 py-20">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
   return (
     <PermissionGuard
       menuId={ALERTS_MANAGEMENT_MENU_ID}
@@ -939,7 +941,7 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
         </div>
 
         {/* Insights (collapsed by default — they only describe the current page) */}
-        {alerts.length > 0 && (
+        {/* {alerts.length > 0 && (
           <div className={`rounded-xl border ${t.panel}`}>
             <button
               onClick={() => setShowInsights((v) => !v)}
@@ -1017,7 +1019,7 @@ const AlertsManagement: React.FC<AlertsManagementProps> = ({
               )}
             </AnimatePresence>
           </div>
-        )}
+        )} */}
 
         {/* Alerts list */}
         <div

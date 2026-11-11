@@ -1004,7 +1004,7 @@ const Dashboard: React.FC = () => {
       case 'management-dashboard':
         return <ManagementFraudDashboard dateRange={dateRange} />;
       case 'alerts-management':
-        return <AlertsManagement />;
+        return <AlertsManagement currentUserId={user?.username} />;
       case 'rule-management':
         return <RulesManagement data={rules} isLoading={isLoading} />;
       case 'risk-analytics':
@@ -1329,6 +1329,43 @@ const Dashboard: React.FC = () => {
               isDark ? 'border-white/5' : 'border-gray-100'
             }`}
           >
+            <div
+              className={`flex items-center gap-4 text-xs ${
+                isDark ? 'text-white/60' : 'text-gray-600'
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <Activity className="w-3 h-3 text-blue-400" />
+                <span className="font-medium">Secure System Active</span>
+              </div>
+              <AnimatePresence>
+                {autoRefresh &&
+                  !isAdminView &&
+                  activeView !== 'risk-analytics' &&
+                  masterLiveEnabled && (
+                    <motion.div
+                      key="rt"
+                      initial={{ opacity: 0, x: 8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 8 }}
+                      className="flex items-center gap-1.5 text-green-400"
+                    >
+                      <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                      <span className="font-medium">Real-time Updates</span>
+                    </motion.div>
+                  )}
+              </AnimatePresence>
+              {lastUpdated &&
+                !isAdminView &&
+                activeView !== 'risk-analytics' && (
+                  <div className="flex items-center gap-1.5">
+                    <Clock className="w-3 h-3" />
+                    <span>Updated: {lastUpdated.toLocaleTimeString()}</span>
+                  </div>
+                )}
+            </div>
+
+            {/* Status chips */}
             <div className="flex flex-wrap items-center gap-2">
               {!isAdminView && (
                 <>
@@ -1409,43 +1446,6 @@ const Dashboard: React.FC = () => {
                   )}
                 </>
               )}
-            </div>
-
-            {/* Status chips */}
-            <div
-              className={`flex items-center gap-4 text-xs ${
-                isDark ? 'text-white/60' : 'text-gray-600'
-              }`}
-            >
-              <div className="flex items-center gap-1.5">
-                <Activity className="w-3 h-3 text-blue-400" />
-                <span className="font-medium">Secure System Active</span>
-              </div>
-              <AnimatePresence>
-                {autoRefresh &&
-                  !isAdminView &&
-                  activeView !== 'risk-analytics' &&
-                  masterLiveEnabled && (
-                    <motion.div
-                      key="rt"
-                      initial={{ opacity: 0, x: 8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 8 }}
-                      className="flex items-center gap-1.5 text-green-400"
-                    >
-                      <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-                      <span className="font-medium">Real-time Updates</span>
-                    </motion.div>
-                  )}
-              </AnimatePresence>
-              {lastUpdated &&
-                !isAdminView &&
-                activeView !== 'risk-analytics' && (
-                  <div className="flex items-center gap-1.5">
-                    <Clock className="w-3 h-3" />
-                    <span>Updated: {lastUpdated.toLocaleTimeString()}</span>
-                  </div>
-                )}
             </div>
           </div>
 
