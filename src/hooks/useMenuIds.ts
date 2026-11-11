@@ -15,17 +15,19 @@ export const useMenuIds = () => {
     try {
       setLoading(true);
       setError(null);
-      
-      const response = await apiClient.get(`${config.api.baseUrl}/api/menu_key_list`);
+
+      const response = await apiClient.get(
+        `${config.api.baseUrl}/api/menu_key_list`
+      );
       if (response.success && response.data) {
-        setMenuIds(response.data.data);  
+        setMenuIds(response.data.data);
       } else {
         throw new Error(response.error || 'Failed to load menu IDs');
       }
     } catch (err) {
       setError('Failed to load menu IDs');
       console.error('Error loading menu IDs:', err);
-            // Fallback to empty object for development
+      // Fallback to empty object for development
       setMenuIds({});
     } finally {
       setLoading(false);
