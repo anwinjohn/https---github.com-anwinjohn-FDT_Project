@@ -798,11 +798,10 @@ function useAlertLock(
   const refresh = useCallback(async () => {
     if (!alertId) return;
     try {
-      //const data = await apiClient.post('/alert/status'
-      const data = await apiClient.post('/alert/status', {
+      const response = await apiClient.post<AlertLock>('/alert-lock/status', {
         alert_id: alertId,
       });
-      setLock(data);
+      setLock(response?.data);
       setStatusFailed(false);
     } catch (err) {
       console.error('Lock status failed', err);
@@ -1091,7 +1090,7 @@ const NotesPanel: React.FC<{
     }
     setBusyId(n.note_id);
     try {
-      await apiClient.post('alert-notes/update', {
+      await apiClient.post('/alert-notes/update', {
         note_id: n.note_id,
         alert_id: alertId,
         username,
@@ -1114,7 +1113,7 @@ const NotesPanel: React.FC<{
   const toggleDone = async (n: AlertNote) => {
     setBusyId(n.note_id);
     try {
-      await apiClient.post('alert-notes/update', {
+      await apiClient.post('/alert-notes/update', {
         note_id: n.note_id,
         alert_id: alertId,
         username,
@@ -1131,7 +1130,7 @@ const NotesPanel: React.FC<{
   const deleteNote = async (n: AlertNote) => {
     setBusyId(n.note_id);
     try {
-      await apiClient.post('alert-notes/delete', {
+      await apiClient.post('/alert-notes/delete', {
         note_id: n.note_id,
         alert_id: alertId,
         username,
@@ -2095,8 +2094,7 @@ const AlertDispositionModal: React.FC<AlertDispositionModalProps> = ({
     isOpen && !!alert,
     notify
   );
-  // const canEdit = lockApi.isMine;
-  const canEdit = true;
+  const canEdit = lockApi.isMine;
 
   // Reset ONLY when a different alert is opened. (The old effect depended on the
   // whole `alert` object, so any parent refresh that produced a new object
