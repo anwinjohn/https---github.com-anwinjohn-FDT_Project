@@ -27,7 +27,7 @@ import {
   Upload,
   Home,
   Bell,
-  Search
+  Search,
 } from 'lucide-react';
 import { useMenu } from '../hooks/useMenu';
 import { MenuItem } from '../types/menu';
@@ -38,6 +38,10 @@ interface SecureSidebarProps {
   onToggle: () => void;
   activeView: string;
   onViewChange: (view: string) => void;
+  /** Fired when the pointer enters the sidebar panel; cancels a pending auto-close. */
+  onHoverStart?: () => void;
+  /** Fired when the pointer leaves the sidebar panel; schedules the auto-close. */
+  onHoverEnd?: () => void;
 }
 
 const iconMap: Record<string, React.ComponentType<any>> = {
@@ -56,11 +60,19 @@ const iconMap: Record<string, React.ComponentType<any>> = {
   FileSearch,
   Shield,
   Home,
-  Bell
+  Bell,
 };
 
-const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeView, onViewChange }) => {
-  const { menuItems, loading, error, hasPermission, getUserPermissions } = useMenu();
+const SecureSidebar: React.FC<SecureSidebarProps> = ({
+  isOpen,
+  onToggle,
+  activeView,
+  onViewChange,
+  onHoverStart,
+  onHoverEnd,
+}) => {
+  const { menuItems, loading, error, hasPermission, getUserPermissions } =
+    useMenu();
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
   const [showPermissions, setShowPermissions] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -85,23 +97,29 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
     if (!searchQuery.trim()) return menuItems;
 
     const filterItems = (items: MenuItem[]): MenuItem[] => {
-      return items.map(item => {
-        const itemMatches = item.menu_name.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchingChildren = item.children ? filterItems(item.children) : [];
+      return items
+        .map((item) => {
+          const itemMatches = item.menu_name
+            .toLowerCase()
+            .includes(searchQuery.toLowerCase());
+          const matchingChildren = item.children
+            ? filterItems(item.children)
+            : [];
 
-        if (itemMatches) {
-          return item;
-        }
+          if (itemMatches) {
+            return item;
+          }
 
-        if (matchingChildren.length > 0) {
-          return {
-            ...item,
-            children: matchingChildren
-          };
-        }
+          if (matchingChildren.length > 0) {
+            return {
+              ...item,
+              children: matchingChildren,
+            };
+          }
 
-        return null;
-      }).filter(Boolean) as MenuItem[];
+          return null;
+        })
+        .filter(Boolean) as MenuItem[];
     };
 
     return filterItems(menuItems);
@@ -111,7 +129,8 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
     if (item.children && item.children.length > 0) {
       toggleExpanded(item.id);
     } else {
-      const viewId = item.menu_url.split('/').pop() || item.menu_url.replace('/', '');
+      const viewId =
+        item.menu_url.split('/').pop() || item.menu_url.replace('/', '');
       onViewChange(viewId);
       onToggle();
     }
@@ -124,7 +143,12 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
         const menuButton = document.getElementById('menu-button');
         const target = event.target as Node;
 
-        if (sidebar && !sidebar.contains(target) && menuButton && !menuButton.contains(target)) {
+        if (
+          sidebar &&
+          !sidebar.contains(target) &&
+          menuButton &&
+          !menuButton.contains(target)
+        ) {
           onToggle();
         }
       }
@@ -148,32 +172,50 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
     return (
       <div className="flex gap-1 ml-2">
         {permissions.canView && (
-          <div className="p-1 bg-blue-500/20 rounded text-blue-300" title="Can View">
+          <div
+            className="p-1 bg-blue-500/20 rounded text-blue-300"
+            title="Can View"
+          >
             <Eye className="w-3 h-3" />
           </div>
         )}
         {permissions.canEdit && (
-          <div className="p-1 bg-yellow-500/20 rounded text-yellow-300" title="Can Edit">
+          <div
+            className="p-1 bg-yellow-500/20 rounded text-yellow-300"
+            title="Can Edit"
+          >
             <Edit className="w-3 h-3" />
           </div>
         )}
         {permissions.canDelete && (
-          <div className="p-1 bg-red-500/20 rounded text-red-300" title="Can Delete">
+          <div
+            className="p-1 bg-red-500/20 rounded text-red-300"
+            title="Can Delete"
+          >
             <Trash2 className="w-3 h-3" />
           </div>
         )}
         {permissions.canCreate && (
-          <div className="p-1 bg-green-500/20 rounded text-green-300" title="Can Create">
+          <div
+            className="p-1 bg-green-500/20 rounded text-green-300"
+            title="Can Create"
+          >
             <Plus className="w-3 h-3" />
           </div>
         )}
         {permissions.canExport && (
-          <div className="p-1 bg-purple-500/20 rounded text-purple-300" title="Can Export">
+          <div
+            className="p-1 bg-purple-500/20 rounded text-purple-300"
+            title="Can Export"
+          >
             <Download className="w-3 h-3" />
           </div>
         )}
         {permissions.canImport && (
-          <div className="p-1 bg-orange-500/20 rounded text-orange-300" title="Can Import">
+          <div
+            className="p-1 bg-orange-500/20 rounded text-orange-300"
+            title="Can Import"
+          >
             <Upload className="w-3 h-3" />
           </div>
         )}
@@ -198,20 +240,28 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
           onClick={() => handleMenuClick(item)}
           whileHover={{ x: level === 0 ? 4 : 2 }}
           whileTap={{ scale: 0.98 }}
-          className={`w-full flex items-center gap-3 p-3 text-left transition-all duration-200 rounded-xl group relative ${isActive
-            ? 'bg-gradient-to-r from-blue-600/20 to-indigo-600/20 border border-blue-500/30 text-white shadow-lg'
-            : 'text-white/70 hover:text-white hover:bg-white/5'
-            }`}
+          className={`w-full flex items-center gap-3 p-3 text-left transition-all duration-200 rounded-xl group relative ${
+            isActive
+              ? 'bg-gradient-to-r from-blue-600/20 to-indigo-600/20 border border-blue-500/30 text-white shadow-lg'
+              : 'text-white/70 hover:text-white hover:bg-white/5'
+          }`}
           style={{ paddingLeft: `${16 + level * 20}px` }}
         >
-          <Icon className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-blue-400' : 'text-white/60 group-hover:text-white'
-            }`} />
+          <Icon
+            className={`w-5 h-5 flex-shrink-0 ${
+              isActive
+                ? 'text-blue-400'
+                : 'text-white/60 group-hover:text-white'
+            }`}
+          />
 
           <div className="flex-1 text-left">
             <div className="font-medium text-sm">{item.menu_name}</div>
             {level === 0 && (
               <div className="text-xs text-white/50 group-hover:text-white/70">
-                {hasChildren ? `${item.children?.length || 0} items` : 'Navigate to section'}
+                {hasChildren
+                  ? `${item.children?.length || 0} items`
+                  : 'Navigate to section'}
               </div>
             )}
           </div>
@@ -232,7 +282,7 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
               layoutId="activeMenuItem"
               className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 rounded-xl"
               initial={false}
-              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              transition={{ type: 'spring', stiffness: 500, damping: 30 }}
             />
           )}
         </motion.button>
@@ -247,7 +297,9 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
               className="overflow-hidden"
             >
               <div className="mt-1 space-y-1">
-                {item.children!.map(child => renderMenuItem(child, level + 1))}
+                {item.children!.map((child) =>
+                  renderMenuItem(child, level + 1)
+                )}
               </div>
             </motion.div>
           )}
@@ -272,10 +324,12 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
 
       <motion.aside
         id="sidebar"
+        onMouseEnter={onHoverStart}
+        onMouseLeave={onHoverEnd}
         initial={false}
         animate={{
           width: isOpen ? '280px' : '0px',
-          opacity: isOpen ? 1 : 0
+          opacity: isOpen ? 1 : 0,
         }}
         transition={{ duration: 0.3, ease: 'easeInOut' }}
         className="fixed left-0 top-0 h-full bg-gradient-to-b from-slate-900/95 via-blue-900/95 to-indigo-900/95 backdrop-blur-xl border-r border-white/10 z-50 overflow-hidden"
@@ -290,15 +344,20 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
                 </div>
                 <div>
                   <h2 className="text-lg font-bold text-white">FDT</h2>
-                  <p className="text-xs text-blue-200/70">Fraud Detection Tool</p>
+                  <p className="text-xs text-blue-200/70">
+                    Fraud Detection Tool
+                  </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowPermissions(!showPermissions)}
-                  className={`p-2 rounded-lg transition-colors ${showPermissions ? 'bg-white/20 text-white' : 'hover:bg-white/10 text-white/60'
-                    }`}
+                  className={`p-2 rounded-lg transition-colors ${
+                    showPermissions
+                      ? 'bg-white/20 text-white'
+                      : 'hover:bg-white/10 text-white/60'
+                  }`}
                   title="Toggle Permission Display"
                 >
                   <Eye className="w-4 h-4" />
@@ -315,28 +374,36 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
 
             {/* Search Box */}
             <div className="relative">
-              <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 ${theme === 'dark' ? 'text-white/40' : 'text-gray-400'
-                }`} />
+              <Search
+                className={`absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 ${
+                  theme === 'dark' ? 'text-white/40' : 'text-gray-400'
+                }`}
+              />
               <input
                 type="text"
                 placeholder="Search menu..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className={`w-full pl-10 pr-8 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all duration-300 ${theme === 'dark'
+                className={`w-full pl-10 pr-8 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all duration-300 ${
+                  theme === 'dark'
                     ? 'bg-white/10 border border-white/20 text-white placeholder-white/50 focus:border-blue-500/50'
                     : 'bg-gray-100 border border-gray-300 text-gray-900 placeholder-gray-500 focus:border-blue-500'
-                  }`}
+                }`}
               />
               {searchQuery && (
                 <motion.button
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   onClick={() => setSearchQuery('')}
-                  className={`absolute right-2 top-1/2 transform -translate-y-1/2 p-1 rounded-full transition-colors ${theme === 'dark' ? 'hover:bg-white/20' : 'hover:bg-gray-200'
-                    }`}
+                  className={`absolute right-2 top-1/2 transform -translate-y-1/2 p-1 rounded-full transition-colors ${
+                    theme === 'dark' ? 'hover:bg-white/20' : 'hover:bg-gray-200'
+                  }`}
                 >
-                  <X className={`w-3 h-3 ${theme === 'dark' ? 'text-white/60' : 'text-gray-600'
-                    }`} />
+                  <X
+                    className={`w-3 h-3 ${
+                      theme === 'dark' ? 'text-white/60' : 'text-gray-600'
+                    }`}
+                  />
                 </motion.button>
               )}
             </div>
@@ -345,7 +412,9 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
           {/* Permission Legend */}
           {showPermissions && (
             <div className="p-4 border-b border-white/10 bg-white/5">
-              <h3 className="text-xs font-semibold text-white/80 mb-2">Permissions</h3>
+              <h3 className="text-xs font-semibold text-white/80 mb-2">
+                Permissions
+              </h3>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="flex items-center gap-1">
                   <Eye className="w-3 h-3 text-blue-300" />
@@ -393,7 +462,7 @@ const SecureSidebar: React.FC<SecureSidebarProps> = ({ isOpen, onToggle, activeV
             ) : (
               <div className="space-y-2">
                 {filteredMenuItems.length > 0 ? (
-                  filteredMenuItems.map(item => renderMenuItem(item))
+                  filteredMenuItems.map((item) => renderMenuItem(item))
                 ) : searchQuery ? (
                   <div className="text-center py-8">
                     <Search className="w-12 h-12 mx-auto mb-4 text-white/40" />

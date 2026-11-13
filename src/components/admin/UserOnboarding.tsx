@@ -17,7 +17,7 @@ import {
   Upload
 } from 'lucide-react';
 import { useNotifications } from '../notifications';
-import config from '../../config/app-config.json';
+import { appConfig as config } from '../../config/runtime-config';
 
 interface UserData {
   username: string;
@@ -91,7 +91,7 @@ const UserOnboarding: React.FC = () => {
       setFetchSuccess(false);
       
       // Call API to fetch user data by ID
-      const response = await fetch(`${config.api.baseUrl}/api/admin/fetch-user/${userId}`, {
+      const response = await fetch(`${config.api.baseUrl}/api/admin/fetch-userww/${userId}`, {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('authToken')}`

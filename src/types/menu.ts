@@ -34,14 +34,20 @@ export interface MenuWithPermissions extends MenuItem {
   permissions?: MenuPermission;
 }
 
-export type AccessLevel = 'view' | 'edit' | 'delete' | 'create' | 'export' | 'import';
+export type AccessLevel =
+  | 'view'
+  | 'edit'
+  | 'delete'
+  | 'create'
+  | 'export'
+  | 'import';
 
 export interface UserMenuAccess {
   menuId: number;
   canView: boolean;
   canEdit: boolean;
   canDelete: boolean;
-  canCreate?: boolean;
-  canExport?: boolean;
-  canImport?: boolean;
+  canCreate: boolean;
+  canExport: boolean;
+  canImport: boolean;
 }

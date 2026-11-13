@@ -35,7 +35,15 @@ export interface Role {
 }
 
 export interface UserAction {
-  action: 'activate' | 'deactivate' | 'unlock' | 'reset_password' | 'reset_failed_login' | 'change_role' | 'enable_mfa' | 'disable_mfa';
+  action:
+    | 'activate'
+    | 'deactivate'
+    | 'unlock'
+    | 'reset_password'
+    | 'reset_failed_login'
+    | 'change_role'
+    | 'enable_mfa'
+    | 'disable_mfa';
   user_id: string;
   new_role_id?: number;
   reason?: string;
@@ -82,12 +90,12 @@ export interface UserSearchFilters {
   is_active: boolean | null;
 }
 
-export interface UserFilterOptions{
-search: string;
-account_status: string | null;
-user_status: string | null;
-user_roles: string | null;
-} 
+export interface UserFilterOptions {
+  search: string;
+  account_status: string | null;
+  user_status: string | null;
+  user_roles: string | null;
+}
 
 export interface PaginationInfo {
   page: number;

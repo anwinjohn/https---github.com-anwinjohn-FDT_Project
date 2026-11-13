@@ -1,16 +1,15 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import CryptoJS from 'crypto-js';
-import config from '../config/app-config.json';
+import { appConfig as config, securityConfig } from '../config/runtime-config';
 import { logger } from './logger';
 import { jwtDecode } from 'jwt-decode';
-import { string } from 'three/tsl';
+import { getLocalMachineInfo } from './machineInfoStore';
 
 // Simplified Security Configuration
 const SECURITY_CONFIG = {
   SECRET_KEY: 'xK6$9pF2!qW8#zR1@lY3*uM5%vS7^dN$',
   JWT_SECRET:
     '3d915e06c745490f95e0d1713b2d67a168e5db1ed2cb6bd7d1622171f2a0bb5e',
-  MAX_REQUEST_AGE: 300, // 5 minutes in seconds
 };
 
 interface ApiResponse<T = any> {
@@ -24,6 +23,14 @@ interface DecodedToken {
   exp: number;
   iat: number;
   [key: string]: any;
+}
+
+interface EncryptedApiResponse {
+  data: string;
+}
+
+interface ApiRequestConfig extends AxiosRequestConfig {
+  skipBodyEncryption?: boolean;
 }
 
 class SecureApiClient {
@@ -56,6 +63,16 @@ class SecureApiClient {
     this.axiosInstance.interceptors.request.use(
       async (request) => {
         try {
+          const machineInfo = getLocalMachineInfo();
+          if (machineInfo) {
+            // The header also covers body-less requests such as GET and DELETE.
+            request.headers['X-Machine-Info'] = this.encryptRequest(
+              JSON.stringify(machineInfo)
+            );
+          } else {
+            console.log('Machine info null or empty : ', machineInfo);
+          }
+
           let token = localStorage.getItem('authToken');
           if (token) {
             if (this.isTokenExpired(token)) {
@@ -66,8 +83,31 @@ class SecureApiClient {
           request.headers['X-Timestamp'] = Math.floor(
             Date.now() / 1000
           ).toString();
-          if (request.data) {
-            const originalData = JSON.stringify(request.data);
+          if (
+            !(request as any).skipBodyEncryption &&
+            request.data !== undefined &&
+            request.data !== null &&
+            // FormData (multipart uploads) must go through untouched:
+            // JSON.stringify(FormData) is "{}", so encrypting it would
+            // replace the file with an encrypted empty object.
+            !(request.data instanceof FormData) &&
+            !(request as any)._machineInfoEnriched
+          ) {
+            const body = request.data;
+            let payload: any = body;
+            if (typeof body === 'string') {
+              try {
+                payload = JSON.parse(body);
+              } catch {
+                payload = { payload: body };
+              }
+            }
+            // const enrichedPayload = machineInfo
+            //   ? payload && typeof payload === 'object' && !Array.isArray(payload)
+            //     ? { ...payload, machine_info: machineInfo }
+            //     : { payload, machine_info: machineInfo }
+            //   : payload;
+            const originalData = JSON.stringify(payload);
             if (config.logging.console_enabled) {
               console.log(originalData);
             }
@@ -76,8 +116,9 @@ class SecureApiClient {
             if (!encryptedData) {
               logger.error('Failed to encrypt', '', 'Interceptor Error');
             }
-            request.data = { payload: encryptedData };
+            request.data = { data: encryptedData };
           }
+          (request as any)._machineInfoEnriched = true;
           return request;
         } catch (error) {
           console.error('Request interceptor error:', error);
@@ -92,23 +133,36 @@ class SecureApiClient {
     this.axiosInstance.interceptors.response.use(
       (response) => {
         try {
-          if (config.logging.console_enabled) {
-            console.log(response);
-          }
-          // Only decrypt if backend response contains encrypted payload
-          if (typeof response.data === 'string') {
-            // Entire string-encrypted data
-            response.data = this.decryptResponse(response.data);
-          } else if (response.data && response.data.encryptedData) {
-            // Encrypted under a property
-            response.data = this.decryptResponse(response.data.encryptedData);
-          }
-        } catch (err) {
-          console.warn(
-            'Response appears unencrypted or decryption failed. Returning raw data.'
-          );
-        }
+          const isEncrypted =
+            response.headers?.['x-encrypted'] === 'true' ||
+            response.headers?.['X-Encrypted'] === 'true';
 
+          if (config.logging.console_enabled) {
+            console.log('Response Header: ', response.headers);
+            console.log('Raw response:', response.data);
+            console.log('response.data', response.data);
+            console.log('tyepeof response.data', typeof response.data);
+            console.log('response.data.data', response.data.data);
+          }
+          if (
+            isEncrypted &&
+            response.data.data &&
+            typeof response.data.data == 'string'
+          ) {
+            if (config.logging.console_enabled) {
+              console.log('data: ', response.data);
+              console.log(
+                'DECY data',
+                this.decryptResponse(response.data.data)
+              );
+            }
+            const decrypted = this.decryptResponse(response.data.data);
+            response.data = decrypted;
+          }
+        } catch (error) {
+          logger.error('Response decryption failed', '', error);
+          throw error;
+        }
         return response;
       },
 
@@ -125,7 +179,9 @@ class SecureApiClient {
               return this.axiosInstance(originalRequest);
             }
           } catch (refreshError) {
-            this.handleAuthenticationFailure();
+            // performTokenRefresh already clears the session only for a
+            // definitive rejection; transient failures must not force a
+            // logout of an active user. Surface the failed request normally.
             return Promise.reject(refreshError);
           }
         }
@@ -151,7 +207,7 @@ class SecureApiClient {
       const exp = decodedPayload.exp;
       if (!exp) return true;
       const now = Math.floor(Date.now() / 1000);
-      return exp < now;
+      return exp < now + securityConfig.security.jwt.expirationBuffer;
     } catch (err) {
       console.error('Error decoding token:', err);
       return true;
@@ -160,7 +216,9 @@ class SecureApiClient {
 
   private encryptRequest = (data: string): any => {
     try {
-      const iv = CryptoJS.lib.WordArray.random(16);
+      const iv = CryptoJS.lib.WordArray.random(
+        securityConfig.security.encryption.ivLength
+      );
       const encrypted = CryptoJS.AES.encrypt(
         data,
         CryptoJS.enc.Utf8.parse(SECURITY_CONFIG.SECRET_KEY),
@@ -180,17 +238,18 @@ class SecureApiClient {
 
   private decryptResponse = (encryptedData: string): any => {
     try {
+      // console.log('Trying to decrypt : ', encryptedData);
       // Decode base64
       const encryptedBytes = CryptoJS.enc.Base64.parse(encryptedData);
       // Extract IV (first 16 bytes/4 words)
       const iv = CryptoJS.lib.WordArray.create(
         encryptedBytes.words.slice(0, 4),
-        16
+        securityConfig.security.encryption.ivLength
       );
       // Extract ciphertext (rest of the data)
       const ciphertext = CryptoJS.lib.WordArray.create(
         encryptedBytes.words.slice(4),
-        encryptedBytes.sigBytes - 16
+        encryptedBytes.sigBytes - securityConfig.security.encryption.ivLength
       );
       // Decrypt
       const decrypted = CryptoJS.AES.decrypt(
@@ -232,15 +291,13 @@ class SecureApiClient {
     }
 
     this.refreshTokenPromise = (async () => {
-      const accessToken = localStorage.getItem('authToken');
-
-      if (!accessToken) {
-        // this.handleAuthenticationFailure();
-        throw new Error('No refresh token');
-      }
       try {
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (!refreshToken) {
+          throw new Error('No refresh token');
+        }
         const payload = JSON.stringify({
-          access_token: accessToken,
+          refresh_token: refreshToken,
         });
         const encryptedPayload = this.encryptRequest(payload);
         const response = await axios.post(
@@ -259,15 +316,28 @@ class SecureApiClient {
         );
         const decryptedResponse = this.decryptResponse(response.data.data);
         const newAccessToken = decryptedResponse?.access_token;
-        console.log(decryptedResponse, 'fff');
-        if (!newAccessToken) {
+        const newRefreshToken = decryptedResponse?.refresh_token;
+        if (
+          decryptedResponse?.status_code !== 200 ||
+          !newAccessToken ||
+          !newRefreshToken
+        ) {
           throw new Error('Invalid refresh response');
         }
 
         localStorage.setItem('authToken', newAccessToken);
+        localStorage.setItem('refreshToken', newRefreshToken);
         return newAccessToken;
       } catch (error) {
-        // this.handleAuthenticationFailure();
+        // Only a definitive rejection from the refresh endpoint (invalid /
+        // revoked refresh token) may end the session. Transient failures —
+        // network blips, backend restarts, timeouts — must NOT clear the
+        // session: an actively-working user would be force-logged-out. The
+        // thrown error still fails the caller's request, which surfaces a
+        // normal error message instead of a redirect.
+        if (axios.isAxiosError(error) && error.response) {
+          this.handleAuthenticationFailure();
+        }
         throw error;
       } finally {
         this.refreshTokenPromise = null;
@@ -284,6 +354,9 @@ class SecureApiClient {
     localStorage.removeItem('userData');
     localStorage.removeItem('lastActivity');
     localStorage.removeItem('sessionWarningShown');
+    localStorage.removeItem('localMachineInfo');
+    // Flag so the login screen can tell the user WHY they were signed out.
+    localStorage.setItem('sessionExpired', 'true');
     // Redirect to login
     window.location.href = '/login';
   }
@@ -291,12 +364,15 @@ class SecureApiClient {
   // Public API methods with enhanced error handling
   async get<T = any>(
     url: string,
-    config?: AxiosRequestConfig
+    configs?: AxiosRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
+      if (config.logging.console_enabled) {
+        console.log('apiClient', 'GET', `Posting to ${url} | ${configs}`);
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.get(
         url,
-        config
+        configs
       );
       return {
         success: true,
@@ -310,39 +386,53 @@ class SecureApiClient {
   async post<T = any>(
     url: string,
     data?: any,
-    config?: AxiosRequestConfig
+    configs?: ApiRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
-      console.log(
-        'apiClient',
-        'post',
-        `Posting to ${url} with data: ${JSON.stringify(data)}`
-      );
+      if (config.logging.console_enabled) {
+        console.log(
+          'apiClient',
+          'POST',
+          `Posting to ${url} with data: ${JSON.stringify(data)}`
+        );
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.post(
         url,
         data,
-        config
+        configs
       );
+
+      if (config.logging.console_enabled) {
+        console.log('POST Response', response.data);
+      }
       return {
         success: true,
         data: response.data,
       };
     } catch (error) {
-      logger.error('apiClient', 'post', `Error posting to ${url}: ${error}`);
+      if (config.logging.console_enabled) {
+        logger.error('apiClient', 'post', `Error posting to ${url}: ${error}`);
+      }
       return this.handleApiError(error);
     }
   }
-
   async put<T = any>(
     url: string,
     data?: any,
-    config?: AxiosRequestConfig
+    configs?: AxiosRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
+      if (config.logging.console_enabled) {
+        console.log(
+          'apiClient',
+          'PUT',
+          `Posting to ${url} with data: ${JSON.stringify(data)}`
+        );
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.put(
         url,
         data,
-        config
+        configs
       );
       return {
         success: true,
@@ -355,12 +445,15 @@ class SecureApiClient {
 
   async delete<T = any>(
     url: string,
-    config?: AxiosRequestConfig
+    configs?: AxiosRequestConfig
   ): Promise<ApiResponse<T>> {
     try {
+      if (config.logging.console_enabled) {
+        console.log('apiClient', 'DELETE', `Posting to ${url}`);
+      }
       const response: AxiosResponse<T> = await this.axiosInstance.delete(
         url,
-        config
+        configs
       );
       return {
         success: true,
@@ -368,6 +461,53 @@ class SecureApiClient {
       };
     } catch (error) {
       return this.handleApiError(error);
+    }
+  }
+
+  /**
+   * Multipart upload that bypasses the JSON-body encryption interceptor
+   * (the browser sets the multipart boundary; the backend accepts raw
+   * multipart on this endpoint). Auth, machine-info and 401-refresh still
+   * apply because it runs on the shared axios instance.
+   */
+  async postForm<T = any>(
+    url: string,
+    formData: FormData
+  ): Promise<ApiResponse<T>> {
+    try {
+      const response: AxiosResponse<T> = await this.axiosInstance.post(
+        url,
+        formData,
+        {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          // Belt-and-braces with the FormData check in the interceptor.
+          skipBodyEncryption: true,
+        } as ApiRequestConfig
+      );
+      return { success: true, data: response.data };
+    } catch (error) {
+      return this.handleApiError(error);
+    }
+  }
+
+  /**
+   * Binary download through the shared instance (Bearer token + refresh
+   * handling). Returns the raw Blob on success.
+   */
+  async downloadBlob(url: string): Promise<{
+    success: boolean;
+    blob?: Blob;
+    error?: string;
+    status?: number;
+  }> {
+    try {
+      const response: AxiosResponse<Blob> = await this.axiosInstance.get(url, {
+        responseType: 'blob',
+      });
+      return { success: true, blob: response.data };
+    } catch (error) {
+      const handled = this.handleApiError(error);
+      return { success: false, error: handled.error, status: handled.status };
     }
   }
 
