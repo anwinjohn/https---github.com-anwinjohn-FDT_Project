@@ -38,6 +38,7 @@ import ManagementFraudDashboard from './admin/Managementfrauddashboard';
 import AlertListing from './alerts/AlertListing';
 import ReportsPage from './ReportsPage';
 import UserProfilePage from './UserProfile';
+import FraudIncidentRegister from './fraud/FraudIncidentRegister';
 import {
   NotificationCenterPanel,
   useNotificationCenter,
@@ -1020,6 +1021,8 @@ const Dashboard: React.FC = () => {
         return <SystemLogMonitor />;
       case 'profile-management':
         return <UserProfilePage />;
+      case 'fraud-management':
+        return <FraudIncidentRegister />;
       case 'rules':
         return (
           <DetailedRulesPanel data={alertsSummary} isLoading={isLoading} />
